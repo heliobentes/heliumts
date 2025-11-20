@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    /* Output */
+    "outDir": "dist",
+    "rootDir": "src",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "removeComments": false,
+    "moduleResolution": "bundler",
+    "module": "ESNext",
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM"],
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+
+    /* Interop */
+    "esModuleInterop": true,
+    "isolatedModules": true,
+
+    /* Strictness */
+    "strict": true,
+    "skipLibCheck": true,
+
+    /* JSX (for later when router/components exist) */
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+
+    /* Paths — optional but helpful */
+    "paths": {
+      "fw/*": ["./src/*"]
+    }
+  },
+
+  /* Include all framework code */
+  "include": ["src"],
+
+  /* Exclude build output */
+  "exclude": ["dist", "node_modules"]
+}

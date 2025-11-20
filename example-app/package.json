@@ -1,0 +1,22 @@
+{
+  "name": "example-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node dev.js"
+  },
+  "dependencies": {
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
+  },
+  "jsx": "react-jsx",
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/react": "^18.0.0",
+    "@types/react-dom": "^18.0.0",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.0.0",
+    "vite": "^5.0.0"
+  }
+}
