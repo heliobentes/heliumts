@@ -5,16 +5,56 @@ import { buildRoutes } from './routerManifest';
 
 const { routes, NotFound } = buildRoutes();
 
+// Event emitter for router events
+type RouterEvent = 'navigation' | 'before-navigation';
+type EventListener = (event: { from: string; to: string; preventDefault?: () => void }) => void;
+
+class RouterEventEmitter {
+    private listeners: Map<RouterEvent, Set<EventListener>> = new Map();
+
+    on(event: RouterEvent, listener: EventListener): () => void {
+        if (!this.listeners.has(event)) {
+            this.listeners.set(event, new Set());
+        }
+        this.listeners.get(event)!.add(listener);
+
+        // Return unsubscribe function
+        return () => {
+            this.listeners.get(event)?.delete(listener);
+        };
+    }
+
+    emit(event: RouterEvent, data: { from: string; to: string }): boolean {
+        const eventListeners = this.listeners.get(event);
+        if (!eventListeners || eventListeners.size === 0) return true;
+
+        let prevented = false;
+        const preventDefault = () => {
+            prevented = true;
+        };
+
+        const eventData = event === 'before-navigation' ? { ...data, preventDefault } : data;
+
+        eventListeners.forEach((listener) => {
+            listener(eventData);
+        });
+
+        return !prevented;
+    }
+}
+
+const routerEventEmitter = new RouterEventEmitter();
+
 type RouterState = {
     path: string;
-    search: URLSearchParams;
+    searchParams: URLSearchParams;
 };
 
 function getLocation(): RouterState {
     const { pathname, search } = window.location;
     return {
         path: pathname,
-        search: new URLSearchParams(search),
+        searchParams: new URLSearchParams(search),
     };
 }
 
@@ -30,9 +70,10 @@ function matchRoute(path: string) {
 type RouterContextValue = {
     path: string;
     params: Record<string, string | string[]>;
-    search: URLSearchParams;
+    searchParams: URLSearchParams;
     push: (href: string) => void;
     replace: (href: string) => void;
+    on: (event: RouterEvent, listener: EventListener) => () => void;
 };
 
 const RouterContext = React.createContext<RouterContextValue | null>(null);
@@ -45,10 +86,22 @@ export function useRouter() {
 
 // Navigation helpers
 function navigate(href: string, replace = false) {
+    const from = window.location.pathname;
+    const to = href.split('?')[0]; // Extract pathname from href
+
+    // Emit before-navigation event (can be prevented)
+    const canNavigate = routerEventEmitter.emit('before-navigation', { from, to });
+    if (!canNavigate) {
+        return; // Navigation was prevented
+    }
+
     if (replace) window.history.replaceState(null, '', href);
     else window.history.pushState(null, '', href);
     const navEvent = new PopStateEvent('popstate');
     window.dispatchEvent(navEvent);
+
+    // Emit navigation event after navigation completes
+    routerEventEmitter.emit('navigation', { from, to });
 }
 
 export type LinkProps = React.PropsWithChildren<
@@ -118,7 +171,9 @@ export type AppShellProps = {
 // Main router component
 export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps> }) {
     const [state, setState] = useState<RouterState>(() =>
-        typeof window === 'undefined' ? { path: '/', search: new URLSearchParams() } : getLocation()
+        typeof window === 'undefined'
+            ? { path: '/', searchParams: new URLSearchParams() }
+            : getLocation()
     );
 
     useEffect(() => {
@@ -132,9 +187,10 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
     const routerValue: RouterContextValue = {
         path: state.path,
         params: match?.params ?? {},
-        search: state.search,
+        searchParams: state.searchParams,
         push: (href) => navigate(href),
         replace: (href) => navigate(href, true),
+        on: (event, listener) => routerEventEmitter.on(event, listener),
     };
 
     if (!match) {
@@ -151,7 +207,7 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
     const Page = match.route.Component;
     const pageProps = {
         params: match.params,
-        search: state.search,
+        searchParams: state.searchParams,
     };
 
     // Create a wrapped component that includes all layouts
