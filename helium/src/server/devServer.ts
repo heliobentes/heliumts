@@ -44,6 +44,6 @@ export function startDevServer(loadHandlers: LoadHandlersFn) {
     });
 
     server.listen(port, () => {
-        console.log(`Helium dev RPC server listening on http://localhost:${port}`);
+        console.log(`[Helium] ➜ dev RPC server listening on http://localhost:${port}`);
     });
 }
