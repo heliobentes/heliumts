@@ -67,7 +67,7 @@ function matchRoute(path: string) {
 }
 
 // Context for useRouter hook
-type RouterContextValue = {
+type RouterContext = {
     path: string;
     params: Record<string, string | string[]>;
     searchParams: URLSearchParams;
@@ -76,7 +76,7 @@ type RouterContextValue = {
     on: (event: RouterEvent, listener: EventListener) => () => void;
 };
 
-const RouterContext = React.createContext<RouterContextValue | null>(null);
+const RouterContext = React.createContext<RouterContext | null>(null);
 
 export function useRouter() {
     const ctx = React.useContext(RouterContext);
@@ -184,7 +184,7 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
 
     const match = useMemo(() => matchRoute(state.path), [state.path]);
 
-    const routerValue: RouterContextValue = {
+    const routerValue: RouterContext = {
         path: state.path,
         params: match?.params ?? {},
         searchParams: state.searchParams,
