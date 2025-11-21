@@ -52,3 +52,23 @@ ${exports}
 }
 `;
 }
+
+export function generateEntryModule(): string {
+    return `
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import { AppRouter } from 'helium/client';
+import App from '/src/App';
+
+const rootEl = document.getElementById('root');
+if (!rootEl) {
+    throw new Error('Root element not found. Helium requires a <div id="root"></div> in your HTML.');
+}
+
+ReactDOM.createRoot(rootEl).render(
+    <React.StrictMode>
+        <AppRouter AppShell={App} />
+    </React.StrictMode>
+);
+`;
+}

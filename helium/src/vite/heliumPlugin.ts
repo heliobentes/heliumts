@@ -5,14 +5,17 @@ import type { Plugin } from 'vite';
 import { startDevServer } from '../server/devServer.js';
 import {
     RESOLVED_VIRTUAL_CLIENT_MODULE_ID,
+    RESOLVED_VIRTUAL_ENTRY_MODULE_ID,
     RESOLVED_VIRTUAL_SERVER_MANIFEST_ID,
     SERVER_DIR,
     VIRTUAL_CLIENT_MODULE_ID,
+    VIRTUAL_ENTRY_MODULE_ID,
     VIRTUAL_SERVER_MANIFEST_ID,
 } from './paths.js';
 import { scanServerMethods } from './scanner.js';
 import {
     generateClientModule,
+    generateEntryModule,
     generateServerManifest,
     generateTypeDefinitions,
 } from './virtualServerModule.js';
@@ -27,6 +30,50 @@ export default function helium(): Plugin {
         configResolved(config) {
             root = config.root;
         },
+        transformIndexHtml: {
+            order: 'pre',
+            handler(html) {
+                // Check if HTML already has a script tag for entry
+                if (html.includes('src/main.tsx') || html.includes('src/main.ts')) {
+                    return html; // User has their own entry, don't modify
+                }
+
+                // Ensure root div exists
+                let modifiedHtml = html;
+                if (!modifiedHtml.includes('id="root"')) {
+                    modifiedHtml = modifiedHtml.replace(
+                        '<body>',
+                        '<body>\n    <div id="root"></div>'
+                    );
+                }
+
+                // Generate physical entry file
+                const heliumDir = path.join(root, 'node_modules', '.helium');
+                if (!fs.existsSync(heliumDir)) {
+                    fs.mkdirSync(heliumDir, { recursive: true });
+                }
+                const entryPath = path.join(heliumDir, 'entry.tsx');
+                fs.writeFileSync(entryPath, generateEntryModule());
+
+                // Return with tags to inject the entry
+                return [
+                    {
+                        tag: 'script',
+                        attrs: {
+                            type: 'module',
+                            src: '/node_modules/.helium/entry.tsx',
+                        },
+                        injectTo: 'body',
+                    },
+                ];
+            },
+        },
+        config() {
+            // Provide default index.html if none exists
+            return {
+                appType: 'spa',
+            };
+        },
         resolveId(id, importer) {
             if (id === VIRTUAL_CLIENT_MODULE_ID) {
                 if (isServerModule(importer, root, serverDir)) {
@@ -36,6 +83,10 @@ export default function helium(): Plugin {
             }
             if (id === VIRTUAL_SERVER_MANIFEST_ID) {
                 return RESOLVED_VIRTUAL_SERVER_MANIFEST_ID;
+            }
+            if (id === VIRTUAL_ENTRY_MODULE_ID) {
+                // Add .tsx extension so Vite knows it contains JSX
+                return RESOLVED_VIRTUAL_ENTRY_MODULE_ID + '.tsx';
             }
             return null;
         },
@@ -47,6 +98,9 @@ export default function helium(): Plugin {
             if (id === RESOLVED_VIRTUAL_SERVER_MANIFEST_ID) {
                 const methods = scanServerMethods(root);
                 return generateServerManifest(methods);
+            }
+            if (id === RESOLVED_VIRTUAL_ENTRY_MODULE_ID + '.tsx') {
+                return generateEntryModule();
             }
         },
         buildStart() {
