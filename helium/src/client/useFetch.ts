@@ -1,12 +1,41 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { RpcStats } from "../runtime/protocol.js";
-import { cacheKey, get, has, set, subscribeInvalidations } from "./cache.js";
+import { cacheKey, get, has, invalidateAll, set, subscribeInvalidations } from "./cache.js";
 import { rpcCall } from "./rpcClient.js";
 import type { MethodStub } from "./types.js";
 
-export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, args?: TArgs) {
+export interface UseFetchOptions {
+    ttl?: number; // TTL in milliseconds
+    refetchOnWindowFocus?: boolean; // Whether to refetch when tab becomes visible
+}
+
+// Global flag to track if visibility listener is registered
+let visibilityListenerRegistered = false;
+
+function registerVisibilityListener() {
+    if (visibilityListenerRegistered || typeof document === "undefined") {
+        return;
+    }
+    visibilityListenerRegistered = true;
+
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+            invalidateAll();
+        }
+    });
+}
+
+export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, args?: TArgs, options?: UseFetchOptions) {
     const key = cacheKey(method.__id, args);
+    const { ttl, refetchOnWindowFocus = true } = options ?? {};
+
+    // Register visibility listener if enabled
+    useEffect(() => {
+        if (refetchOnWindowFocus) {
+            registerVisibilityListener();
+        }
+    }, [refetchOnWindowFocus]);
 
     const [data, setData] = useState<TResult | undefined>(() => (has(key) ? get<TResult>(key) : undefined));
     const [isLoading, setLoading] = useState(!has(key));
@@ -26,7 +55,7 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
                     if (!active) {
                         return;
                     }
-                    set(key, result.data);
+                    set(key, result.data, ttl);
                     setData(result.data);
                     setStats(result.stats);
                 })
@@ -46,7 +75,7 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
         return () => {
             active = false;
         };
-    }, [key, method.__id]);
+    }, [key, method.__id, ttl]);
 
     // This is used to manually refetch data
     const refetch = useCallback(async () => {
@@ -54,7 +83,7 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
         setError(null);
         try {
             const result = await rpcCall<TResult, TArgs>(method.__id, args as TArgs);
-            set(key, result.data);
+            set(key, result.data, ttl);
             setData(result.data);
             setStats(result.stats);
             return result.data;
@@ -65,7 +94,7 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
         } finally {
             setLoading(false);
         }
-    }, [args, key, method.__id]);
+    }, [args, key, method.__id, ttl]);
 
     // This is used to automatically refetch data when this method is invalidated
     useEffect(() => {

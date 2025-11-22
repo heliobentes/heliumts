@@ -5,9 +5,13 @@ import { useEffect, useState } from "react";
 export default function TasksPage() {
     const [taskName, setTaskName] = useState("");
 
-    const { data: tasks, isLoading } = useFetch(getTasks, {
-        status: "open",
-    });
+    const { data: tasks, isLoading } = useFetch(
+        getTasks,
+        {
+            status: "open",
+        },
+        { ttl: 10 * 1000 /* 10 seconds cache */ }
+    );
 
     const {
         call: addTask,

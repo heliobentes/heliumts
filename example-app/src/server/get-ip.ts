@@ -1,7 +1,6 @@
 import { defineMethod } from "helium/server";
 
 export const getIP = defineMethod(async (_args, ctx) => {
-    console.log("🚀 ~ ctx:", ctx);
     // Access client IP (extracted based on trustProxyDepth config)
     console.log("Client IP:", ctx.req.ip);
 
