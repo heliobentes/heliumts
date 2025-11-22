@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
+import type { RpcStats } from "../runtime/protocol.js";
 import { cacheKey, get, has, set, subscribeInvalidations } from "./cache.js";
 import { rpcCall } from "./rpcClient.js";
 import type { MethodStub } from "./types.js";
@@ -9,7 +10,8 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
 
     const [data, setData] = useState<TResult | undefined>(() => (has(key) ? get<TResult>(key) : undefined));
     const [isLoading, setLoading] = useState(!has(key));
-    const [error, setError] = useState<unknown>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [stats, setStats] = useState<RpcStats | null>(null);
 
     // This is used to fetch data on mount
     useEffect(() => {
@@ -24,12 +26,14 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
                     if (!active) {
                         return;
                     }
-                    set(key, result);
-                    setData(result);
+                    set(key, result.data);
+                    setData(result.data);
+                    setStats(result.stats);
                 })
                 .catch((err) => {
                     if (active) {
-                        setError(err);
+                        setError(err.error);
+                        setStats(err.stats);
                     }
                 })
                 .finally(() => {
@@ -50,11 +54,13 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
         setError(null);
         try {
             const result = await rpcCall<TResult, TArgs>(method.__id, args as TArgs);
-            set(key, result);
-            setData(result);
-            return result;
-        } catch (err) {
-            setError(err);
+            set(key, result.data);
+            setData(result.data);
+            setStats(result.stats);
+            return result.data;
+        } catch (err: any) {
+            setError(err.error);
+            setStats(err.stats);
             return undefined;
         } finally {
             setLoading(false);
@@ -70,5 +76,5 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
         });
     }, [method.__id, refetch]);
 
-    return { data, isLoading, error, refetch };
+    return { data, isLoading, error, stats, refetch };
 }

@@ -4,16 +4,23 @@ export type RpcRequest = {
     args?: unknown;
 };
 
+export type RpcStats = {
+    remainingRequests: number;
+    resetInSeconds: number;
+};
+
 export type RpcSuccess = {
     id: string;
     ok: true;
+    stats: RpcStats;
     result: unknown;
 };
 
 export type RpcError = {
     id: string;
     ok: false;
-    error: { message: string; code?: string };
+    stats: RpcStats;
+    error: string;
 };
 
 export type RpcResponse = RpcSuccess | RpcError;

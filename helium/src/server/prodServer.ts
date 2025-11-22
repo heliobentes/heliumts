@@ -6,14 +6,19 @@ import { WebSocketServer } from "ws";
 
 import { injectEnvToProcess, loadEnvFiles } from "../utils/envLoader.js";
 import { log } from "../utils/logger.js";
+import type { HeliumConfig } from "./config.js";
+import { getSecurityConfig } from "./config.js";
 import { HTTPRouter } from "./httpRouter.js";
+import { RateLimiter } from "./rateLimiter.js";
 import { RpcRegistry } from "./rpcRegistry.js";
+import { generateConnectionToken, initializeSecurity, verifyConnectionToken } from "./security.js";
 
 interface ProdServerOptions {
     port?: number;
     distDir?: string;
     staticDir?: string;
     registerHandlers: (registry: RpcRegistry, httpRouter: HTTPRouter) => void;
+    config?: HeliumConfig;
 }
 
 /**
@@ -23,15 +28,23 @@ interface ProdServerOptions {
  * - Hosts WebSocket RPC server
  */
 export function startProdServer(options: ProdServerOptions) {
-    const { port = Number(process.env.PORT || 3000), distDir = "dist", staticDir = path.resolve(process.cwd(), distDir), registerHandlers } = options;
+    const { port = Number(process.env.PORT || 3000), distDir = "dist", staticDir = path.resolve(process.cwd(), distDir), registerHandlers, config = {} } = options;
 
     // Load environment variables for server-side access
     const envVars = loadEnvFiles({ mode: "production" });
     injectEnvToProcess(envVars);
 
+    // Initialize security with config
+    const securityConfig = getSecurityConfig(config);
+    initializeSecurity(securityConfig);
+
+    // Initialize rate limiter
+    const rateLimiter = new RateLimiter(securityConfig.maxMessagesPerWindow, securityConfig.rateLimitWindowMs, securityConfig.maxConnectionsPerIP);
+
     const registry = new RpcRegistry();
     const httpRouter = new HTTPRouter();
     registerHandlers(registry, httpRouter);
+    registry.setRateLimiter(rateLimiter);
 
     // Create HTTP server
     const server = http.createServer(async (req, res) => {
@@ -81,10 +94,20 @@ export function startProdServer(options: ProdServerOptions) {
         const contentType = contentTypes[ext] || "application/octet-stream";
 
         try {
-            const content = fs.readFileSync(filePath);
+            let content = fs.readFileSync(filePath);
+
+            // Inject connection token into HTML files
+            if (contentType === "text/html") {
+                const token = generateConnectionToken();
+                const html = content.toString("utf-8");
+                // Inject before </head> or <body>
+                const injected = html.replace("</head>", `<script>window.HELIUM_CONNECTION_TOKEN = "${token}";</script></head>`);
+                content = Buffer.from(injected);
+            }
+
             res.writeHead(200, { "Content-Type": contentType });
             res.end(content);
-        } catch (err) {
+        } catch {
             res.writeHead(500, { "Content-Type": "text/plain" });
             res.end("Internal server error");
         }
@@ -93,15 +116,73 @@ export function startProdServer(options: ProdServerOptions) {
     // Setup WebSocket server for RPC
     const wss = new WebSocketServer({ noServer: true });
 
-    wss.on("connection", (socket: WebSocket) => {
+    wss.on("connection", (socket: WebSocket, req: http.IncomingMessage) => {
+        // Extract client IP
+        const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.socket.remoteAddress || "unknown";
+
+        // Track connection and check IP limit
+        if (!rateLimiter.trackConnection(socket, ip)) {
+            socket.close(1008, "Too many connections from your IP");
+            return;
+        }
+
         socket.on("message", (msg: WebSocket.RawData) => {
+            // Check rate limit
+            if (!rateLimiter.checkRateLimit(socket)) {
+                // Parse request to get the ID for proper error response
+                try {
+                    const req = JSON.parse(msg.toString());
+                    const stats = rateLimiter.getConnectionStats(socket);
+                    const now = Date.now();
+                    const resetInSeconds = stats ? Math.ceil((stats.resetTimeMs - now) / 1000) : 0;
+
+                    const errorResponse = {
+                        id: req.id,
+                        ok: false,
+                        stats: {
+                            remainingRequests: stats ? stats.remainingMessages : 0,
+                            resetInSeconds,
+                        },
+                        error: "Rate limit exceeded",
+                    };
+                    log("warn", `Rate limit exceeded for IP ${ip}, resets in ${resetInSeconds} seconds`);
+                    socket.send(JSON.stringify(errorResponse));
+                } catch {
+                    // If we can't parse the request, just close the connection
+                    socket.close();
+                }
+                return;
+            }
+
             registry.handleMessage(socket, msg.toString());
         });
     });
 
     // Handle WebSocket upgrade requests
     server.on("upgrade", (req, socket, head) => {
-        if (req.url === "/rpc") {
+        if (req.url?.startsWith("/rpc")) {
+            const url = new URL(req.url, "http://localhost");
+            const token = url.searchParams.get("token");
+
+            if (!token || !verifyConnectionToken(token)) {
+                log("warn", "WebSocket connection rejected - invalid token");
+                socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+                socket.destroy();
+                return;
+            }
+
+            // Check IP connection limit before upgrading
+            const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.socket.remoteAddress || "unknown";
+            if (securityConfig.maxConnectionsPerIP > 0) {
+                const currentConnections = rateLimiter.getIPConnectionCount(ip);
+                if (currentConnections >= securityConfig.maxConnectionsPerIP) {
+                    log("warn", `WebSocket connection rejected - IP ${ip} has ${currentConnections} connections`);
+                    socket.write("HTTP/1.1 429 Too Many Requests\r\n\r\n");
+                    socket.destroy();
+                    return;
+                }
+            }
+
             wss.handleUpgrade(req, socket, head, (ws) => {
                 wss.emit("connection", ws, req);
             });

@@ -40,9 +40,13 @@ cli.command("build", "Build for production").action(async () => {
 
     const entryCode = `
 import { startProdServer } from 'helium/prod-server';
+import { loadConfig } from 'helium/server';
 ${manifestCode}
 
+const config = await loadConfig();
+
 startProdServer({
+    config,
     registerHandlers: (registry, httpRouter) => {
         registerAll(registry);
         httpRouter.registerRoutes(httpHandlers);

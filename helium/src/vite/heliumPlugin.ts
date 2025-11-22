@@ -2,7 +2,9 @@ import fs from "fs";
 import path from "path";
 import type { Plugin } from "vite";
 
+import { clearConfigCache, loadConfig } from "../server/config.js";
 import { attachToDevServer } from "../server/devServer.js";
+import { generateConnectionToken } from "../server/security.js";
 import { createEnvDefines, injectEnvToProcess, loadEnvFiles } from "../utils/envLoader.js";
 import { log } from "../utils/logger.js";
 import {
@@ -54,8 +56,16 @@ export default function helium(): Plugin {
                 const entryPath = path.join(heliumDir, "entry.tsx");
                 fs.writeFileSync(entryPath, generateEntryModule());
 
+                // Generate connection token
+                const token = generateConnectionToken();
+
                 // Return with tags to inject the entry
                 return [
+                    {
+                        tag: "script",
+                        children: `window.HELIUM_CONNECTION_TOKEN = "${token}";`,
+                        injectTo: "head",
+                    },
                     {
                         tag: "script",
                         attrs: {
@@ -159,6 +169,9 @@ export default function helium(): Plugin {
 
                 // Reload the server manifest and re-register methods
                 try {
+                    // Clear config cache to ensure fresh config is loaded
+                    clearConfigCache();
+                    const config = await loadConfig(root);
                     const mod = await server.ssrLoadModule(VIRTUAL_SERVER_MANIFEST_ID);
                     const registerAll = mod.registerAll;
                     const httpHandlers = mod.httpHandlers || [];
@@ -166,14 +179,18 @@ export default function helium(): Plugin {
 
                     // Update the dev server registry with new methods and HTTP handlers
                     if (server.httpServer) {
-                        attachToDevServer(server.httpServer, (registry, httpRouter) => {
-                            registerAll(registry);
-                            httpRouter.registerRoutes(httpHandlers);
-                            if (middlewareHandler) {
-                                registry.setMiddleware(middlewareHandler);
-                                httpRouter.setMiddleware(middlewareHandler);
-                            }
-                        });
+                        attachToDevServer(
+                            server.httpServer,
+                            (registry, httpRouter) => {
+                                registerAll(registry);
+                                httpRouter.registerRoutes(httpHandlers);
+                                if (middlewareHandler) {
+                                    registry.setMiddleware(middlewareHandler);
+                                    httpRouter.setMiddleware(middlewareHandler);
+                                }
+                            },
+                            config
+                        );
                     }
                 } catch (e) {
                     log("error", "Failed to reload Helium server manifest", e);
@@ -190,12 +207,27 @@ export default function helium(): Plugin {
             const serverPath = path.join(root, serverDir);
             server.watcher.add(serverPath);
 
+            // Watch config files for changes
+            const configFiles = ["helium.config.ts", "helium.config.js", "helium.config.mjs"];
+            for (const configFile of configFiles) {
+                const configPath = path.join(root, configFile);
+                if (fs.existsSync(configPath)) {
+                    server.watcher.add(configPath);
+                }
+            }
+
             server.watcher.on("change", (file) => {
                 const relative = path.relative(root, file);
                 const normalized = normalizeToPosix(relative);
 
                 // If a server file changed, regenerate everything
                 if (normalized.startsWith(`${serverDir}/`)) {
+                    handleServerFileChange();
+                }
+
+                // If config file changed, reload config and regenerate
+                if (configFiles.some((cf) => normalized === cf)) {
+                    log("info", `Config file changed: ${normalized}`);
                     handleServerFileChange();
                 }
             });
@@ -223,6 +255,9 @@ export default function helium(): Plugin {
             // We hook into the server start to attach our RPC server
             server.httpServer?.on("listening", async () => {
                 try {
+                    // Load config
+                    const config = await loadConfig(root);
+
                     // Load the manifest using Vite's SSR loader
                     // This allows us to load TS files directly and handle dependencies
                     const mod = await server.ssrLoadModule(VIRTUAL_SERVER_MANIFEST_ID);
@@ -231,14 +266,18 @@ export default function helium(): Plugin {
                     const middlewareHandler = mod.middlewareHandler || null;
 
                     if (server.httpServer) {
-                        attachToDevServer(server.httpServer, (registry, httpRouter) => {
-                            registerAll(registry);
-                            httpRouter.registerRoutes(httpHandlers);
-                            if (middlewareHandler) {
-                                registry.setMiddleware(middlewareHandler);
-                                httpRouter.setMiddleware(middlewareHandler);
-                            }
-                        });
+                        attachToDevServer(
+                            server.httpServer,
+                            (registry, httpRouter) => {
+                                registerAll(registry);
+                                httpRouter.registerRoutes(httpHandlers);
+                                if (middlewareHandler) {
+                                    registry.setMiddleware(middlewareHandler);
+                                    httpRouter.setMiddleware(middlewareHandler);
+                                }
+                            },
+                            config
+                        );
                     }
                 } catch (e) {
                     log("error", "Failed to attach Helium RPC server", e);

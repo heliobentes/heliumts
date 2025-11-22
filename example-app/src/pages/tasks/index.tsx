@@ -9,7 +9,12 @@ export default function TasksPage() {
         status: "open",
     });
 
-    const { call: addTask, isCalling } = useCall(createTask, {
+    const {
+        call: addTask,
+        isCalling,
+        error: errorCreating,
+        stats: statsCreating,
+    } = useCall(createTask, {
         invalidate: [getTasks],
     });
 
@@ -32,6 +37,11 @@ export default function TasksPage() {
                     {isCalling ? "Adding..." : "Add Task"}
                 </button>
             </div>
+            {errorCreating ? (
+                <p className="text-red-500 mb-4">
+                    Error creating task: {errorCreating}, try again in {statsCreating?.resetInSeconds as number} seconds.
+                </p>
+            ) : null}
 
             <h2 className="text-xl font-semibold mb-4">Open Tasks</h2>
             {isLoading && <p className="text-slate-400">Loading tasks...</p>}

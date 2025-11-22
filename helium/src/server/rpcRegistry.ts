@@ -1,12 +1,14 @@
 import WebSocket from "ws";
 
-import type { RpcRequest, RpcResponse } from "../runtime/protocol.js";
+import type { RpcRequest, RpcResponse, RpcStats } from "../runtime/protocol.js";
 import type { HeliumMethodDef } from "./defineMethod.js";
 import type { HeliumMiddleware } from "./middleware.js";
+import type { RateLimiter } from "./rateLimiter.js";
 
 export class RpcRegistry {
     private methods = new Map<string, HeliumMethodDef<any, any>>();
     private middleware: HeliumMiddleware | null = null;
+    private rateLimiter: RateLimiter | null = null;
 
     register(id: string, def: HeliumMethodDef<any, any>) {
         def.__id = id;
@@ -15,6 +17,29 @@ export class RpcRegistry {
 
     setMiddleware(middleware: HeliumMiddleware) {
         this.middleware = middleware;
+    }
+
+    setRateLimiter(rateLimiter: RateLimiter) {
+        this.rateLimiter = rateLimiter;
+    }
+
+    private getStats(socket: WebSocket): RpcStats {
+        if (!this.rateLimiter) {
+            return { remainingRequests: Infinity, resetInSeconds: 0 };
+        }
+
+        const stats = this.rateLimiter.getConnectionStats(socket);
+        if (!stats) {
+            return { remainingRequests: 0, resetInSeconds: 0 };
+        }
+
+        const now = Date.now();
+        const resetInSeconds = Math.ceil((stats.resetTimeMs - now) / 1000);
+
+        return {
+            remainingRequests: stats.remainingMessages,
+            resetInSeconds: Math.max(0, resetInSeconds),
+        };
     }
 
     async handleMessage(socket: WebSocket, raw: string) {
@@ -30,7 +55,8 @@ export class RpcRegistry {
             const res: RpcResponse = {
                 id: req.id,
                 ok: false,
-                error: { message: `Unknown method ${req.method}` },
+                stats: this.getStats(socket),
+                error: `Unknown method ${req.method}`,
             };
             socket.send(JSON.stringify(res));
             return;
@@ -60,7 +86,8 @@ export class RpcRegistry {
                     const res: RpcResponse = {
                         id: req.id,
                         ok: false,
-                        error: { message: "Request blocked by middleware" },
+                        stats: this.getStats(socket),
+                        error: "Request blocked by middleware",
                     };
                     socket.send(JSON.stringify(res));
                     return;
@@ -73,6 +100,7 @@ export class RpcRegistry {
             const res: RpcResponse = {
                 id: req.id,
                 ok: true,
+                stats: this.getStats(socket),
                 result,
             };
             socket.send(JSON.stringify(res));
@@ -80,7 +108,8 @@ export class RpcRegistry {
             const res: RpcResponse = {
                 id: req.id,
                 ok: false,
-                error: { message: err?.message ?? "Server error" },
+                stats: this.getStats(socket),
+                error: err?.message ?? "Server error",
             };
             socket.send(JSON.stringify(res));
         }

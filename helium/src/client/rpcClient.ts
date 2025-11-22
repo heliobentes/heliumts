@@ -1,4 +1,15 @@
-import type { RpcRequest, RpcResponse } from '../runtime/protocol.js';
+import type { RpcRequest, RpcResponse, RpcStats } from "../runtime/protocol.js";
+
+export type RpcResult<T> = {
+    data: T;
+    stats: RpcStats;
+};
+
+declare global {
+    interface Window {
+        HELIUM_CONNECTION_TOKEN?: string;
+    }
+}
 
 let socket: WebSocket | null = null;
 let connectionPromise: Promise<WebSocket> | null = null;
@@ -11,18 +22,24 @@ function uuid() {
 
 function createSocket(): WebSocket {
     // Use the same protocol, hostname and port as the current page
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const host = window.location.host; // includes hostname and port
-    const url = `${protocol}//${host}/rpc`;
+    const token = window.HELIUM_CONNECTION_TOKEN;
+    const url = `${protocol}//${host}/rpc${token ? `?token=${token}` : ""}`;
     const ws = new WebSocket(url);
 
     ws.onmessage = (event) => {
         const msg: RpcResponse = JSON.parse(event.data);
         const entry = pending.get(msg.id);
-        if (!entry) return;
+        if (!entry) {
+            return;
+        }
         pending.delete(msg.id);
-        if (msg.ok) entry.resolve(msg.result);
-        else entry.reject(msg.error);
+        if (msg.ok) {
+            entry.resolve({ data: msg.result, stats: msg.stats });
+        } else {
+            entry.reject({ error: msg.error, stats: msg.stats });
+        }
     };
 
     ws.onclose = () => {
@@ -50,9 +67,9 @@ function ensureSocketReady(): Promise<WebSocket> {
     if (socket && socket.readyState === WebSocket.CONNECTING) {
         connectionPromise = new Promise((resolve, reject) => {
             const cleanup = () => {
-                socket!.removeEventListener('open', handleOpen);
-                socket!.removeEventListener('error', handleError);
-                socket!.removeEventListener('close', handleClose);
+                socket!.removeEventListener("open", handleOpen);
+                socket!.removeEventListener("error", handleError);
+                socket!.removeEventListener("close", handleClose);
             };
             const handleOpen = () => {
                 cleanup();
@@ -63,18 +80,18 @@ function ensureSocketReady(): Promise<WebSocket> {
                 cleanup();
                 socket = null;
                 connectionPromise = null;
-                reject(new Error('WebSocket connection failed'));
+                reject(new Error("WebSocket connection failed"));
             };
             const handleClose = () => {
                 cleanup();
                 socket = null;
                 connectionPromise = null;
-                reject(new Error('WebSocket closed before opening'));
+                reject(new Error("WebSocket closed before opening"));
             };
 
-            socket!.addEventListener('open', handleOpen);
-            socket!.addEventListener('error', handleError);
-            socket!.addEventListener('close', handleClose);
+            socket!.addEventListener("open", handleOpen);
+            socket!.addEventListener("error", handleError);
+            socket!.addEventListener("close", handleClose);
         });
         return connectionPromise;
     }
@@ -83,9 +100,9 @@ function ensureSocketReady(): Promise<WebSocket> {
     socket = createSocket();
     connectionPromise = new Promise((resolve, reject) => {
         const cleanup = () => {
-            socket!.removeEventListener('open', handleOpen);
-            socket!.removeEventListener('error', handleError);
-            socket!.removeEventListener('close', handleClose);
+            socket!.removeEventListener("open", handleOpen);
+            socket!.removeEventListener("error", handleError);
+            socket!.removeEventListener("close", handleClose);
         };
         const handleOpen = () => {
             cleanup();
@@ -96,36 +113,33 @@ function ensureSocketReady(): Promise<WebSocket> {
             cleanup();
             socket = null;
             connectionPromise = null;
-            reject(new Error('WebSocket connection failed'));
+            reject(new Error("WebSocket connection failed"));
         };
         const handleClose = () => {
             cleanup();
             socket = null;
             connectionPromise = null;
-            reject(new Error('WebSocket closed before opening'));
+            reject(new Error("WebSocket closed before opening"));
         };
 
-        socket!.addEventListener('open', handleOpen);
-        socket!.addEventListener('error', handleError);
-        socket!.addEventListener('close', handleClose);
+        socket!.addEventListener("open", handleOpen);
+        socket!.addEventListener("error", handleError);
+        socket!.addEventListener("close", handleClose);
     });
 
     return connectionPromise;
 }
 
-export async function rpcCall<TResult = unknown, TArgs = unknown>(
-    methodId: string,
-    args?: TArgs
-): Promise<TResult> {
+export async function rpcCall<TResult = unknown, TArgs = unknown>(methodId: string, args?: TArgs): Promise<RpcResult<TResult>> {
     const ws = await ensureSocketReady();
     const id = uuid();
 
     const req: RpcRequest = { id, method: methodId, args };
 
-    return new Promise<TResult>((resolve, reject) => {
-        // Store generic handlers that take unknown; the wrapper will cast to TResult
+    return new Promise<RpcResult<TResult>>((resolve, reject) => {
+        // Store generic handlers that take unknown; the wrapper will cast to RpcResult<TResult>
         pending.set(id, {
-            resolve: (v: unknown) => resolve(v as TResult),
+            resolve: (v: unknown) => resolve(v as RpcResult<TResult>),
             reject,
         });
         try {

@@ -13,7 +13,7 @@ export default [
     },
     {
         files: ["**/*.{ts,tsx,js}"],
-        ignores: ["vite.config.ts", "helium-server.d.ts"],
+        ignores: ["vite.config.ts", "helium-server.d.ts", "helium.config.*"],
         languageOptions: {
             parser: tsParser,
             parserOptions: {
