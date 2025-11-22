@@ -3,8 +3,8 @@ import { Link, useFetch, useRouter } from "helium/client";
 import { getProfile } from "helium/server";
 import { useEffect } from "react";
 
-import { signOut, useSession } from "../auth-client";
 import HeliumLogo from "../components/Logo";
+import { signOut, useSession } from "../libs/better-auth/auth-client";
 
 export default function RootLayout({ children }: LayoutProps) {
     const { data: profile } = useFetch(getProfile);
@@ -34,8 +34,13 @@ export default function RootLayout({ children }: LayoutProps) {
         await signOut();
     };
 
+    useEffect(() => {
+        if (router.path !== "/login" && !session && !isPending) {
+            router.push("/login");
+        }
+    }, [router, session, isPending]);
+
     if (router.path !== "/login" && !session && !isPending) {
-        router.push("/login");
         return null; // or a loading indicator
     }
 

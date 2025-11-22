@@ -1,4 +1,4 @@
-import { signIn } from "../auth-client";
+import { signIn } from "../libs/better-auth/auth-client";
 
 export default function LoginPage() {
     const loginWithGoogle = async () => {
