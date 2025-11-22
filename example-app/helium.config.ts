@@ -14,7 +14,7 @@ const config: HeliumConfig = {
          * Set to 0 to disable rate limiting.
          * @default 500
          */
-        maxMessagesPerWindow: 20,
+        maxMessagesPerWindow: 200,
 
         /**
          * Time window in milliseconds for rate limiting.

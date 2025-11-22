@@ -1,20 +1,35 @@
 import { Link, useFetch, useRouter } from "helium/client";
-import { getTasks } from "helium/server";
+import { getTaskById } from "helium/server";
+import { useEffect, useState } from "react";
 
 type TaskDetailProps = {
     params: {
-        id: string[];
+        id: string;
     };
 };
 
 export default function TaskDetailPage({ params }: TaskDetailProps) {
+    const [enabled, setEnabled] = useState(false);
+
     const router = useRouter();
 
-    const { data: tasks, isLoading } = useFetch(getTasks, {
-        status: "open",
-    });
+    const { data: task, isLoading } = useFetch(
+        getTaskById,
+        {
+            id: params.id,
+        },
+        {
+            enabled: enabled,
+        }
+    );
 
-    const task = tasks?.find((t) => t.id === Number(params.id));
+    useEffect(() => {
+        const timeout = setTimeout(() => {
+            setEnabled(true);
+        }, 2000); // Enable fetching after 2000ms
+
+        return () => clearTimeout(timeout);
+    }, []);
 
     if (isLoading) {
         return (
@@ -25,15 +40,27 @@ export default function TaskDetailPage({ params }: TaskDetailProps) {
     }
 
     if (!task) {
-        return (
-            <div>
-                <h1 className="text-3xl font-bold mb-4">Task Not Found</h1>
-                <p className="mb-4">Task with ID {params.id} does not exist.</p>
-                <Link href="/tasks" className="text-teal-500 hover:text-teal-600">
-                    ← Back to Tasks
-                </Link>
-            </div>
-        );
+        if (enabled) {
+            return (
+                <div>
+                    <h1 className="text-3xl font-bold mb-4">Task Not Found</h1>
+                    <p className="mb-4">Task with ID {params.id} does not exist.</p>
+                    <Link href="/tasks" className="text-teal-500 hover:text-teal-600">
+                        ← Back to Tasks
+                    </Link>
+                </div>
+            );
+        } else {
+            return (
+                <div>
+                    <h1 className="text-3xl font-bold mb-4">Delaying task load</h1>
+                    <p className="mb-4">Task with ID {params.id} will load after 2000ms.</p>
+                    <Link href="/tasks" className="text-teal-500 hover:text-teal-600">
+                        ← Back to Tasks
+                    </Link>
+                </div>
+            );
+        }
     }
 
     return (

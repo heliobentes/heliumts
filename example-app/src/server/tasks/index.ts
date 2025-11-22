@@ -14,6 +14,20 @@ export const getTasks = defineMethod(async (args?: { status?: string }) => {
     })) as Task[];
 });
 
+export const getTaskById = defineMethod(async (args: { id: string }) => {
+    const task = await TaskModel.findById(args.id);
+
+    if (!task) {
+        return null;
+    }
+
+    return {
+        id: task._id.toString(),
+        name: task.name,
+        status: task.status,
+    } as Task;
+});
+
 export const createTask = defineMethod(async (args: { name: string }) => {
     const task = await TaskModel.create({
         name: args.name,

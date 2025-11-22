@@ -8,6 +8,7 @@ import type { MethodStub } from "./types.js";
 export interface UseFetchOptions {
     ttl?: number; // TTL in milliseconds
     refetchOnWindowFocus?: boolean; // Whether to refetch when tab becomes visible
+    enabled?: boolean; // Whether to fetch data. Defaults to true. Useful for conditional fetching (e.g., only fetch when an ID exists)
 }
 
 // Global flag to track if visibility listener is registered
@@ -24,11 +25,15 @@ function registerVisibilityListener() {
             invalidateAll();
         }
     });
+
+    window.addEventListener("focus", () => {
+        invalidateAll();
+    });
 }
 
 export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, args?: TArgs, options?: UseFetchOptions) {
     const key = cacheKey(method.__id, args);
-    const { ttl, refetchOnWindowFocus = true } = options ?? {};
+    const { ttl, refetchOnWindowFocus = true, enabled = true } = options ?? {};
 
     // Register visibility listener if enabled
     useEffect(() => {
@@ -44,6 +49,11 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
 
     // This is used to fetch data on mount
     useEffect(() => {
+        if (!enabled) {
+            setLoading(false);
+            return;
+        }
+
         let active = true;
 
         if (!has(key)) {
@@ -75,7 +85,7 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
         return () => {
             active = false;
         };
-    }, [key, method.__id, ttl]);
+    }, [key, method.__id, ttl, enabled]);
 
     // This is used to manually refetch data
     const refetch = useCallback(async () => {
