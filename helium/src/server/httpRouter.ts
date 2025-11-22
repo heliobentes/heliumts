@@ -187,6 +187,33 @@ async function createHTTPRequest(req: IncomingMessage, query: Record<string, str
         formData: async () => {
             throw new Error("FormData not yet implemented");
         },
+        toWebRequest: async () => {
+            const protocol = (req.headers["x-forwarded-proto"] as string) || "http";
+            const host = (req.headers["host"] as string) || "localhost";
+            const url = `${protocol}://${host}${req.url || "/"}`;
+
+            const webHeaders = new Headers();
+            for (const [key, value] of Object.entries(headers)) {
+                if (value === undefined) {
+                    continue;
+                }
+                if (Array.isArray(value)) {
+                    for (const v of value) {
+                        webHeaders.append(key, v);
+                    }
+                } else {
+                    webHeaders.set(key, value);
+                }
+            }
+
+            const body = req.method !== "GET" && req.method !== "HEAD" ? await getBody() : undefined;
+
+            return new Request(url, {
+                method: req.method,
+                headers: webHeaders,
+                body: body as any,
+            });
+        },
     };
 }
 

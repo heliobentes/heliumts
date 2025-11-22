@@ -10,6 +10,7 @@ export interface HTTPRequest {
     json: () => Promise<unknown>;
     text: () => Promise<string>;
     formData: () => Promise<FormData>;
+    toWebRequest: () => Promise<Request>;
 }
 
 export type HTTPHandler<TResult = unknown> = (req: HTTPRequest, ctx: unknown) => Promise<TResult> | TResult;
