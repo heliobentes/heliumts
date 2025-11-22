@@ -1,18 +1,19 @@
-import tsPlugin from '@typescript-eslint/eslint-plugin';
-import tsParser from '@typescript-eslint/parser';
-import importPlugin from 'eslint-plugin-import';
-import prettierPlugin from 'eslint-plugin-prettier';
-import simpleImportSort from 'eslint-plugin-simple-import-sort';
-import unusedImports from 'eslint-plugin-unused-imports';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import tsPlugin from "@typescript-eslint/eslint-plugin";
+import tsParser from "@typescript-eslint/parser";
+import importPlugin from "eslint-plugin-import";
+import prettierPlugin from "eslint-plugin-prettier";
+import simpleImportSort from "eslint-plugin-simple-import-sort";
+import unusedImports from "eslint-plugin-unused-imports";
+import path from "path";
+import { fileURLToPath } from "url";
 
 export default [
     {
-        ignores: ["node_modules/**", "dist/**", "build/**", "*.log"],
+        ignores: ["node_modules/**", "dist/**", "build/**", "*.log", "*.d.ts"],
     },
     {
         files: ["**/*.{ts,tsx,js}"],
+        ignores: ["vite.config.ts", "*.d.ts"],
         languageOptions: {
             parser: tsParser,
             parserOptions: {
@@ -39,23 +40,9 @@ export default [
             "simple-import-sort/imports": "error",
             "simple-import-sort/exports": "error",
             "import/first": "error",
-            "import/no-duplicates": "error",
             "import/newline-after-import": "error",
             "import/no-duplicates": "error",
             "unused-imports/no-unused-imports": "error",
-            "max-len": [
-                "error",
-                {
-                    code: 180,
-                    tabWidth: 4,
-                    ignoreUrls: true,
-                    ignoreStrings: true,
-                    ignoreTemplateLiterals: true,
-                    ignoreRegExpLiterals: true,
-                    ignoreComments: false,
-                },
-            ],
-            curly: ["error", "all"],
         },
     },
 ];

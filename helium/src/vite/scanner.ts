@@ -1,7 +1,7 @@
-import fs from 'fs';
-import path from 'path';
+import fs from "fs";
+import path from "path";
 
-import { SERVER_DIR } from './paths.js';
+import { SERVER_DIR } from "./paths.js";
 
 export interface MethodExport {
     name: string;
@@ -40,8 +40,8 @@ export function scanServerExports(root: string): ServerExports {
 
             if (stat.isDirectory()) {
                 walk(fullPath);
-            } else if (file.endsWith('.ts')) {
-                const content = fs.readFileSync(fullPath, 'utf-8');
+            } else if (file.endsWith(".ts")) {
+                const content = fs.readFileSync(fullPath, "utf-8");
 
                 // Find: export const methodName = defineMethod(...)
                 const methodRegex = /export\s+const\s+(\w+)\s*=\s*defineMethod/g;

@@ -6,8 +6,10 @@
     "dev": "vite"
   },
   "dependencies": {
+    "@better-auth/client": "^0.0.2-alpha.3",
     "@tailwindcss/vite": "^4.1.17",
     "@vitejs/plugin-react": "^5.1.1",
+    "better-auth": "^1.3.34",
     "helium": "file:../helium",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",

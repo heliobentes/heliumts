@@ -1,25 +1,14 @@
-import path from 'path';
+import path from "path";
 
-import { HTTPHandlerExport, MethodExport } from './scanner.js';
+import { HTTPHandlerExport, MethodExport } from "./scanner.js";
 
-export function generateServerManifest(
-    methods: MethodExport[],
-    httpHandlers: HTTPHandlerExport[]
-): string {
-    const methodImports = methods
-        .map((m, i) => `import { ${m.name} as method_${i} } from '${m.filePath}';`)
-        .join('\n');
-    const httpImports = httpHandlers
-        .map((h, i) => `import { ${h.name} as http_${i} } from '${h.filePath}';`)
-        .join('\n');
+export function generateServerManifest(methods: MethodExport[], httpHandlers: HTTPHandlerExport[]): string {
+    const methodImports = methods.map((m, i) => `import { ${m.name} as method_${i} } from '${m.filePath}';`).join("\n");
+    const httpImports = httpHandlers.map((h, i) => `import { ${h.name} as http_${i} } from '${h.filePath}';`).join("\n");
 
-    const methodRegistrations = methods
-        .map((m, i) => `  registry.register('${m.name}', method_${i});`)
-        .join('\n');
+    const methodRegistrations = methods.map((m, i) => `  registry.register('${m.name}', method_${i});`).join("\n");
 
-    const httpExports = httpHandlers
-        .map((h, i) => `  { name: '${h.name}', handler: http_${i} },`)
-        .join('\n');
+    const httpExports = httpHandlers.map((h, i) => `  { name: '${h.name}', handler: http_${i} },`).join("\n");
 
     return `
 ${methodImports}
@@ -36,9 +25,7 @@ ${httpExports}
 }
 
 export function generateClientModule(methods: MethodExport[]): string {
-    const exports = methods
-        .map((m) => `export const ${m.name} = { __id: '${m.name}' };`)
-        .join('\n');
+    const exports = methods.map((m) => `export const ${m.name} = { __id: '${m.name}' };`).join("\n");
 
     return exports;
 }
@@ -46,12 +33,14 @@ export function generateClientModule(methods: MethodExport[]): string {
 export function generateTypeDefinitions(methods: MethodExport[], root: string): string {
     const imports = methods
         .map((m, i) => {
-            let relPath = path.relative(path.join(root, 'src'), m.filePath);
-            if (!relPath.startsWith('.')) relPath = './' + relPath;
-            relPath = relPath.replace(/\.ts$/, '');
+            let relPath = path.relative(path.join(root, "src"), m.filePath);
+            if (!relPath.startsWith(".")) {
+                relPath = "./" + relPath;
+            }
+            relPath = relPath.replace(/\.ts$/, "");
             return `import type { ${m.name} as method_${i}_type } from '${relPath}';`;
         })
-        .join('\n');
+        .join("\n");
 
     const exports = methods
         .map((m, i) => {
@@ -60,7 +49,7 @@ export function generateTypeDefinitions(methods: MethodExport[], root: string): 
     Awaited<ReturnType<typeof method_${i}_type['handler']>>
 >;`;
         })
-        .join('\n');
+        .join("\n");
 
     return `/**
 * Auto generated file - DO NOT EDIT!

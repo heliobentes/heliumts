@@ -4,6 +4,7 @@ import path from 'path';
 import type WebSocket from 'ws';
 import { WebSocketServer } from 'ws';
 
+import { injectEnvToProcess, loadEnvFiles } from "../utils/envLoader.js";
 import { HTTPRouter } from './httpRouter.js';
 import { RpcRegistry } from './rpcRegistry.js';
 
@@ -21,12 +22,11 @@ interface ProdServerOptions {
  * - Hosts WebSocket RPC server
  */
 export function startProdServer(options: ProdServerOptions) {
-    const {
-        port = Number(process.env.PORT || 3000),
-        distDir = 'dist',
-        staticDir = path.resolve(process.cwd(), distDir),
-        registerHandlers,
-    } = options;
+    const { port = Number(process.env.PORT || 3000), distDir = "dist", staticDir = path.resolve(process.cwd(), distDir), registerHandlers } = options;
+
+    // Load environment variables for server-side access
+    const envVars = loadEnvFiles({ mode: "production" });
+    injectEnvToProcess(envVars);
 
     const registry = new RpcRegistry();
     const httpRouter = new HTTPRouter();
@@ -39,72 +39,68 @@ export function startProdServer(options: ProdServerOptions) {
         if (handled) return;
 
         // Serve static files
-        const url = req.url || '/';
-        let filePath = path.join(staticDir, url === '/' ? 'index.html' : url);
+        const url = req.url || "/";
+        let filePath = path.join(staticDir, url === "/" ? "index.html" : url);
 
         // If file doesn't exist and it's not an API route, serve index.html (SPA fallback)
         if (!fs.existsSync(filePath)) {
             // Only fallback to index.html for non-API routes
-            if (
-                !url.startsWith('/api') &&
-                !url.startsWith('/webhooks') &&
-                !url.startsWith('/auth')
-            ) {
-                filePath = path.join(staticDir, 'index.html');
+            if (!url.startsWith("/api") && !url.startsWith("/webhooks") && !url.startsWith("/auth")) {
+                filePath = path.join(staticDir, "index.html");
             }
         }
 
         // Check if file exists
         if (!fs.existsSync(filePath)) {
-            res.writeHead(404, { 'Content-Type': 'text/plain' });
-            res.end('Not found');
+            res.writeHead(404, { "Content-Type": "text/plain" });
+            res.end("Not found");
             return;
         }
 
         // Determine content type
         const ext = path.extname(filePath);
         const contentTypes: Record<string, string> = {
-            '.html': 'text/html',
-            '.js': 'application/javascript',
-            '.css': 'text/css',
-            '.json': 'application/json',
-            '.png': 'image/png',
-            '.jpg': 'image/jpeg',
-            '.jpeg': 'image/jpeg',
-            '.gif': 'image/gif',
-            '.svg': 'image/svg+xml',
-            '.ico': 'image/x-icon',
-            '.woff': 'font/woff',
-            '.woff2': 'font/woff2',
-            '.ttf': 'font/ttf',
-            '.eot': 'application/vnd.ms-fontobject',
+            ".html": "text/html",
+            ".js": "application/javascript",
+            ".css": "text/css",
+            ".json": "application/json",
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".svg": "image/svg+xml",
+            ".ico": "image/x-icon",
+            ".woff": "font/woff",
+            ".woff2": "font/woff2",
+            ".ttf": "font/ttf",
+            ".eot": "application/vnd.ms-fontobject",
         };
-        const contentType = contentTypes[ext] || 'application/octet-stream';
+        const contentType = contentTypes[ext] || "application/octet-stream";
 
         try {
             const content = fs.readFileSync(filePath);
-            res.writeHead(200, { 'Content-Type': contentType });
+            res.writeHead(200, { "Content-Type": contentType });
             res.end(content);
         } catch (err) {
-            res.writeHead(500, { 'Content-Type': 'text/plain' });
-            res.end('Internal server error');
+            res.writeHead(500, { "Content-Type": "text/plain" });
+            res.end("Internal server error");
         }
     });
 
     // Setup WebSocket server for RPC
     const wss = new WebSocketServer({ noServer: true });
 
-    wss.on('connection', (socket: WebSocket) => {
-        socket.on('message', (msg: WebSocket.RawData) => {
+    wss.on("connection", (socket: WebSocket) => {
+        socket.on("message", (msg: WebSocket.RawData) => {
             registry.handleMessage(socket, msg.toString());
         });
     });
 
     // Handle WebSocket upgrade requests
-    server.on('upgrade', (req, socket, head) => {
-        if (req.url === '/rpc') {
+    server.on("upgrade", (req, socket, head) => {
+        if (req.url === "/rpc") {
             wss.handleUpgrade(req, socket, head, (ws) => {
-                wss.emit('connection', ws, req);
+                wss.emit("connection", ws, req);
             });
         } else {
             socket.destroy();

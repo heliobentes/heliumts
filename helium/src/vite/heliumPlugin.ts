@@ -1,8 +1,9 @@
-import fs from 'fs';
-import path from 'path';
-import type { Plugin } from 'vite';
+import fs from "fs";
+import path from "path";
+import type { Plugin } from "vite";
 
-import { attachToDevServer } from '../server/devServer.js';
+import { attachToDevServer } from "../server/devServer.js";
+import { createEnvDefines, injectEnvToProcess, loadEnvFiles } from "../utils/envLoader.js";
 import {
     RESOLVED_VIRTUAL_CLIENT_MODULE_ID,
     RESOLVED_VIRTUAL_ENTRY_MODULE_ID,
@@ -11,69 +12,76 @@ import {
     VIRTUAL_CLIENT_MODULE_ID,
     VIRTUAL_ENTRY_MODULE_ID,
     VIRTUAL_SERVER_MANIFEST_ID,
-} from './paths.js';
-import { scanServerExports } from './scanner.js';
-import {
-    generateClientModule,
-    generateEntryModule,
-    generateServerManifest,
-    generateTypeDefinitions,
-} from './virtualServerModule.js';
+} from "./paths.js";
+import { scanServerExports } from "./scanner.js";
+import { generateClientModule, generateEntryModule, generateServerManifest, generateTypeDefinitions } from "./virtualServerModule.js";
 
 export default function helium(): Plugin {
     let root = process.cwd();
     const serverDir = normalizeToPosix(SERVER_DIR);
 
     return {
-        name: 'vite-plugin-helium',
-        enforce: 'pre',
+        name: "vite-plugin-helium",
+        enforce: "pre",
         configResolved(config) {
             root = config.root;
+
+            // Load and inject environment variables
+            const mode = config.mode || "development";
+            const envVars = loadEnvFiles({ root, mode });
+            injectEnvToProcess(envVars);
         },
         transformIndexHtml: {
-            order: 'pre',
+            order: "pre",
             handler(html) {
                 // Check if HTML already has a script tag for entry
-                if (html.includes('src/main.tsx') || html.includes('src/main.ts')) {
+                if (html.includes("src/main.tsx") || html.includes("src/main.ts")) {
                     return html; // User has their own entry, don't modify
                 }
 
                 // Ensure root div exists
                 let modifiedHtml = html;
                 if (!modifiedHtml.includes('id="root"')) {
-                    modifiedHtml = modifiedHtml.replace(
-                        '<body>',
-                        '<body>\n    <div id="root"></div>'
-                    );
+                    modifiedHtml = modifiedHtml.replace("<body>", '<body>\n    <div id="root"></div>');
                 }
 
                 // Generate physical entry file
-                const heliumDir = path.join(root, 'node_modules', '.helium');
+                const heliumDir = path.join(root, "node_modules", ".helium");
                 if (!fs.existsSync(heliumDir)) {
                     fs.mkdirSync(heliumDir, { recursive: true });
                 }
-                const entryPath = path.join(heliumDir, 'entry.tsx');
+                const entryPath = path.join(heliumDir, "entry.tsx");
                 fs.writeFileSync(entryPath, generateEntryModule());
 
                 // Return with tags to inject the entry
                 return [
                     {
-                        tag: 'script',
+                        tag: "script",
                         attrs: {
-                            type: 'module',
-                            src: '/node_modules/.helium/entry.tsx',
+                            type: "module",
+                            src: "/node_modules/.helium/entry.tsx",
                         },
-                        injectTo: 'body',
+                        injectTo: "body",
                     },
                 ];
             },
         },
-        config() {
+        config(config) {
+            // Load environment variables before config is finalized
+            const mode = config.mode || "development";
+            const envVars = loadEnvFiles({ root, mode });
+
+            // Create defines for client-side env variables
+            const envDefines = createEnvDefines(envVars);
+
             // Provide default index.html if none exists
             return {
-                appType: 'spa',
+                appType: "spa",
                 optimizeDeps: {
-                    include: ['react-dom/client'],
+                    include: ["react-dom/client"],
+                },
+                define: {
+                    ...envDefines,
                 },
             };
         },
@@ -89,7 +97,16 @@ export default function helium(): Plugin {
             }
             if (id === VIRTUAL_ENTRY_MODULE_ID) {
                 // Add .tsx extension so Vite knows it contains JSX
-                return RESOLVED_VIRTUAL_ENTRY_MODULE_ID + '.tsx';
+                return RESOLVED_VIRTUAL_ENTRY_MODULE_ID + ".tsx";
+            }
+            // Intercept helium/server imports from client code
+            if (id === "helium/server") {
+                // If imported from server code, let it resolve normally
+                if (isServerModule(importer, root, serverDir)) {
+                    return null;
+                }
+                // For client code, redirect to virtual client module
+                return RESOLVED_VIRTUAL_CLIENT_MODULE_ID;
             }
             return null;
         },
@@ -102,17 +119,17 @@ export default function helium(): Plugin {
                 const { methods, httpHandlers } = scanServerExports(root);
                 return generateServerManifest(methods, httpHandlers);
             }
-            if (id === RESOLVED_VIRTUAL_ENTRY_MODULE_ID + '.tsx') {
+            if (id === RESOLVED_VIRTUAL_ENTRY_MODULE_ID + ".tsx") {
                 return generateEntryModule();
             }
         },
         buildStart() {
             const { methods } = scanServerExports(root);
             const dts = generateTypeDefinitions(methods, root);
-            const dtsPath = path.join(root, 'src', 'helium-server.d.ts');
+            const dtsPath = path.join(root, "src", "helium-server.d.ts");
             // Ensure src exists
-            if (!fs.existsSync(path.join(root, 'src'))) {
-                fs.mkdirSync(path.join(root, 'src'));
+            if (!fs.existsSync(path.join(root, "src"))) {
+                fs.mkdirSync(path.join(root, "src"));
             }
             fs.writeFileSync(dtsPath, dts);
         },
@@ -120,7 +137,7 @@ export default function helium(): Plugin {
             const regenerateTypes = () => {
                 const { methods } = scanServerExports(root);
                 const dts = generateTypeDefinitions(methods, root);
-                const dtsPath = path.join(root, 'src', 'helium-server.d.ts');
+                const dtsPath = path.join(root, "src", "helium-server.d.ts");
                 fs.writeFileSync(dtsPath, dts);
             };
 
@@ -129,12 +146,8 @@ export default function helium(): Plugin {
                 regenerateTypes();
 
                 // Invalidate the virtual modules so they get regenerated
-                const clientModule = server.environments.client?.moduleGraph.getModuleById(
-                    RESOLVED_VIRTUAL_CLIENT_MODULE_ID
-                );
-                const serverModule = server.environments.ssr?.moduleGraph.getModuleById(
-                    RESOLVED_VIRTUAL_SERVER_MANIFEST_ID
-                );
+                const clientModule = server.environments.client?.moduleGraph.getModuleById(RESOLVED_VIRTUAL_CLIENT_MODULE_ID);
+                const serverModule = server.environments.ssr?.moduleGraph.getModuleById(RESOLVED_VIRTUAL_SERVER_MANIFEST_ID);
 
                 if (clientModule) {
                     server.environments.client?.moduleGraph.invalidateModule(clientModule);
@@ -157,13 +170,13 @@ export default function helium(): Plugin {
                         });
                     }
                 } catch (e) {
-                    console.error('[Helium] ➜ Failed to reload Helium server manifest', e);
+                    console.error("[Helium] ➜ Failed to reload Helium server manifest", e);
                 }
 
                 // Trigger HMR for any client code that imports helium/server
                 server.ws.send({
-                    type: 'full-reload',
-                    path: '*',
+                    type: "full-reload",
+                    path: "*",
                 });
             };
 
@@ -171,7 +184,7 @@ export default function helium(): Plugin {
             const serverPath = path.join(root, serverDir);
             server.watcher.add(serverPath);
 
-            server.watcher.on('change', (file) => {
+            server.watcher.on("change", (file) => {
                 const relative = path.relative(root, file);
                 const normalized = normalizeToPosix(relative);
 
@@ -181,7 +194,7 @@ export default function helium(): Plugin {
                 }
             });
 
-            server.watcher.on('add', (file) => {
+            server.watcher.on("add", (file) => {
                 const relative = path.relative(root, file);
                 const normalized = normalizeToPosix(relative);
 
@@ -191,7 +204,7 @@ export default function helium(): Plugin {
                 }
             });
 
-            server.watcher.on('unlink', (file) => {
+            server.watcher.on("unlink", (file) => {
                 const relative = path.relative(root, file);
                 const normalized = normalizeToPosix(relative);
 
@@ -202,7 +215,7 @@ export default function helium(): Plugin {
             });
 
             // We hook into the server start to attach our RPC server
-            server.httpServer?.on('listening', async () => {
+            server.httpServer?.on("listening", async () => {
                 try {
                     // Load the manifest using Vite's SSR loader
                     // This allows us to load TS files directly and handle dependencies
@@ -217,7 +230,7 @@ export default function helium(): Plugin {
                         });
                     }
                 } catch (e) {
-                    console.error('[Helium] ➜ Failed to attach Helium RPC server', e);
+                    console.error("[Helium] ➜ Failed to attach Helium RPC server", e);
                 }
             });
         },
@@ -225,21 +238,21 @@ export default function helium(): Plugin {
 }
 
 function normalizeToPosix(filePath: string): string {
-    return filePath.split(path.sep).join('/');
+    return filePath.split(path.sep).join("/");
 }
 
 function isServerModule(importer: string | undefined, root: string, serverDir: string): boolean {
-    if (!importer || importer.startsWith('\0')) {
+    if (!importer || importer.startsWith("\0")) {
         return false;
     }
 
-    const [importerPath] = importer.split('?');
+    const [importerPath] = importer.split("?");
     if (!importerPath) {
         return false;
     }
 
     const relative = path.relative(root, importerPath);
-    if (!relative || relative.startsWith('..')) {
+    if (!relative || relative.startsWith("..")) {
         return false;
     }
 

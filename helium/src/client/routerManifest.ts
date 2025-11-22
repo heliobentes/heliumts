@@ -1,4 +1,4 @@
-import type { ComponentType } from 'react';
+import type { ComponentType } from "react";
 
 export type LayoutProps = {
     children: React.ReactNode;
@@ -23,17 +23,19 @@ export type RouteEntry = {
  */
 function pathFromFile(file: string): string {
     // Remove /src/pages prefix and file extension
-    const withoutPrefix = file.replace('/src/pages', '').replace(/\.(tsx|jsx|ts|js)$/, '');
+    const withoutPrefix = file.replace("/src/pages", "").replace(/\.(tsx|jsx|ts|js)$/, "");
 
     // Handle special files
-    if (withoutPrefix === '/404') return '__404__';
+    if (withoutPrefix === "/404") {
+        return "__404__";
+    }
 
     // Convert /index to /
-    let pattern = withoutPrefix.replace(/\/index$/, '') || '/';
+    let pattern = withoutPrefix.replace(/\/index$/, "") || "/";
     // Convert [...param] to *param (catch-all)
-    pattern = pattern.replace(/\[\.\.\.(.+?)\]/g, '*$1');
+    pattern = pattern.replace(/\[\.\.\.(.+?)\]/g, "*$1");
     // Convert [param] to :param (single dynamic segment)
-    pattern = pattern.replace(/\[(.+?)\]/g, ':$1');
+    pattern = pattern.replace(/\[(.+?)\]/g, ":$1");
 
     return pattern;
 }
@@ -44,24 +46,24 @@ function pathFromFile(file: string): string {
  * Supports catch-all segments like *slug for [...slug]
  */
 function createMatcher(pattern: string) {
-    const segments = pattern.split('/').filter(Boolean);
+    const segments = pattern.split("/").filter(Boolean);
 
     return (path: string) => {
         // Remove query string and hash
-        const cleanPath = path.split('?')[0].split('#')[0];
-        const pathSegments = cleanPath.split('/').filter(Boolean);
+        const cleanPath = path.split("?")[0].split("#")[0];
+        const pathSegments = cleanPath.split("/").filter(Boolean);
 
         // For root path, handle specially
-        if (pattern === '/' && cleanPath === '/') {
+        if (pattern === "/" && cleanPath === "/") {
             return { params: {} };
         }
 
         const params: Record<string, string | string[]> = {};
 
         // Check for catch-all segment (must be last)
-        const hasCatchAll = segments.some((seg) => seg.startsWith('*'));
+        const hasCatchAll = segments.some((seg) => seg.startsWith("*"));
         if (hasCatchAll) {
-            const catchAllIndex = segments.findIndex((seg) => seg.startsWith('*'));
+            const catchAllIndex = segments.findIndex((seg) => seg.startsWith("*"));
 
             // Catch-all must be the last segment
             if (catchAllIndex !== segments.length - 1) {
@@ -76,9 +78,11 @@ function createMatcher(pattern: string) {
                 const seg = segments[i];
                 const value = pathSegments[i];
 
-                if (!value) return null; // Not enough path segments
+                if (!value) {
+                    return null;
+                } // Not enough path segments
 
-                if (seg.startsWith(':')) {
+                if (seg.startsWith(":")) {
                     params[seg.slice(1)] = decodeURIComponent(value);
                 } else if (seg !== value) {
                     return null; // Static segment must match
@@ -102,7 +106,7 @@ function createMatcher(pattern: string) {
             const seg = segments[i];
             const value = pathSegments[i];
 
-            if (seg.startsWith(':')) {
+            if (seg.startsWith(":")) {
                 // Dynamic segment
                 params[seg.slice(1)] = decodeURIComponent(value);
             } else if (seg !== value) {
@@ -120,10 +124,10 @@ function createMatcher(pattern: string) {
  * /src/pages/tasks/[id].tsx → /tasks
  */
 function getDirectoryPath(file: string): string {
-    const withoutPrefix = file.replace('/src/pages', '').replace(/\.(tsx|jsx|ts|js)$/, '');
-    const parts = withoutPrefix.split('/');
+    const withoutPrefix = file.replace("/src/pages", "").replace(/\.(tsx|jsx|ts|js)$/, "");
+    const parts = withoutPrefix.split("/");
     parts.pop(); // Remove filename
-    return parts.join('/') || '/';
+    return parts.join("/") || "/";
 }
 
 /**
@@ -136,7 +140,7 @@ export function buildRoutes(): {
     AppShell?: ComponentType<any>;
 } {
     // Eagerly load all page components
-    const pages = import.meta.glob('/src/pages/**/*.{tsx,jsx,ts,js}', {
+    const pages = import.meta.glob("/src/pages/**/*.{tsx,jsx,ts,js}", {
         eager: true,
     });
 
@@ -149,7 +153,7 @@ export function buildRoutes(): {
 
     // First pass: collect all layouts
     for (const [file, mod] of Object.entries(pages)) {
-        if (file.includes('/_layout.')) {
+        if (file.includes("/_layout.")) {
             const Component = (mod as any).default;
             if (Component) {
                 const dirPath = getDirectoryPath(file);
@@ -161,7 +165,7 @@ export function buildRoutes(): {
     // Second pass: build routes with their layouts
     for (const [file, mod] of Object.entries(pages)) {
         // Skip layout files
-        if (file.includes('/_layout.')) {
+        if (file.includes("/_layout.")) {
             continue;
         }
 
@@ -174,7 +178,7 @@ export function buildRoutes(): {
         const pathPattern = pathFromFile(file);
 
         // Handle special pages
-        if (pathPattern === '__404__') {
+        if (pathPattern === "__404__") {
             NotFound = Component;
             continue;
         }
@@ -182,11 +186,11 @@ export function buildRoutes(): {
         // Find all layouts for this route (from root to leaf)
         const layouts: ComponentType<LayoutProps>[] = [];
         const dirPath = getDirectoryPath(file);
-        const pathParts = dirPath.split('/').filter(Boolean);
+        const pathParts = dirPath.split("/").filter(Boolean);
 
         // Check for layouts at each level
         for (let i = 0; i <= pathParts.length; i++) {
-            const checkPath = i === 0 ? '/' : '/' + pathParts.slice(0, i).join('/');
+            const checkPath = i === 0 ? "/" : "/" + pathParts.slice(0, i).join("/");
             const layout = layoutMap.get(checkPath);
             if (layout) {
                 layouts.push(layout);
@@ -204,18 +208,26 @@ export function buildRoutes(): {
 
     // Sort routes by specificity (static > dynamic > catch-all)
     routes.sort((a, b) => {
-        const aHasCatchAll = a.pathPattern.includes('*');
-        const bHasCatchAll = b.pathPattern.includes('*');
-        const aHasDynamic = a.pathPattern.includes(':');
-        const bHasDynamic = b.pathPattern.includes(':');
+        const aHasCatchAll = a.pathPattern.includes("*");
+        const bHasCatchAll = b.pathPattern.includes("*");
+        const aHasDynamic = a.pathPattern.includes(":");
+        const bHasDynamic = b.pathPattern.includes(":");
 
         // Catch-all routes should be last (least specific)
-        if (aHasCatchAll && !bHasCatchAll) return 1;
-        if (!aHasCatchAll && bHasCatchAll) return -1;
+        if (aHasCatchAll && !bHasCatchAll) {
+            return 1;
+        }
+        if (!aHasCatchAll && bHasCatchAll) {
+            return -1;
+        }
 
         // Dynamic routes come after static routes
-        if (aHasDynamic && !bHasDynamic) return 1;
-        if (!aHasDynamic && bHasDynamic) return -1;
+        if (aHasDynamic && !bHasDynamic) {
+            return 1;
+        }
+        if (!aHasDynamic && bHasDynamic) {
+            return -1;
+        }
 
         // Longer paths first (more specific)
         return b.pathPattern.length - a.pathPattern.length;

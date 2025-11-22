@@ -20,6 +20,11 @@
             "require": "./dist/server/index.js",
             "types": "./dist/server/index.d.ts"
         },
+        "./prod-server": {
+            "import": "./dist/server/prodServer.js",
+            "require": "./dist/server/prodServer.js",
+            "types": "./dist/server/prodServer.d.ts"
+        },
         "./vite": {
             "import": "./dist/vite/index.js",
             "require": "./dist/vite/index.js",
@@ -39,6 +44,7 @@
         "vite": "^7.0.0"
     },
     "dependencies": {
+        "dotenv": "^16.0.0",
         "ws": "^8.0.0"
     },
     "devDependencies": {

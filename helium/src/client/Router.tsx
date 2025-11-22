@@ -1,12 +1,12 @@
-import type { ComponentType } from 'react';
-import React, { useEffect, useMemo, useState } from 'react';
+import type { ComponentType } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
-import { buildRoutes } from './routerManifest';
+import { buildRoutes } from "./routerManifest";
 
 const { routes, NotFound } = buildRoutes();
 
 // Event emitter for router events
-type RouterEvent = 'navigation' | 'before-navigation';
+type RouterEvent = "navigation" | "before-navigation";
 type EventListener = (event: { from: string; to: string; preventDefault?: () => void }) => void;
 
 class RouterEventEmitter {
@@ -26,14 +26,16 @@ class RouterEventEmitter {
 
     emit(event: RouterEvent, data: { from: string; to: string }): boolean {
         const eventListeners = this.listeners.get(event);
-        if (!eventListeners || eventListeners.size === 0) return true;
+        if (!eventListeners || eventListeners.size === 0) {
+            return true;
+        }
 
         let prevented = false;
         const preventDefault = () => {
             prevented = true;
         };
 
-        const eventData = event === 'before-navigation' ? { ...data, preventDefault } : data;
+        const eventData = event === "before-navigation" ? { ...data, preventDefault } : data;
 
         eventListeners.forEach((listener) => {
             listener(eventData);
@@ -61,7 +63,9 @@ function getLocation(): RouterState {
 function matchRoute(path: string) {
     for (const r of routes) {
         const m = r.matcher(path);
-        if (m) return { params: m.params, route: r };
+        if (m) {
+            return { params: m.params, route: r };
+        }
     }
     return null;
 }
@@ -80,32 +84,37 @@ const RouterContext = React.createContext<RouterContext | null>(null);
 
 export function useRouter() {
     const ctx = React.useContext(RouterContext);
-    if (!ctx) throw new Error('useRouter must be used inside <AppRouter>');
+    if (!ctx) {
+        throw new Error("useRouter must be used inside <AppRouter>");
+    }
     return ctx;
 }
 
 // Navigation helpers
 function navigate(href: string, replace = false) {
     const from = window.location.pathname;
-    const to = href.split('?')[0]; // Extract pathname from href
+    const to = href.split("?")[0]; // Extract pathname from href
 
     // Emit before-navigation event (can be prevented)
-    const canNavigate = routerEventEmitter.emit('before-navigation', { from, to });
+    const canNavigate = routerEventEmitter.emit("before-navigation", { from, to });
     if (!canNavigate) {
         return; // Navigation was prevented
     }
 
-    if (replace) window.history.replaceState(null, '', href);
-    else window.history.pushState(null, '', href);
-    const navEvent = new PopStateEvent('popstate');
+    if (replace) {
+        window.history.replaceState(null, "", href);
+    } else {
+        window.history.pushState(null, "", href);
+    }
+    const navEvent = new PopStateEvent("popstate");
     window.dispatchEvent(navEvent);
 
     // Emit navigation event after navigation completes
-    routerEventEmitter.emit('navigation', { from, to });
+    routerEventEmitter.emit("navigation", { from, to });
 }
 
 export type LinkProps = React.PropsWithChildren<
-    Omit<React.AnchorHTMLAttributes<HTMLAnchorElement>, 'href'> & {
+    Omit<React.AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
         href: string;
         replace?: boolean;
     }
@@ -114,17 +123,17 @@ export type LinkProps = React.PropsWithChildren<
 const preloadedUrls: Record<string, boolean> = {};
 
 function pointerenterHandler(e: React.PointerEvent<HTMLAnchorElement>) {
-    if (!HTMLScriptElement.supports || !HTMLScriptElement.supports('speculationrules')) {
+    if (!HTMLScriptElement.supports || !HTMLScriptElement.supports("speculationrules")) {
         return;
     }
     if (preloadedUrls[e.currentTarget.href]) {
         return;
     }
     preloadedUrls[e.currentTarget.href] = true;
-    const prefetcher = document.createElement('link');
+    const prefetcher = document.createElement("link");
 
-    prefetcher.as = prefetcher.relList.supports('prefetch') ? 'document' : 'fetch';
-    prefetcher.rel = prefetcher.relList.supports('prefetch') ? 'prefetch' : 'preload';
+    prefetcher.as = prefetcher.relList.supports("prefetch") ? "document" : "fetch";
+    prefetcher.rel = prefetcher.relList.supports("prefetch") ? "prefetch" : "preload";
     prefetcher.href = e.currentTarget.href;
 
     document.head.appendChild(prefetcher);
@@ -150,13 +159,7 @@ export function Link(props: LinkProps) {
     const { children, href, className, ...safeProps } = props;
 
     return (
-        <a
-            href={href}
-            onClick={onClick}
-            className={className}
-            onPointerEnter={pointerenterHandler}
-            {...safeProps}
-        >
+        <a href={href} onClick={onClick} className={className} onPointerEnter={pointerenterHandler} {...safeProps}>
             {children}
         </a>
     );
@@ -170,16 +173,12 @@ export type AppShellProps = {
 
 // Main router component
 export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps> }) {
-    const [state, setState] = useState<RouterState>(() =>
-        typeof window === 'undefined'
-            ? { path: '/', searchParams: new URLSearchParams() }
-            : getLocation()
-    );
+    const [state, setState] = useState<RouterState>(() => (typeof window === "undefined" ? { path: "/", searchParams: new URLSearchParams() } : getLocation()));
 
     useEffect(() => {
         const onPop = () => setState(getLocation());
-        window.addEventListener('popstate', onPop);
-        return () => window.removeEventListener('popstate', onPop);
+        window.addEventListener("popstate", onPop);
+        return () => window.removeEventListener("popstate", onPop);
     }, []);
 
     const match = useMemo(() => matchRoute(state.path), [state.path]);
@@ -197,11 +196,7 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
         const NotFoundComp = NotFound ?? (() => <div>Not found</div>);
         const content = <NotFoundComp />;
 
-        return (
-            <RouterContext.Provider value={routerValue}>
-                {AppShell ? <AppShell Component={NotFoundComp} pageProps={{}} /> : content}
-            </RouterContext.Provider>
-        );
+        return <RouterContext.Provider value={routerValue}>{AppShell ? <AppShell Component={NotFoundComp} pageProps={{}} /> : content}</RouterContext.Provider>;
     }
 
     const Page = match.route.Component;
@@ -221,11 +216,7 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
         return content;
     };
 
-    const finalContent = AppShell ? (
-        <AppShell Component={WrappedPage} pageProps={{}} />
-    ) : (
-        <WrappedPage />
-    );
+    const finalContent = AppShell ? <AppShell Component={WrappedPage} pageProps={{}} /> : <WrappedPage />;
 
     return <RouterContext.Provider value={routerValue}>{finalContent}</RouterContext.Provider>;
 }

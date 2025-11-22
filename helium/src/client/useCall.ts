@@ -1,18 +1,15 @@
-import { useState } from 'react';
+import { useState } from "react";
 
-import { invalidateByMethod } from './cache.js';
-import { rpcCall } from './rpcClient.js';
-import type { MethodStub } from './types.js';
+import { invalidateByMethod } from "./cache.js";
+import { rpcCall } from "./rpcClient.js";
+import type { MethodStub } from "./types.js";
 
 type UseCallOptions = {
     invalidate?: MethodStub[];
     onSuccess?: (result: unknown) => void;
 };
 
-export function useCall<TArgs, TResult>(
-    method: MethodStub<TArgs, TResult>,
-    options: UseCallOptions = {}
-) {
+export function useCall<TArgs, TResult>(method: MethodStub<TArgs, TResult>, options: UseCallOptions = {}) {
     const [isCalling, setCalling] = useState(false);
     const [error, setError] = useState<unknown>(null);
 

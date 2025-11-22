@@ -1,7 +1,7 @@
-import type { IncomingMessage, ServerResponse } from 'http';
-import { parse as parseUrl } from 'url';
+import type { IncomingMessage, ServerResponse } from "http";
+import { parse as parseUrl } from "url";
 
-import type { HeliumHTTPDef, HTTPRequest } from './defineHTTPRequest.js';
+import type { HeliumHTTPDef, HTTPRequest } from "./defineHTTPRequest.js";
 
 export interface HTTPRoute {
     name: string;
@@ -29,20 +29,20 @@ export class HTTPRouter {
         }
     }
 
-    async handleRequest(
-        req: IncomingMessage,
-        res: ServerResponse,
-        ctx?: unknown
-    ): Promise<boolean> {
-        const method = req.method?.toUpperCase() || 'GET';
-        const url = parseUrl(req.url || '', true);
-        const pathname = url.pathname || '/';
+    async handleRequest(req: IncomingMessage, res: ServerResponse, ctx?: unknown): Promise<boolean> {
+        const method = req.method?.toUpperCase() || "GET";
+        const url = parseUrl(req.url || "", true);
+        const pathname = url.pathname || "/";
 
         for (const route of this.routes) {
-            if (route.method !== 'ALL' && route.method !== method) continue;
+            if (route.method !== "ALL" && route.method !== method) {
+                continue;
+            }
 
             const match = pathname.match(route.pattern);
-            if (!match) continue;
+            if (!match) {
+                continue;
+            }
 
             // Extract path parameters
             const params: Record<string, string> = {};
@@ -62,14 +62,31 @@ export class HTTPRouter {
                 const httpRequest = await createHTTPRequest(req, query, params);
                 const result = await route.handler.handler(httpRequest, ctx);
 
+                if (result instanceof Response) {
+                    res.statusCode = result.status;
+                    result.headers.forEach((value, key) => {
+                        res.setHeader(key, value);
+                    });
+
+                    if (result.body) {
+                        const { Readable } = await import("stream");
+                        // @ts-ignore
+                        const nodeStream = Readable.fromWeb(result.body);
+                        nodeStream.pipe(res);
+                    } else {
+                        res.end();
+                    }
+                    return true;
+                }
+
                 // Send response
-                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.writeHead(200, { "Content-Type": "application/json" });
                 res.end(JSON.stringify(result));
                 return true;
             } catch (error) {
-                console.error('[Helium] ➜ Error handling request:', error);
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Internal server error' }));
+                console.error("[Helium] ➜ Error handling request:", error);
+                res.writeHead(500, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: "Internal server error" }));
                 return true;
             }
         }
@@ -83,9 +100,10 @@ function pathToRegex(path: string): { pattern: RegExp; keys: string[] } {
     const pattern = path
         .replace(/\/:([^/]+)/g, (_, key) => {
             keys.push(key);
-            return '/([^/]+)';
+            return "/([^/]+)";
         })
-        .replace(/\//g, '\\/');
+        .replace(/\*/g, ".*")
+        .replace(/\//g, "\\/");
 
     return {
         pattern: new RegExp(`^${pattern}$`),
@@ -93,17 +111,13 @@ function pathToRegex(path: string): { pattern: RegExp; keys: string[] } {
     };
 }
 
-async function createHTTPRequest(
-    req: IncomingMessage,
-    query: Record<string, string | string[]>,
-    params: Record<string, string>
-): Promise<HTTPRequest> {
+async function createHTTPRequest(req: IncomingMessage, query: Record<string, string | string[]>, params: Record<string, string>): Promise<HTTPRequest> {
     const headers: Record<string, string | string[] | undefined> = {};
     for (const [key, value] of Object.entries(req.headers)) {
         headers[key.toLowerCase()] = value;
     }
 
-    const cookies = parseCookies(req.headers.cookie || '');
+    const cookies = parseCookies(req.headers.cookie || "");
 
     // Normalize query to always be string
     const normalizedQuery: Record<string, string> = {};
@@ -120,22 +134,22 @@ async function createHTTPRequest(
     };
 
     return {
-        method: req.method || 'GET',
-        path: req.url || '/',
+        method: req.method || "GET",
+        path: req.url || "/",
         headers,
         query: normalizedQuery,
         params,
         cookies,
         json: async () => {
             const body = await getBody();
-            return JSON.parse(body.toString('utf-8'));
+            return JSON.parse(body.toString("utf-8"));
         },
         text: async () => {
             const body = await getBody();
-            return body.toString('utf-8');
+            return body.toString("utf-8");
         },
         formData: async () => {
-            throw new Error('FormData not yet implemented');
+            throw new Error("FormData not yet implemented");
         },
     };
 }
@@ -143,19 +157,21 @@ async function createHTTPRequest(
 function readBody(req: IncomingMessage): Promise<Buffer> {
     return new Promise((resolve, reject) => {
         const chunks: Buffer[] = [];
-        req.on('data', (chunk) => chunks.push(chunk));
-        req.on('end', () => resolve(Buffer.concat(chunks)));
-        req.on('error', reject);
+        req.on("data", (chunk) => chunks.push(chunk));
+        req.on("end", () => resolve(Buffer.concat(chunks)));
+        req.on("error", reject);
     });
 }
 
 function parseCookies(cookieHeader: string): Record<string, string> {
     const cookies: Record<string, string> = {};
-    if (!cookieHeader) return cookies;
+    if (!cookieHeader) {
+        return cookies;
+    }
 
-    const pairs = cookieHeader.split(';');
+    const pairs = cookieHeader.split(";");
     for (const pair of pairs) {
-        const [key, value] = pair.split('=').map((s) => s.trim());
+        const [key, value] = pair.split("=").map((s) => s.trim());
         if (key && value) {
             cookies[key] = decodeURIComponent(value);
         }

@@ -1,4 +1,4 @@
-export type HTTPMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'ALL';
+export type HTTPMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "ALL";
 
 export interface HTTPRequest {
     method: string;
@@ -12,38 +12,32 @@ export interface HTTPRequest {
     formData: () => Promise<FormData>;
 }
 
-export type HTTPHandler<TResult = unknown> = (
-    req: HTTPRequest,
-    ctx: unknown
-) => Promise<TResult> | TResult;
+export type HTTPHandler<TResult = unknown> = (req: HTTPRequest, ctx: unknown) => Promise<TResult> | TResult;
 
-export type HeliumHTTPDef<
-    TMethod extends HTTPMethod = HTTPMethod,
-    TPath extends string = string,
-> = {
-    __kind: 'http';
+export type HeliumHTTPDef<TMethod extends HTTPMethod = HTTPMethod, TPath extends string = string> = {
+    __kind: "http";
     method: TMethod;
     path: TPath;
     handler: HTTPHandler;
 };
 
-export function defineHTTPRequest<
-    TMethod extends HTTPMethod,
-    TPath extends string,
-    TResult = unknown,
->(method: TMethod, path: TPath, handler: HTTPHandler<TResult>): HeliumHTTPDef<TMethod, TPath> {
+export function defineHTTPRequest<TMethod extends HTTPMethod, TPath extends string, TResult = unknown>(
+    method: TMethod,
+    path: TPath,
+    handler: HTTPHandler<TResult>
+): HeliumHTTPDef<TMethod, TPath> {
     if (!method) {
-        throw new Error('defineHTTPRequest requires a method (GET, POST, etc.)');
+        throw new Error("defineHTTPRequest requires a method (GET, POST, etc.)");
     }
     if (!path) {
-        throw new Error('defineHTTPRequest requires a path');
+        throw new Error("defineHTTPRequest requires a path");
     }
     if (!handler) {
-        throw new Error('defineHTTPRequest requires a handler');
+        throw new Error("defineHTTPRequest requires a handler");
     }
 
     return {
-        __kind: 'http',
+        __kind: "http",
         method,
         path,
         handler,

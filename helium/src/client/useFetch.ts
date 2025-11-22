@@ -1,15 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from "react";
 
-import { cacheKey, get, has, set, subscribeInvalidations } from './cache.js';
-import { rpcCall } from './rpcClient.js';
-import type { MethodStub } from './types.js';
+import { cacheKey, get, has, set, subscribeInvalidations } from "./cache.js";
+import { rpcCall } from "./rpcClient.js";
+import type { MethodStub } from "./types.js";
 
 export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, args?: TArgs) {
     const key = cacheKey(method.__id, args);
 
-    const [data, setData] = useState<TResult | undefined>(() =>
-        has(key) ? get<TResult>(key) : undefined
-    );
+    const [data, setData] = useState<TResult | undefined>(() => (has(key) ? get<TResult>(key) : undefined));
     const [isLoading, setLoading] = useState(!has(key));
     const [error, setError] = useState<unknown>(null);
 
@@ -23,15 +21,21 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
 
             rpcCall<TResult, TArgs>(method.__id, args as TArgs)
                 .then((result) => {
-                    if (!active) return;
+                    if (!active) {
+                        return;
+                    }
                     set(key, result);
                     setData(result);
                 })
                 .catch((err) => {
-                    if (active) setError(err);
+                    if (active) {
+                        setError(err);
+                    }
                 })
                 .finally(() => {
-                    if (active) setLoading(false);
+                    if (active) {
+                        setLoading(false);
+                    }
                 });
         }
 
