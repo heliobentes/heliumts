@@ -1,39 +1,65 @@
 import { defineMethod } from "helium/server";
 
-import { nextTaskId, tasksStore } from "./tasks-store";
+import { Task } from "../../types/task";
+import { TaskModel } from "../models/Task";
 
 export const getTasks = defineMethod(async (args?: { status?: string }) => {
-    const status = args?.status;
-    const results = status ? tasksStore.filter((t) => t.status === status) : tasksStore;
-    return results.slice();
+    const filter = args?.status ? { status: args.status } : {};
+    const tasks = await TaskModel.find(filter).sort({ createdAt: -1 });
+
+    return tasks.map((task) => ({
+        id: task._id.toString(),
+        name: task.name,
+        status: task.status,
+    })) as Task[];
 });
 
 export const createTask = defineMethod(async (args: { name: string }) => {
-    const task = { id: nextTaskId(), name: args.name, status: "open" as const };
-    tasksStore.push(task);
-    return task;
+    const task = await TaskModel.create({
+        name: args.name,
+        status: "open",
+    });
+
+    return {
+        id: task._id.toString(),
+        name: task.name,
+        status: task.status,
+    } as Task;
 });
 
-export const deleteTask = defineMethod(async (args: { id: number }) => {
-    const index = tasksStore.findIndex((t) => t.id === args.id);
-    if (index !== -1) {
-        tasksStore.splice(index, 1);
+export const deleteTask = defineMethod(async (args: { id: string }) => {
+    const result = await TaskModel.findByIdAndDelete(args.id);
+
+    if (result) {
         return { success: true };
     } else {
         return { success: false, message: "Task not found" };
     }
 });
 
-export const editTask = defineMethod(async (args: { id: number; name?: string; status?: string }) => {
-    const task = tasksStore.find((t) => t.id === args.id);
+export const editTask = defineMethod(async (args: { id: string; name?: string; status?: string }) => {
+    const task = await TaskModel.findById(args.id);
+
     if (!task) {
         return { success: false, message: "Task not found" };
     }
+
     if (args.name !== undefined) {
         task.name = args.name;
     }
     if (args.status !== undefined) {
-        task.status = args.status as any;
+        task.status = args.status as "open" | "done";
     }
-    return { success: true, task };
+
+    await task.save();
+
+    return {
+        success: true,
+        task: {
+            _id: task._id,
+            id: task._id.toString(),
+            name: task.name,
+            status: task.status,
+        } as Task,
+    };
 });

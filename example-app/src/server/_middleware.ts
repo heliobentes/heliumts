@@ -1,5 +1,7 @@
 import { middleware } from "helium/server";
 
+import { connectToDatabase } from "./db/connection";
+
 /**
  * Example middleware that runs on every method call and HTTP request.
  *
@@ -9,6 +11,7 @@ import { middleware } from "helium/server";
  * - Can block requests by not calling next()
  */
 export default middleware(async (context, next) => {
+    await connectToDatabase();
     const timestamp = new Date().toISOString();
 
     if (context.type === "method") {
