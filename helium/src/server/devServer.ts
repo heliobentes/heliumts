@@ -5,6 +5,7 @@ import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
 
 import { injectEnvToProcess, loadEnvFiles } from "../utils/envLoader.js";
+import { extractClientIP } from "../utils/ipExtractor.js";
 import { log } from "../utils/logger.js";
 import type { HeliumConfig } from "./config.js";
 import { getSecurityConfig } from "./config.js";
@@ -39,6 +40,7 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
 
     const registry = new RpcRegistry();
     const httpRouter = new HTTPRouter();
+    httpRouter.setTrustProxyDepth(securityConfig.trustProxyDepth);
     loadHandlers(registry, httpRouter);
     registry.setRateLimiter(rateLimiter);
     currentRegistry = registry;
@@ -49,8 +51,13 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
         wss = new WebSocketServer({ noServer: true });
 
         wss.on("connection", (socket: WebSocket, req: http.IncomingMessage) => {
-            // Extract client IP
-            const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.socket.remoteAddress || "unknown";
+            // Extract client IP with proxy configuration
+            const ip = extractClientIP(req, securityConfig.trustProxyDepth);
+
+            // Store connection metadata for RPC context
+            if (currentRegistry) {
+                currentRegistry.setSocketMetadata(socket, ip, req);
+            }
 
             // Track connection and check IP limit
             if (rateLimiter && !rateLimiter.trackConnection(socket, ip)) {
@@ -106,7 +113,7 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
                 }
 
                 // Check IP connection limit before upgrading
-                const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.socket.remoteAddress || "unknown";
+                const ip = extractClientIP(req, securityConfig.trustProxyDepth);
                 if (rateLimiter && securityConfig.maxConnectionsPerIP > 0) {
                     const currentConnections = rateLimiter.getIPConnectionCount(ip);
                     if (currentConnections >= securityConfig.maxConnectionsPerIP) {

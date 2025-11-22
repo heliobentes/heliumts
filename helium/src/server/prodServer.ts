@@ -5,6 +5,7 @@ import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
 
 import { injectEnvToProcess, loadEnvFiles } from "../utils/envLoader.js";
+import { extractClientIP } from "../utils/ipExtractor.js";
 import { log } from "../utils/logger.js";
 import type { HeliumConfig } from "./config.js";
 import { getSecurityConfig } from "./config.js";
@@ -43,6 +44,7 @@ export function startProdServer(options: ProdServerOptions) {
 
     const registry = new RpcRegistry();
     const httpRouter = new HTTPRouter();
+    httpRouter.setTrustProxyDepth(securityConfig.trustProxyDepth);
     registerHandlers(registry, httpRouter);
     registry.setRateLimiter(rateLimiter);
 
@@ -117,8 +119,11 @@ export function startProdServer(options: ProdServerOptions) {
     const wss = new WebSocketServer({ noServer: true });
 
     wss.on("connection", (socket: WebSocket, req: http.IncomingMessage) => {
-        // Extract client IP
-        const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.socket.remoteAddress || "unknown";
+        // Extract client IP with proxy configuration
+        const ip = extractClientIP(req, securityConfig.trustProxyDepth);
+
+        // Store connection metadata for RPC context
+        registry.setSocketMetadata(socket, ip, req);
 
         // Track connection and check IP limit
         if (!rateLimiter.trackConnection(socket, ip)) {
@@ -172,7 +177,7 @@ export function startProdServer(options: ProdServerOptions) {
             }
 
             // Check IP connection limit before upgrading
-            const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.socket.remoteAddress || "unknown";
+            const ip = extractClientIP(req, securityConfig.trustProxyDepth);
             if (securityConfig.maxConnectionsPerIP > 0) {
                 const currentConnections = rateLimiter.getIPConnectionCount(ip);
                 if (currentConnections >= securityConfig.maxConnectionsPerIP) {

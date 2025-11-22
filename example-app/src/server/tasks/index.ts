@@ -1,6 +1,6 @@
 import { defineMethod } from "helium/server";
 
-import { nextTaskId, tasksStore } from "./tasksStore";
+import { nextTaskId, tasksStore } from "./tasks-store";
 
 export const getTasks = defineMethod(async (args?: { status?: string }) => {
     const status = args?.status;

@@ -1,14 +1,22 @@
+import type http from "http";
 import WebSocket from "ws";
 
 import type { RpcRequest, RpcResponse, RpcStats } from "../runtime/protocol.js";
+import type { HeliumContext } from "./context.js";
 import type { HeliumMethodDef } from "./defineMethod.js";
 import type { HeliumMiddleware } from "./middleware.js";
 import type { RateLimiter } from "./rateLimiter.js";
+
+interface SocketMetadata {
+    ip: string;
+    req: http.IncomingMessage;
+}
 
 export class RpcRegistry {
     private methods = new Map<string, HeliumMethodDef<any, any>>();
     private middleware: HeliumMiddleware | null = null;
     private rateLimiter: RateLimiter | null = null;
+    private socketMetadata = new WeakMap<WebSocket, SocketMetadata>();
 
     register(id: string, def: HeliumMethodDef<any, any>) {
         def.__id = id;
@@ -21,6 +29,14 @@ export class RpcRegistry {
 
     setRateLimiter(rateLimiter: RateLimiter) {
         this.rateLimiter = rateLimiter;
+    }
+
+    /**
+     * Store metadata about a WebSocket connection.
+     * Should be called when a new connection is established.
+     */
+    setSocketMetadata(socket: WebSocket, ip: string, req: http.IncomingMessage) {
+        this.socketMetadata.set(socket, { ip, req });
     }
 
     private getStats(socket: WebSocket): RpcStats {
@@ -63,7 +79,17 @@ export class RpcRegistry {
         }
 
         try {
-            const ctx = {}; // TODO: add real context
+            // Build context with request metadata
+            const metadata = this.socketMetadata.get(socket);
+            const ctx: HeliumContext = {
+                req: {
+                    ip: metadata?.ip || "unknown",
+                    headers: metadata?.req.headers || {},
+                    url: metadata?.req.url,
+                    method: metadata?.req.method,
+                    raw: metadata?.req as http.IncomingMessage,
+                },
+            };
             let result: any;
 
             // Execute middleware if present

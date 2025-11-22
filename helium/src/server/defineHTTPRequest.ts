@@ -1,3 +1,5 @@
+import type { HeliumContext } from "./context.js";
+
 export type HTTPMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "ALL";
 
 export interface HTTPRequest {
@@ -13,7 +15,7 @@ export interface HTTPRequest {
     toWebRequest: () => Promise<Request>;
 }
 
-export type HTTPHandler<TResult = unknown> = (req: HTTPRequest, ctx: unknown) => Promise<TResult> | TResult;
+export type HTTPHandler<TResult = unknown> = (req: HTTPRequest, ctx: HeliumContext) => Promise<TResult> | TResult;
 
 export type HeliumHTTPDef<TMethod extends HTTPMethod = HTTPMethod, TPath extends string = string> = {
     __kind: "http";

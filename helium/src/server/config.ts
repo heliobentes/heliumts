@@ -28,6 +28,28 @@ export interface HeliumSecurityConfig {
      * @default 10000 (10 seconds)
      */
     tokenValidityMs?: number;
+
+    /**
+     * Number of proxy levels to trust when extracting client IP addresses.
+     * This is crucial for deployments behind proxies (Vercel, Cloudflare, AWS ALB, etc.)
+     *
+     * - 0: Don't trust any proxies, use direct connection IP (default for security)
+     * - 1: Trust 1 proxy level (recommended for Vercel, Netlify, Railway)
+     * - 2+: Trust multiple proxy levels (for complex setups like Cloudflare -> Load Balancer)
+     *
+     * Common configurations:
+     * - Local development: 0
+     * - Vercel/Netlify/Railway: 1
+     * - Cloudflare -> Your server: 1 or 2
+     * - AWS ALB -> EC2: 1
+     * - Nginx -> Node: 1
+     *
+     * When behind proxies, the X-Forwarded-For header contains a chain of IPs.
+     * This setting helps extract the real client IP correctly.
+     *
+     * @default 0
+     */
+    trustProxyDepth?: number;
 }
 
 export interface HeliumConfig {
@@ -42,6 +64,7 @@ const DEFAULT_CONFIG: Required<HeliumSecurityConfig> = {
     maxMessagesPerWindow: 100,
     rateLimitWindowMs: 60000,
     tokenValidityMs: 30000,
+    trustProxyDepth: 0,
 };
 
 let cachedConfig: HeliumConfig | null = null;
@@ -78,6 +101,7 @@ export function getSecurityConfig(config: HeliumConfig = {}): Required<HeliumSec
         maxMessagesPerWindow: config.security?.maxMessagesPerWindow ?? DEFAULT_CONFIG.maxMessagesPerWindow,
         rateLimitWindowMs: config.security?.rateLimitWindowMs ?? DEFAULT_CONFIG.rateLimitWindowMs,
         tokenValidityMs: config.security?.tokenValidityMs ?? DEFAULT_CONFIG.tokenValidityMs,
+        trustProxyDepth: config.security?.trustProxyDepth ?? DEFAULT_CONFIG.trustProxyDepth,
     };
 }
 

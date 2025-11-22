@@ -1,8 +1,10 @@
 import { useFetch } from "helium/client";
-import { getServerEnv } from "helium/server";
+import { getIP, getServerEnv } from "helium/server";
 
 export default function HomePage() {
     const { data: serverEnv, isLoading } = useFetch(getServerEnv);
+
+    const { data: clientIP } = useFetch(getIP);
 
     return (
         <div>
@@ -18,6 +20,10 @@ export default function HomePage() {
 
                 <li>Simple mental model: write a server function → import on client → call it</li>
             </ul>
+            <div className="mt-8 p-4 bg-yellow-50 rounded-lg">
+                <h2 className="text-xl font-semibold mb-2">Detected Client IP</h2>
+                <p>{clientIP?.ip || "Loading..."}</p>
+            </div>
 
             {/* Example of using environment variables in React */}
             <div className="mt-8 p-4 bg-blue-50 rounded-lg">

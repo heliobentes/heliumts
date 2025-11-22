@@ -1,7 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "http";
 import { parse as parseUrl } from "url";
 
+import { extractClientIP } from "../utils/ipExtractor.js";
 import { log } from "../utils/logger.js";
+import type { HeliumContext } from "./context.js";
 import type { HeliumHTTPDef, HTTPRequest } from "./defineHTTPRequest.js";
 import type { HeliumMiddleware } from "./middleware.js";
 
@@ -18,6 +20,11 @@ export class HTTPRouter {
         handler: HeliumHTTPDef;
     }> = [];
     private middleware: HeliumMiddleware | null = null;
+    private trustProxyDepth: number = 0;
+
+    setTrustProxyDepth(depth: number) {
+        this.trustProxyDepth = depth;
+    }
 
     registerRoutes(routes: HTTPRoute[]) {
         for (const route of routes) {
@@ -69,7 +76,18 @@ export class HTTPRouter {
                 const httpRequest = await createHTTPRequest(req, query, params);
 
                 let result: any;
-                const httpCtx = (ctx as Record<string, unknown>) || {};
+                // Build context with request metadata
+                const ip = extractClientIP(req, this.trustProxyDepth);
+                const httpCtx: HeliumContext = {
+                    req: {
+                        ip,
+                        headers: req.headers,
+                        url: req.url,
+                        method: req.method,
+                        raw: req,
+                    },
+                    ...(ctx as Record<string, unknown>),
+                };
 
                 // Execute middleware if present
                 if (this.middleware) {
