@@ -60,10 +60,17 @@ export function startProdServer(options: ProdServerOptions) {
         const url = req.url || "/";
         let filePath = path.join(staticDir, url === "/" ? "index.html" : url);
 
-        // If file doesn't exist and it's not an API route, serve index.html (SPA fallback)
-        if (!fs.existsSync(filePath)) {
-            // Only fallback to index.html for non-API routes
-            if (!url.startsWith("/api") && !url.startsWith("/webhooks") && !url.startsWith("/auth")) {
+        // If file doesn't exist, try SSG HTML file (e.g., /contact -> contact.html)
+        if (!fs.existsSync(filePath) && !url.startsWith("/api") && !url.startsWith("/webhooks") && !url.startsWith("/auth")) {
+            // Remove leading slash and query params
+            const cleanPath = url.split("?")[0].replace(/^\//, "");
+            
+            // Try SSG HTML file
+            const ssgPath = path.join(staticDir, `${cleanPath}.html`);
+            if (fs.existsSync(ssgPath)) {
+                filePath = ssgPath;
+            } else {
+                // Fall back to index.html for SPA routing
                 filePath = path.join(staticDir, "index.html");
             }
         }
@@ -102,8 +109,15 @@ export function startProdServer(options: ProdServerOptions) {
             if (contentType === "text/html") {
                 const token = generateConnectionToken();
                 const html = content.toString("utf-8");
-                // Inject before </head> or <body>
-                const injected = html.replace("</head>", `<script>window.HELIUM_CONNECTION_TOKEN = "${token}";</script></head>`);
+                // Replace build-time placeholder or inject before </head>
+                let injected: string;
+                if (html.includes("build-time-placeholder")) {
+                    // Replace the placeholder (for SSG pages)
+                    injected = html.replace('"build-time-placeholder"', `"${token}"`);
+                } else {
+                    // Inject before </head> (for regular SPA)
+                    injected = html.replace("</head>", `<script>window.HELIUM_CONNECTION_TOKEN = "${token}";</script></head>`);
+                }
                 content = Buffer.from(injected);
             }
 

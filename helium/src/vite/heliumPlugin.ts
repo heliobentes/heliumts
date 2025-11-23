@@ -36,7 +36,7 @@ export default function helium(): Plugin {
         },
         transformIndexHtml: {
             order: "pre",
-            handler(html) {
+            handler(html, ctx) {
                 // Check if HTML already has a script tag for entry
                 if (html.includes("src/main.tsx") || html.includes("src/main.ts")) {
                     return html; // User has their own entry, don't modify
@@ -56,8 +56,9 @@ export default function helium(): Plugin {
                 const entryPath = path.join(heliumDir, "entry.tsx");
                 fs.writeFileSync(entryPath, generateEntryModule());
 
-                // Generate connection token
-                const token = generateConnectionToken();
+                // Generate connection token (only in dev mode, not during build)
+                const isDev = ctx.server !== undefined;
+                const token = isDev ? generateConnectionToken() : "build-time-placeholder";
 
                 // Return with tags to inject the entry
                 return [
@@ -134,6 +135,18 @@ export default function helium(): Plugin {
                 return generateEntryModule();
             }
         },
+        transform(code, id) {
+            // Strip "use ssg"; directive from page files to avoid Rollup warnings
+            if (id.includes("/pages/") && /\.(tsx?|jsx?)$/.test(id)) {
+                if (/^\s*["']use ssg["']\s*;/m.test(code)) {
+                    return {
+                        code: code.replace(/^\s*["']use ssg["']\s*;?\s*/m, ""),
+                        map: null,
+                    };
+                }
+            }
+            return null;
+        },
         buildStart() {
             const { methods } = scanServerExports(root);
             const dts = generateTypeDefinitions(methods, root);
@@ -143,6 +156,10 @@ export default function helium(): Plugin {
                 fs.mkdirSync(path.join(root, "src"));
             }
             fs.writeFileSync(dtsPath, dts);
+        },
+        async closeBundle() {
+            // SSG will be handled by the CLI after the build completes
+            // This is just a placeholder to keep the hook structure
         },
         configureServer(server) {
             const regenerateTypes = () => {

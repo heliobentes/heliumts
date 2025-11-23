@@ -34,13 +34,15 @@ export default function RootLayout({ children }: LayoutProps) {
         await signOut();
     };
 
+    const openPages = ["/login", "/about/us", "/contact"];
+
     useEffect(() => {
-        if (router.path !== "/login" && !session && !isPending) {
+        if (!openPages.includes(router.path) && !session && !isPending) {
             router.push("/login");
         }
     }, [router, session, isPending]);
 
-    if (router.path !== "/login" && !session && !isPending) {
+    if (!openPages.includes(router.path) && !session && !isPending) {
         return null; // or a loading indicator
     }
 

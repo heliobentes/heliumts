@@ -80,7 +80,7 @@ type RouterContext = {
     on: (event: RouterEvent, listener: EventListener) => () => void;
 };
 
-const RouterContext = React.createContext<RouterContext | null>(null);
+export const RouterContext = React.createContext<RouterContext | null>(null);
 
 /**
  * Access router context inside a component tree managed by <AppRouter />.
