@@ -78,6 +78,7 @@ type RouterContext = {
     push: (href: string) => void;
     replace: (href: string) => void;
     on: (event: RouterEvent, listener: EventListener) => () => void;
+    status: 200 | 404;
 };
 
 export const RouterContext = React.createContext<RouterContext | null>(null);
@@ -207,6 +208,7 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
         push: (href) => navigate(href),
         replace: (href) => navigate(href, true),
         on: (event, listener) => routerEventEmitter.on(event, listener),
+        status: match ? 200 : 404,
     };
 
     if (!match) {

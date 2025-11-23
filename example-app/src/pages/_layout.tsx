@@ -37,12 +37,12 @@ export default function RootLayout({ children }: LayoutProps) {
     const openPages = ["/login", "/about/us", "/contact"];
 
     useEffect(() => {
-        if (!openPages.includes(router.path) && !session && !isPending) {
+        if (!openPages.includes(router.path) && !session && !isPending && router.status !== 404) {
             router.push("/login");
         }
     }, [router, session, isPending]);
 
-    if (!openPages.includes(router.path) && !session && !isPending) {
+    if (!openPages.includes(router.path) && !session && !isPending && router.status !== 404) {
         return null; // or a loading indicator
     }
 
