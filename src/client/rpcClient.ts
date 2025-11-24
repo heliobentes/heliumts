@@ -17,6 +17,7 @@ declare global {
 
 let socket: WebSocket | null = null;
 let connectionPromise: Promise<WebSocket> | null = null;
+let currentToken: string | undefined = undefined;
 
 const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
 
@@ -24,11 +25,32 @@ function uuid() {
     return Math.random().toString(36).slice(2);
 }
 
-function createSocket(): WebSocket {
+async function fetchFreshToken(): Promise<string | undefined> {
+    try {
+        const response = await fetch("/__helium__/refresh-token");
+        if (!response.ok) {
+            console.warn("Failed to fetch fresh token:", response.status);
+            return undefined;
+        }
+        const data = await response.json();
+        return data.token;
+    } catch (error) {
+        console.warn("Error fetching fresh token:", error);
+        return undefined;
+    }
+}
+
+async function createSocket(): Promise<WebSocket> {
+    // Fetch a fresh token before creating the WebSocket connection
+    const freshToken = await fetchFreshToken();
+    const token = freshToken || window.HELIUM_CONNECTION_TOKEN;
+    
+    // Update current token
+    currentToken = token;
+
     // Use the same protocol, hostname and port as the current page
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const host = window.location.host; // includes hostname and port
-    const token = window.HELIUM_CONNECTION_TOKEN;
     const url = `${protocol}//${host}/rpc${token ? `?token=${token}` : ""}`;
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
@@ -80,10 +102,10 @@ function createSocket(): WebSocket {
     return ws;
 }
 
-function ensureSocketReady(): Promise<WebSocket> {
+async function ensureSocketReady(): Promise<WebSocket> {
     // If we have an open socket, return it immediately
     if (socket && socket.readyState === WebSocket.OPEN) {
-        return Promise.resolve(socket);
+        return socket;
     }
 
     // If we have a connection in progress, reuse that promise
@@ -125,35 +147,37 @@ function ensureSocketReady(): Promise<WebSocket> {
     }
 
     // Create a new socket and connection promise
-    socket = createSocket();
-    connectionPromise = new Promise((resolve, reject) => {
-        const cleanup = () => {
-            socket!.removeEventListener("open", handleOpen);
-            socket!.removeEventListener("error", handleError);
-            socket!.removeEventListener("close", handleClose);
-        };
-        const handleOpen = () => {
-            cleanup();
-            connectionPromise = null;
-            resolve(socket!);
-        };
-        const handleError = () => {
-            cleanup();
-            socket = null;
-            connectionPromise = null;
-            reject(new Error("WebSocket connection failed"));
-        };
-        const handleClose = () => {
-            cleanup();
-            socket = null;
-            connectionPromise = null;
-            reject(new Error("WebSocket closed before opening"));
-        };
+    connectionPromise = (async () => {
+        socket = await createSocket();
+        return new Promise<WebSocket>((resolve, reject) => {
+            const cleanup = () => {
+                socket!.removeEventListener("open", handleOpen);
+                socket!.removeEventListener("error", handleError);
+                socket!.removeEventListener("close", handleClose);
+            };
+            const handleOpen = () => {
+                cleanup();
+                connectionPromise = null;
+                resolve(socket!);
+            };
+            const handleError = () => {
+                cleanup();
+                socket = null;
+                connectionPromise = null;
+                reject(new Error("WebSocket connection failed"));
+            };
+            const handleClose = () => {
+                cleanup();
+                socket = null;
+                connectionPromise = null;
+                reject(new Error("WebSocket closed before opening"));
+            };
 
-        socket!.addEventListener("open", handleOpen);
-        socket!.addEventListener("error", handleError);
-        socket!.addEventListener("close", handleClose);
-    });
+            socket!.addEventListener("open", handleOpen);
+            socket!.addEventListener("error", handleError);
+            socket!.addEventListener("close", handleClose);
+        });
+    })();
 
     return connectionPromise;
 }

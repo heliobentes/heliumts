@@ -50,6 +50,14 @@ export function startProdServer(options: ProdServerOptions) {
 
     // Create HTTP server
     const server = http.createServer(async (req, res) => {
+        // Handle token refresh endpoint
+        if (req.url === "/__helium__/refresh-token") {
+            const token = generateConnectionToken();
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ token }));
+            return;
+        }
+
         // Try HTTP handlers first (webhooks, auth, etc.)
         const handled = await httpRouter.handleRequest(req, res);
         if (handled) {

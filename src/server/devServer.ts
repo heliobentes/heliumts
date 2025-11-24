@@ -170,6 +170,15 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
     httpServer.removeAllListeners("request");
 
     httpServer.on("request", async (req: any, res: any) => {
+        // Handle token refresh endpoint
+        if (req.url === "/__helium__/refresh-token") {
+            const { generateConnectionToken } = await import("./security.js");
+            const token = generateConnectionToken();
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ token }));
+            return;
+        }
+
         // Try HTTP handlers first
         if (currentHttpRouter) {
             const handled = await currentHttpRouter.handleRequest(req, res);
