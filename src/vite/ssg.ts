@@ -16,6 +16,53 @@ interface SSGPage {
     filePath: string;
     urlPath: string;
     relativePath: string;
+    warnings: string[];
+}
+
+interface SSGValidation {
+    hasHooks: boolean;
+    hasClientImports: boolean;
+    hasServerImports: boolean;
+    warnings: string[];
+}
+
+/**
+ * Validate if a page file can be truly statically generated
+ * Checks for React hooks and helium imports that would prevent static generation
+ */
+function validateSSGPage(filePath: string): SSGValidation {
+    const content = fs.readFileSync(filePath, "utf-8");
+    const warnings: string[] = [];
+
+    // Check for React hooks (common ones)
+    const hookPatterns = [
+        /\buse(State|Effect|Context|Reducer|Callback|Memo|Ref|ImperativeHandle|LayoutEffect|DebugValue)\b/,
+        /\buse[A-Z]\w+\b/, // Custom hooks (useXxx)
+    ];
+
+    const hasHooks = hookPatterns.some((pattern) => pattern.test(content));
+    if (hasHooks) {
+        warnings.push("Page uses React hooks which may cause hydration issues");
+    }
+
+    // Check for helium/client imports
+    const hasClientImports = /from\s+['"]helium\/client['"]/.test(content) || /import\s+['"]helium\/client['"]/.test(content);
+    if (hasClientImports) {
+        warnings.push("Page imports from 'helium/client' which requires client-side execution");
+    }
+
+    // Check for helium/server imports
+    const hasServerImports = /from\s+['"]helium\/server['"]/.test(content) || /import\s+['"]helium\/server['"]/.test(content);
+    if (hasServerImports) {
+        warnings.push("Page imports from 'helium/server' which may cause runtime issues");
+    }
+
+    return {
+        hasHooks,
+        hasClientImports,
+        hasServerImports,
+        warnings,
+    };
 }
 
 /**
@@ -47,10 +94,28 @@ export function scanSSGPages(root: string): SSGPage[] {
                     const relativePath = path.relative(path.join(root, "src"), fullPath);
                     const urlPath = filePathToUrlPath(relativePath);
 
+                    // Validate the page for SSG compatibility
+                    const validation = validateSSGPage(fullPath);
+                    const warnings = [...validation.warnings];
+
+                    // Also check all layouts for this page
+                    const layoutPaths = findLayoutPathsForPage(fullPath, root);
+                    for (const layoutPath of layoutPaths) {
+                        const layoutValidation = validateSSGPage(layoutPath);
+                        if (layoutValidation.warnings.length > 0) {
+                            const layoutRelative = path.relative(path.join(root, "src"), layoutPath);
+                            warnings.push(`Layout ${layoutRelative} has issues:`);
+                            for (const warning of layoutValidation.warnings) {
+                                warnings.push(`  └─ ${warning}`);
+                            }
+                        }
+                    }
+
                     ssgPages.push({
                         filePath: fullPath,
                         urlPath,
                         relativePath,
+                        warnings,
                     });
                 }
             }
@@ -112,10 +177,9 @@ function urlPathToOutputPath(urlPath: string): string {
 }
 
 /**
- * Find all layout components for a given page path (from root to leaf)
- * Note: Layouts cannot use routing features during SSG since they're pre-rendered
+ * Find all layout file paths for a given page path (from root to leaf)
  */
-async function findLayoutsForPage(pagePath: string, root: string, viteServer: any): Promise<any[]> {
+function findLayoutPathsForPage(pagePath: string, root: string): string[] {
     const pagesDir = path.join(root, "src", "pages");
     const relativePath = path.relative(pagesDir, pagePath);
     const pathParts = path
@@ -123,20 +187,13 @@ async function findLayoutsForPage(pagePath: string, root: string, viteServer: an
         .split(path.sep)
         .filter((p) => p !== ".");
 
-    const layouts = [];
+    const layoutPaths: string[] = [];
 
     // Check for _layout.tsx from root to leaf (maintains nesting order)
     // Start with root layout
     const rootLayoutPath = path.join(pagesDir, "_layout.tsx");
     if (fs.existsSync(rootLayoutPath)) {
-        try {
-            const layoutModule = await viteServer.ssrLoadModule(rootLayoutPath);
-            if (layoutModule.default) {
-                layouts.push(layoutModule.default);
-            }
-        } catch (error) {
-            log("warn", `Could not load root layout: ${error instanceof Error ? error.message : String(error)}`);
-        }
+        layoutPaths.push(rootLayoutPath);
     }
 
     // Then check nested layouts
@@ -145,14 +202,29 @@ async function findLayoutsForPage(pagePath: string, root: string, viteServer: an
         const layoutPath = path.join(dirPath, "_layout.tsx");
 
         if (fs.existsSync(layoutPath)) {
-            try {
-                const layoutModule = await viteServer.ssrLoadModule(layoutPath);
-                if (layoutModule.default) {
-                    layouts.push(layoutModule.default);
-                }
-            } catch (error) {
-                log("warn", `Could not load layout at ${layoutPath}: ${error instanceof Error ? error.message : String(error)}`);
+            layoutPaths.push(layoutPath);
+        }
+    }
+
+    return layoutPaths;
+}
+
+/**
+ * Find all layout components for a given page path (from root to leaf)
+ * Note: Layouts cannot use routing features during SSG since they're pre-rendered
+ */
+async function findLayoutsForPage(pagePath: string, root: string, viteServer: any): Promise<any[]> {
+    const layoutPaths = findLayoutPathsForPage(pagePath, root);
+    const layouts = [];
+
+    for (const layoutPath of layoutPaths) {
+        try {
+            const layoutModule = await viteServer.ssrLoadModule(layoutPath);
+            if (layoutModule.default) {
+                layouts.push(layoutModule.default);
             }
+        } catch (error) {
+            log("warn", `Could not load layout at ${layoutPath}: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
 
@@ -160,64 +232,77 @@ async function findLayoutsForPage(pagePath: string, root: string, viteServer: an
 }
 
 /**
- * Render a page component to static HTML using Vite SSR
+ * Render a page component to static HTML using Vite SSR with timeout
  */
-async function renderPageToHTML(page: SSGPage, root: string, htmlTemplate: string, viteServer: any): Promise<string> {
-    try {
-        // Dynamically import React and ReactDOMServer
-        const React = (await import("react")).default;
-        const ReactDOMServer = await import("react-dom/server");
+async function renderPageToHTML(page: SSGPage, root: string, htmlTemplate: string, viteServer: any, timeout: number = 10000): Promise<string> {
+    // Create timeout promise
+    const timeoutPromise = new Promise<string>((_, reject) => {
+        setTimeout(() => {
+            reject(new Error(`Rendering timeout after ${timeout}ms - page may contain hooks or async operations`));
+        }, timeout);
+    });
 
-        // Load RouterContext from helium/client
-        const { RouterContext } = await viteServer.ssrLoadModule("helium/client");
+    // Create render promise
+    const renderPromise = (async () => {
+        try {
+            // Dynamically import React and ReactDOMServer
+            const React = (await import("react")).default;
+            const ReactDOMServer = await import("react-dom/server");
 
-        // Use Vite's SSR loader to load the page component
-        const pageModule = await viteServer.ssrLoadModule(page.filePath);
-        const PageComponent = pageModule.default;
+            // Use Vite's SSR loader to load the page component
+            const pageModule = await viteServer.ssrLoadModule(page.filePath);
+            const PageComponent = pageModule.default;
 
-        if (!PageComponent) {
-            throw new Error(`No default export found in ${page.relativePath}`);
+            if (!PageComponent) {
+                throw new Error(`No default export found in ${page.relativePath}`);
+            }
+
+            // Find all layouts (from root to leaf)
+            const layouts = await findLayoutsForPage(page.filePath, root, viteServer);
+
+            // Build the component tree: layouts wrap the page, innermost to outermost
+            let element: any = React.createElement(PageComponent);
+
+            // Wrap with layouts from innermost to outermost (reverse order)
+            for (let i = layouts.length - 1; i >= 0; i--) {
+                element = React.createElement(layouts[i], { children: element } as any);
+            }
+
+            // Load RouterContext from our stub
+            const heliumClient = await viteServer.ssrLoadModule("helium/client");
+            const RouterContext = heliumClient.RouterContext;
+
+            // Mock Router Context with the page's URL
+            const routerValue = {
+                path: page.urlPath,
+                params: {},
+                searchParams: new URLSearchParams(),
+                push: () => {},
+                replace: () => {},
+                on: () => () => {},
+                status: 200,
+            };
+
+            // Wrap with RouterContext
+            if (RouterContext) {
+                element = React.createElement(RouterContext.Provider, { value: routerValue }, element);
+            }
+
+            // Render to static HTML
+            const markup = ReactDOMServer.renderToString(element);
+
+            // Inject the markup into the HTML template with the SSG marker
+            const finalHtml = htmlTemplate.replace(/<div\s+id="root"[^>]*>(.*?)<\/div>/s, `<div id="root" data-ssg-page="${page.urlPath}">${markup}</div>`);
+
+            return finalHtml;
+        } catch (error) {
+            log("error", `Failed to render ${page.relativePath}:`, error);
+            throw error; // Don't fallback, let the caller handle the error
         }
+    })();
 
-        // Find all layouts (from root to leaf)
-        const layouts = await findLayoutsForPage(page.filePath, root, viteServer);
-
-        // Build the component tree: layouts wrap the page, innermost to outermost
-        let element: any = React.createElement(PageComponent);
-
-        // Wrap with layouts from innermost to outermost (reverse order)
-        for (let i = layouts.length - 1; i >= 0; i--) {
-            element = React.createElement(layouts[i], { children: element } as any);
-        }
-
-        // Mock Router Context
-        const routerValue = {
-            path: page.urlPath,
-            params: {},
-            searchParams: new URLSearchParams(),
-            push: () => {},
-            replace: () => {},
-            on: () => () => {},
-            status: 200,
-        };
-
-        // Wrap with RouterContext
-        if (RouterContext) {
-            element = React.createElement(RouterContext.Provider, { value: routerValue }, element);
-        }
-
-        // Render to static HTML
-        const markup = ReactDOMServer.renderToString(element);
-
-        // Inject the markup into the HTML template with the SSG marker
-        const finalHtml = htmlTemplate.replace(/<div\s+id="root">(.*?)<\/div>/s, `<div id="root" data-ssg-page="${page.urlPath}">${markup}</div>`);
-
-        return finalHtml;
-    } catch (error) {
-        log("error", `Failed to render ${page.relativePath}:`, error);
-        // Fallback to empty div with marker if rendering fails
-        return htmlTemplate.replace(/<div\s+id="root">(.*?)<\/div>/s, `<div id="root" data-ssg-page="${page.urlPath}">$1</div>`);
-    }
+    // Race between timeout and render
+    return Promise.race([renderPromise, timeoutPromise]);
 }
 
 /**
@@ -242,17 +327,106 @@ export async function generateStaticPages(context: any, root: string, htmlTempla
     // Filter out dynamic routes
     const staticPages = ssgPages.filter((p) => !p.relativePath.includes("["));
 
+    // Display warnings for pages that may not be truly static
+    const pagesWithWarnings = staticPages.filter((p) => p.warnings.length > 0);
+    if (pagesWithWarnings.length > 0) {
+        log("warn", "");
+        log("warn", "⚠️  SSG Warning: The following pages may not be fully static:");
+        for (const page of pagesWithWarnings) {
+            log("warn", `  ${page.relativePath}:`);
+            for (const warning of page.warnings) {
+                log("warn", `    - ${warning}`);
+            }
+        }
+        log("warn", "  These pages will be pre-rendered but may require client-side hydration.");
+        log("warn", "");
+    }
+
     // Precompute RPC client stubs for SSG (mirrors helium Vite plugin)
     const { methods } = scanServerExports(root);
-    const clientModuleCode = `// Auto-generated SSG RPC stub\n${generateClientModule(methods)}\n`;
+    const serverStubCode = `// Auto-generated SSG RPC stub\n${generateClientModule(methods)}\n`;
 
-    // Write stub file to node_modules/.helium
+    // Create a stub for helium/client that provides mock Router and hooks
+    const clientStubCode = `
+// Auto-generated SSG client stub
+import React from 'react';
+
+// Mock RouterContext
+export const RouterContext = React.createContext({
+    path: '/',
+    params: {},
+    searchParams: new URLSearchParams(),
+    push: () => {},
+    replace: () => {},
+    on: () => () => {},
+    status: 200,
+});
+
+// Mock useRouter hook
+export function useRouter() {
+    const ctx = React.useContext(RouterContext);
+    if (!ctx) {
+        console.warn('useRouter called outside RouterContext during SSG');
+        return {
+            path: '/',
+            params: {},
+            searchParams: new URLSearchParams(),
+            push: () => {},
+            replace: () => {},
+            on: () => () => {},
+            status: 200,
+        };
+    }
+    return ctx;
+}
+
+// Mock AppRouter component (alias for Router)
+export function AppRouter({ children }) {
+    return React.createElement(React.Fragment, null, children);
+}
+
+// Mock Router component
+export function Router({ children }) {
+    return React.createElement(React.Fragment, null, children);
+}
+
+// Mock Link component
+export function Link({ href, children, ...props }) {
+    return React.createElement('a', { href, ...props }, children);
+}
+
+// Mock useCall hook
+export function useCall(serverFn) {
+    return async (...args) => {
+        console.warn('useCall called during SSG - this will not execute');
+        return null;
+    };
+}
+
+// Mock useFetch hook
+export function useFetch(serverFn, ...args) {
+    console.warn('useFetch called during SSG - returning null');
+    return { data: null, loading: false, error: null, refetch: async () => {} };
+}
+
+// Re-export cache (mock)
+export const cache = {
+    get: () => null,
+    set: () => {},
+    delete: () => {},
+    clear: () => {},
+};
+`;
+
+    // Write stub files to node_modules/.helium
     const heliumInternalDir = path.join(root, "node_modules", ".helium");
     if (!fs.existsSync(heliumInternalDir)) {
         fs.mkdirSync(heliumInternalDir, { recursive: true });
     }
-    const ssgStubPath = path.join(heliumInternalDir, "ssg-server-stub.mjs");
-    fs.writeFileSync(ssgStubPath, clientModuleCode, "utf-8");
+    const ssgServerStubPath = path.join(heliumInternalDir, "ssg-server-stub.mjs");
+    const ssgClientStubPath = path.join(heliumInternalDir, "ssg-client-stub.mjs");
+    fs.writeFileSync(ssgServerStubPath, serverStubCode, "utf-8");
+    fs.writeFileSync(ssgClientStubPath, clientStubCode, "utf-8");
 
     // Create a temporary Vite server for SSR rendering
     const { createServer } = await import("vite");
@@ -266,7 +440,8 @@ export async function generateStaticPages(context: any, root: string, htmlTempla
         plugins: [heliumPlugin()],
         resolve: {
             alias: {
-                "helium/server": ssgStubPath,
+                "helium/server": ssgServerStubPath,
+                "helium/client": ssgClientStubPath,
             },
         },
         ssr: {
@@ -277,10 +452,13 @@ export async function generateStaticPages(context: any, root: string, htmlTempla
     try {
         // Generate HTML for each static page
         const zlib = await import("zlib");
+        let successCount = 0;
+        let failureCount = 0;
+
         for (const page of staticPages) {
             try {
-                // Render the page component to static HTML using Vite SSR
-                const html = await renderPageToHTML(page, root, htmlTemplate, viteServer);
+                // Render the page component to static HTML using Vite SSR with 10s timeout
+                const html = await renderPageToHTML(page, root, htmlTemplate, viteServer, 10000);
                 const outputPath = urlPathToOutputPath(page.urlPath);
                 const fullOutputPath = path.join(distDir, outputPath);
 
@@ -302,9 +480,35 @@ export async function generateStaticPages(context: any, root: string, htmlTempla
                 const gzipSizeKB = (gzipped.length / 1024).toFixed(2);
 
                 log("info", `  ${outputPath.padEnd(35)} ${sizeKB.padStart(8)} kB │ gzip: ${gzipSizeKB.padStart(7)} kB`);
+                successCount++;
             } catch (error) {
-                log("error", `Failed to generate ${page.urlPath}:`, error);
+                const errorMsg = error instanceof Error ? error.message : String(error);
+                if (errorMsg.includes("timeout")) {
+                    log("error", `  ✗ ${page.relativePath} - ${errorMsg}`);
+                } else {
+                    log("error", `  ✗ ${page.relativePath} - Failed to generate:`, error);
+                }
+
+                // Write a fallback HTML file with empty root div (client will hydrate)
+                const outputPath = urlPathToOutputPath(page.urlPath);
+                const fullOutputPath = path.join(distDir, outputPath);
+                const outputDir = path.dirname(fullOutputPath);
+
+                if (!fs.existsSync(outputDir)) {
+                    fs.mkdirSync(outputDir, { recursive: true });
+                }
+
+                const fallbackHtml = htmlTemplate.replace(/<div\s+id="root"[^>]*>.*?<\/div>/s, `<div id="root" data-ssg-failed="${page.urlPath}"></div>`);
+                fs.writeFileSync(fullOutputPath, fallbackHtml, "utf-8");
+
+                failureCount++;
             }
+        }
+
+        // Summary
+        if (failureCount > 0) {
+            log("warn", "");
+            log("warn", `SSG completed with ${successCount} success(es) and ${failureCount} failure(s).`);
         }
     } finally {
         // Always close the Vite server, even if generation fails

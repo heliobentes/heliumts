@@ -71,7 +71,24 @@ export function startProdServer(options: ProdServerOptions) {
             filePath = path.join(staticDir, "index.html");
             is404 = true;
         } else {
-            filePath = path.join(staticDir, url === "/" ? "index.html" : url);
+            // Clean URL (remove query params and trailing slash)
+            const cleanUrl = url.split("?")[0].replace(/\/$/, "") || "/";
+
+            // Try different file paths for SSG support
+            if (cleanUrl === "/") {
+                filePath = path.join(staticDir, "index.html");
+            } else {
+                // First, try the exact path (for assets like /assets/main.js)
+                filePath = path.join(staticDir, cleanUrl);
+
+                // If it doesn't exist and has no extension, try appending .html (for SSG pages)
+                if (!fs.existsSync(filePath) && !path.extname(cleanUrl)) {
+                    const htmlPath = path.join(staticDir, cleanUrl + ".html");
+                    if (fs.existsSync(htmlPath)) {
+                        filePath = htmlPath;
+                    }
+                }
+            }
 
             // If file doesn't exist or is a directory, fall back to index.html for SPA routing
             const isFileOrExists = fs.existsSync(filePath) && fs.statSync(filePath).isFile();
@@ -86,16 +103,7 @@ export function startProdServer(options: ProdServerOptions) {
         if (!fs.existsSync(filePath)) {
             // This should rarely happen - only if index.html itself is missing
             res.writeHead(404, { "Content-Type": "text/html" });
-            res.end(`
-<!DOCTYPE html>
-<html>
-<head><title>404 - Not Found</title></head>
-<body>
-    <h1>404 - Not Found</h1>
-    <p>The application files could not be found. Please rebuild your application.</p>
-</body>
-</html>
-            `);
+            res.end("Not found");
             return;
         }
 

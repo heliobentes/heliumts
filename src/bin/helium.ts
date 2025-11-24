@@ -8,6 +8,7 @@ import { build as viteBuild } from "vite";
 
 import { log } from "../utils/logger.js";
 import { scanServerExports } from "../vite/scanner.js";
+import { generateStaticPages } from "../vite/ssg.js";
 import { generateServerManifest } from "../vite/virtualServerModule.js";
 
 const cli = cac("helium");
@@ -55,6 +56,33 @@ cli.command("build", "Build for production").action(async () => {
         }
 
         log("info", "Client build complete.");
+
+        // Generate static pages for SSG
+        log("info", "--------------------------------");
+        try {
+            // Read the generated index.html as a template for SSG
+            const distDir = path.join(root, "dist");
+            const htmlPath = path.join(distDir, "index.html");
+
+            if (fs.existsSync(htmlPath)) {
+                let htmlTemplate = fs.readFileSync(htmlPath, "utf-8");
+
+                // Clean up the template for SSG:
+                // 1. Remove the build-time HELIUM_CONNECTION_TOKEN (SSG pages don't need it)
+                htmlTemplate = htmlTemplate.replace(/<script>window\.HELIUM_CONNECTION_TOKEN = "build-time-placeholder";<\/script>/g, "");
+
+                // 2. Clear any existing content in root div from SPA build
+                htmlTemplate = htmlTemplate.replace(/<div\s+id="root"[^>]*>.*?<\/div>/s, '<div id="root"></div>');
+
+                await generateStaticPages(null, root, htmlTemplate, distDir);
+            } else {
+                log("warn", "index.html not found in dist, skipping SSG");
+            }
+        } catch (e) {
+            log("warn", "SSG generation failed:", e);
+            // Don't fail the build if SSG fails
+        }
+        log("info", "--------------------------------");
     } catch (e) {
         log("error", "Client build failed:", e);
         process.exit(1);
