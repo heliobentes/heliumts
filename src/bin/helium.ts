@@ -67,8 +67,7 @@ cli.command("build", "Build for production").action(async () => {
 
     // Create the main server module that will be imported after env is loaded
     const serverModuleCode = `
-import { startProdServer } from 'helium/prod-server';
-import { loadConfig } from 'helium/server';
+import { startProdServer, loadConfig } from 'helium/server';
 ${manifestCode}
 
 export async function start() {

@@ -176,6 +176,8 @@ let cachedConfig: HeliumConfig | null = null;
  * Load Helium configuration from the project root.
  * Searches for helium.config.ts, helium.config.js, or helium.config.mjs.
  * Results are cached for the lifetime of the process.
+ *
+ * @internal - Used by framework internals only
  */
 export async function loadConfig(root: string = process.cwd()): Promise<HeliumConfig> {
     if (cachedConfig) {
@@ -206,6 +208,8 @@ export async function loadConfig(root: string = process.cwd()): Promise<HeliumCo
 /**
  * Get the proxy trust depth from config.
  * Used for extracting client IPs from X-Forwarded-For headers.
+ *
+ * @internal - Used by framework internals only
  */
 export function getTrustProxyDepth(config: HeliumConfig = {}): number {
     return config.trustProxyDepth ?? 0;
@@ -214,6 +218,8 @@ export function getTrustProxyDepth(config: HeliumConfig = {}): number {
 /**
  * Get RPC security configuration with defaults applied.
  * Returns rate limiting, connection limits, and token settings.
+ *
+ * @internal - Used by framework internals only
  */
 export function getRpcSecurityConfig(config: HeliumConfig = {}): Required<HeliumRpcSecurityConfig> {
     const src = config.rpc?.security;
@@ -228,6 +234,8 @@ export function getRpcSecurityConfig(config: HeliumConfig = {}): Required<Helium
 
 /**
  * Get WebSocket compression configuration with defaults applied.
+ *
+ * @internal - Used by framework internals only
  */
 export function getCompressionConfig(config: HeliumConfig = {}): Required<HeliumCompressionConfig> {
     const src = config.rpc?.compression;
@@ -240,6 +248,8 @@ export function getCompressionConfig(config: HeliumConfig = {}): Required<Helium
 
 /**
  * Get complete RPC configuration including encoding, compression, and security.
+ *
+ * @internal - Used by framework internals only
  */
 export function getRpcConfig(config: HeliumConfig = {}) {
     return {
@@ -252,6 +262,8 @@ export function getRpcConfig(config: HeliumConfig = {}) {
 /**
  * Clear the cached configuration.
  * Useful for testing or when you need to reload config.
+ *
+ * @internal - Used by framework internals only
  */
 export function clearConfigCache() {
     cachedConfig = null;
