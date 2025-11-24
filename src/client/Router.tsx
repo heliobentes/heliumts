@@ -95,6 +95,20 @@ export const RouterContext = React.createContext<RouterContext | null>(null);
 export function useRouter() {
     const ctx = React.useContext(RouterContext);
     if (!ctx) {
+        // During HMR in development, context might be temporarily unavailable
+        // Provide a temporary fallback to prevent white screen of death
+        if (import.meta.env?.DEV) {
+            console.warn("useRouter called before RouterContext is available (HMR reload). Using fallback.");
+            return {
+                path: window.location.pathname,
+                params: {},
+                searchParams: new URLSearchParams(window.location.search),
+                push: (href: string) => window.history.pushState({}, "", href),
+                replace: (href: string) => window.history.replaceState({}, "", href),
+                on: () => () => {},
+                status: 200,
+            };
+        }
         throw new Error("useRouter must be used inside <AppRouter>");
     }
     return ctx;

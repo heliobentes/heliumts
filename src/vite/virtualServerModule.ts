@@ -39,7 +39,7 @@ export function generateTypeDefinitions(methods: MethodExport[], root: string): 
         .map((m, i) => {
             let relPath = path.relative(path.join(root, "src"), m.filePath);
             if (!relPath.startsWith(".")) {
-                relPath = "./" + relPath;
+                relPath = "../" + relPath;
             }
             relPath = relPath.replace(/\.ts$/, "");
             return `import type { ${m.name} as method_${i}_type } from '${relPath}';`;
