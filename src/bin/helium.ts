@@ -117,7 +117,7 @@ if (Object.keys(envVars).length > 0) {
     const entryPath = path.join(heliumDir, "server-entry.ts");
     const envLoaderPath = path.join(heliumDir, "env-loader.ts");
     const serverModuleSrcPath = path.join(heliumDir, "server-module.ts");
-    
+
     fs.writeFileSync(entryPath, entryCode);
     fs.writeFileSync(envLoaderPath, envLoaderCode);
     fs.writeFileSync(serverModuleSrcPath, serverModuleCode);

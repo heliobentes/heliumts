@@ -140,7 +140,7 @@ export default function helium(): Plugin {
             const dts = generateTypeDefinitions(methods, root);
             const typesDir = path.join(root, "src", "types");
             const dtsPath = path.join(typesDir, "helium-server.d.ts");
-            
+
             // Ensure src/types exists
             if (!fs.existsSync(typesDir)) {
                 fs.mkdirSync(typesDir, { recursive: true });
@@ -153,7 +153,7 @@ export default function helium(): Plugin {
                 const dts = generateTypeDefinitions(methods, root);
                 const typesDir = path.join(root, "src", "types");
                 const dtsPath = path.join(typesDir, "helium-server.d.ts");
-                
+
                 if (!fs.existsSync(typesDir)) {
                     fs.mkdirSync(typesDir, { recursive: true });
                 }
