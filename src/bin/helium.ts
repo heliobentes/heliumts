@@ -54,16 +54,6 @@ cli.command("build", "Build for production").action(async () => {
             }
         }
 
-        // Generate SSG pages after client build
-        const { generateStaticPages } = await import("../vite/ssg.js");
-        const distDir = path.join(root, "dist");
-        const indexHtmlPath = path.join(distDir, "index.html");
-
-        if (fs.existsSync(indexHtmlPath)) {
-            const htmlTemplate = fs.readFileSync(indexHtmlPath, "utf-8");
-            await generateStaticPages({ emitFile: null, info: log, warn: log, error: log }, root, htmlTemplate, distDir);
-        }
-
         log("info", "Client build complete.");
     } catch (e) {
         log("error", "Client build failed:", e);
@@ -75,24 +65,49 @@ cli.command("build", "Build for production").action(async () => {
     const serverExports = scanServerExports(root);
     const manifestCode = generateServerManifest(serverExports.methods, serverExports.httpHandlers, serverExports.middleware);
 
-    const entryCode = `
+    // Create the main server module that will be imported after env is loaded
+    const serverModuleCode = `
 import { startProdServer } from 'helium/prod-server';
 import { loadConfig } from 'helium/server';
 ${manifestCode}
 
-const config = await loadConfig();
+export async function start() {
+    const config = await loadConfig();
 
-startProdServer({
-    config,
-    registerHandlers: (registry, httpRouter) => {
-        registerAll(registry);
-        httpRouter.registerRoutes(httpHandlers);
-        if (middlewareHandler) {
-            registry.setMiddleware(middlewareHandler);
-            httpRouter.setMiddleware(middlewareHandler);
+    startProdServer({
+        config,
+        registerHandlers: (registry, httpRouter) => {
+            registerAll(registry);
+            httpRouter.registerRoutes(httpHandlers);
+            if (middlewareHandler) {
+                registry.setMiddleware(middlewareHandler);
+                httpRouter.setMiddleware(middlewareHandler);
+            }
         }
-    }
-});
+    });
+}
+`;
+
+    // Create the entry loader that loads env first, then imports the server module
+    const entryCode = `
+// Load environment variables FIRST, before any other imports
+import './env-loader.js';
+// Now import and start the server (this ensures handlers load after env)
+import { start } from './server-module.js';
+await start();
+`;
+
+    const envLoaderCode = `
+import { loadEnvFiles, injectEnvToProcess, log } from 'helium/server';
+const envRoot = process.cwd();
+log('info', \`Loading .env files from: \${envRoot}\`);
+const envVars = loadEnvFiles({ mode: 'production' });
+injectEnvToProcess(envVars);
+if (Object.keys(envVars).length > 0) {
+    log('info', \`Loaded \${Object.keys(envVars).length} environment variable(s)\`);
+} else {
+    log('warn', 'No .env files found or no variables loaded');
+}
 `;
 
     const heliumDir = path.join(root, "node_modules", ".helium");
@@ -100,7 +115,12 @@ startProdServer({
         fs.mkdirSync(heliumDir, { recursive: true });
     }
     const entryPath = path.join(heliumDir, "server-entry.ts");
+    const envLoaderPath = path.join(heliumDir, "env-loader.ts");
+    const serverModuleSrcPath = path.join(heliumDir, "server-module.ts");
+    
     fs.writeFileSync(entryPath, entryCode);
+    fs.writeFileSync(envLoaderPath, envLoaderCode);
+    fs.writeFileSync(serverModuleSrcPath, serverModuleCode);
 
     // Bundle with esbuild
     try {
@@ -111,8 +131,6 @@ startProdServer({
             platform: "node",
             format: "esm",
             external: [
-                "helium",
-                "helium/*",
                 // External common database and heavy dependencies
                 "mongodb",
                 "mongoose",
@@ -134,13 +152,16 @@ startProdServer({
             ],
             target: "node18",
             metafile: true,
+            banner: {
+                js: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);",
+            },
         });
 
         // Display server build output
-        const serverPath = path.relative(root, path.join(root, "dist", "server.js"));
+        const serverOutputPath = path.relative(root, path.join(root, "dist", "server.js"));
         const serverStats = fs.statSync(path.join(root, "dist", "server.js"));
         const serverSizeKB = (serverStats.size / 1024).toFixed(2);
-        log("info", `  ${serverPath.padEnd(35)} ${serverSizeKB.padStart(8)} kB`);
+        log("info", `  ${serverOutputPath.padEnd(35)} ${serverSizeKB.padStart(8)} kB`);
 
         log("info", "Server build complete.");
         log("info", "--------------------------------");

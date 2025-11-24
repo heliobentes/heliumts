@@ -141,6 +141,11 @@ export function buildRoutes(): {
     NotFound?: ComponentType<any>;
     AppShell?: ComponentType<any>;
 } {
+    // SSR check - return empty routes if running server-side
+    if (typeof window === "undefined") {
+        return { routes: [], NotFound: undefined, AppShell: undefined };
+    }
+
     // Eagerly load all page components
     const pages = import.meta.glob("/src/pages/**/*.{tsx,jsx,ts,js}", {
         eager: true,

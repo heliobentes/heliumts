@@ -135,37 +135,28 @@ export default function helium(): Plugin {
                 return generateEntryModule();
             }
         },
-        transform(code, id) {
-            // Strip "use ssg"; directive from page files to avoid Rollup warnings
-            if (id.includes("/pages/") && /\.(tsx?|jsx?)$/.test(id)) {
-                if (/^\s*["']use ssg["']\s*;/m.test(code)) {
-                    return {
-                        code: code.replace(/^\s*["']use ssg["']\s*;?\s*/m, ""),
-                        map: null,
-                    };
-                }
-            }
-            return null;
-        },
         buildStart() {
             const { methods } = scanServerExports(root);
             const dts = generateTypeDefinitions(methods, root);
-            const dtsPath = path.join(root, "src", "helium-server.d.ts");
-            // Ensure src exists
-            if (!fs.existsSync(path.join(root, "src"))) {
-                fs.mkdirSync(path.join(root, "src"));
+            const typesDir = path.join(root, "src", "types");
+            const dtsPath = path.join(typesDir, "helium-server.d.ts");
+            
+            // Ensure src/types exists
+            if (!fs.existsSync(typesDir)) {
+                fs.mkdirSync(typesDir, { recursive: true });
             }
             fs.writeFileSync(dtsPath, dts);
-        },
-        async closeBundle() {
-            // SSG will be handled by the CLI after the build completes
-            // This is just a placeholder to keep the hook structure
         },
         configureServer(server) {
             const regenerateTypes = () => {
                 const { methods } = scanServerExports(root);
                 const dts = generateTypeDefinitions(methods, root);
-                const dtsPath = path.join(root, "src", "helium-server.d.ts");
+                const typesDir = path.join(root, "src", "types");
+                const dtsPath = path.join(typesDir, "helium-server.d.ts");
+                
+                if (!fs.existsSync(typesDir)) {
+                    fs.mkdirSync(typesDir, { recursive: true });
+                }
                 fs.writeFileSync(dtsPath, dts);
             };
 

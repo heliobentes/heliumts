@@ -1,9 +1,11 @@
 import type { ComponentType } from "react";
 import React, { useEffect, useMemo, useState } from "react";
 
-import { buildRoutes } from "./routerManifest";
+import { buildRoutes } from "./routerManifest.js";
 
-const { routes, NotFound } = buildRoutes();
+// Build routes at module load time (client-side only)
+// During SSR, this will return empty routes
+const { routes, NotFound } = typeof window !== "undefined" ? buildRoutes() : { routes: [], NotFound: undefined };
 
 // Event emitter for router events
 type RouterEvent = "navigation" | "before-navigation";

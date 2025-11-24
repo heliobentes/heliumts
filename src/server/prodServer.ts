@@ -5,7 +5,6 @@ import path from "path";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
 
-import { injectEnvToProcess, loadEnvFiles } from "../utils/envLoader.js";
 import { extractClientIP } from "../utils/ipExtractor.js";
 import { log } from "../utils/logger.js";
 import type { HeliumConfig } from "./config.js";
@@ -31,10 +30,6 @@ interface ProdServerOptions {
  */
 export function startProdServer(options: ProdServerOptions) {
     const { port = Number(process.env.PORT || 3000), distDir = "dist", staticDir = path.resolve(process.cwd(), distDir), registerHandlers, config = {} } = options;
-
-    // Load environment variables for server-side access
-    const envVars = loadEnvFiles({ mode: "production" });
-    injectEnvToProcess(envVars);
 
     // Load configuration
     const trustProxyDepth = getTrustProxyDepth(config);
@@ -66,27 +61,11 @@ export function startProdServer(options: ProdServerOptions) {
         let filePath = path.join(staticDir, url === "/" ? "index.html" : url);
         let is404 = false;
 
-        // If file doesn't exist or is a directory, try SSG HTML file (e.g., /contact -> contact.html)
+        // If file doesn't exist or is a directory, fall back to index.html for SPA routing
         const isFileOrExists = fs.existsSync(filePath) && fs.statSync(filePath).isFile();
         if (!isFileOrExists && !url.startsWith("/api") && !url.startsWith("/webhooks") && !url.startsWith("/auth")) {
-            // Remove leading slash and query params
-            const cleanPath = url.split("?")[0].replace(/^\//, "");
-
-            // Try SSG HTML file
-            const ssgPath = path.join(staticDir, `${cleanPath}.html`);
-            if (fs.existsSync(ssgPath)) {
-                filePath = ssgPath;
-            } else {
-                // Check if 404.html exists for proper 404 handling
-                const notFoundPath = path.join(staticDir, "404.html");
-                if (fs.existsSync(notFoundPath)) {
-                    filePath = notFoundPath;
-                    is404 = true;
-                } else {
-                    // Fall back to index.html for SPA routing
-                    filePath = path.join(staticDir, "index.html");
-                }
-            }
+            // Fall back to index.html for SPA routing
+            filePath = path.join(staticDir, "index.html");
         }
 
         // Check if file exists
@@ -123,18 +102,11 @@ export function startProdServer(options: ProdServerOptions) {
             if (contentType === "text/html") {
                 const token = generateConnectionToken();
                 const html = content.toString("utf-8");
-                // Replace build-time placeholder or inject before </head>
-                let injected: string;
-                if (html.includes("build-time-placeholder")) {
-                    // Replace the placeholder (for SSG pages)
-                    injected = html.replace('"build-time-placeholder"', `"${token}"`);
-                } else {
-                    // Inject before </head> (for regular SPA)
-                    injected = html.replace(
-                        "</head>",
-                        `<script>window.HELIUM_CONNECTION_TOKEN = "${token}"; window.HELIUM_RPC_ENCODING = "${rpcConfig.encoding}";</script></head>`
-                    );
-                }
+                // Inject before </head> (for regular SPA)
+                const injected = html.replace(
+                    "</head>",
+                    `<script>window.HELIUM_CONNECTION_TOKEN = "${token}"; window.HELIUM_RPC_ENCODING = "${rpcConfig.encoding}";</script></head>`
+                );
                 content = Buffer.from(injected);
             }
 
