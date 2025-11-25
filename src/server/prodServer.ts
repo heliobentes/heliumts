@@ -136,19 +136,7 @@ export function startProdServer(options: ProdServerOptions) {
         const contentType = contentTypes[ext] || "application/octet-stream";
 
         try {
-            let content = fs.readFileSync(filePath);
-
-            // Inject connection token into HTML files
-            if (contentType === "text/html") {
-                const token = generateConnectionToken();
-                const html = content.toString("utf-8");
-                // Inject before </head> (for regular SPA)
-                const injected = html.replace(
-                    "</head>",
-                    `<script>window.HELIUM_CONNECTION_TOKEN = "${token}"; window.HELIUM_RPC_ENCODING = "${rpcConfig.encoding}";</script></head>`
-                );
-                content = Buffer.from(injected);
-            }
+            const content = fs.readFileSync(filePath);
 
             // Set status code to 404 if serving the 404 page
             const statusCode = is404 ? 404 : 200;

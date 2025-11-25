@@ -7,17 +7,8 @@ export type RpcResult<T> = {
     stats: RpcStats;
 };
 
-declare global {
-    interface Window {
-        HELIUM_CONNECTION_TOKEN?: string;
-        /** Advertisement from server - preferred RPC encoding, "json" or "msgpack" */
-        HELIUM_RPC_ENCODING?: "json" | "msgpack";
-    }
-}
-
 let socket: WebSocket | null = null;
 let connectionPromise: Promise<WebSocket> | null = null;
-let currentToken: string | undefined = undefined;
 
 const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
 
@@ -42,11 +33,7 @@ async function fetchFreshToken(): Promise<string | undefined> {
 
 async function createSocket(): Promise<WebSocket> {
     // Fetch a fresh token before creating the WebSocket connection
-    const freshToken = await fetchFreshToken();
-    const token = freshToken || window.HELIUM_CONNECTION_TOKEN;
-
-    // Update current token
-    currentToken = token;
+    const token = await fetchFreshToken();
 
     // Use the same protocol, hostname and port as the current page
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -55,28 +42,17 @@ async function createSocket(): Promise<WebSocket> {
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
 
-    // Determine client-side encoding preference from server-injected global (falls back to msgpack)
-    const clientEncoding: "json" | "msgpack" = (window.HELIUM_RPC_ENCODING as any) || "msgpack";
-
     ws.onmessage = (event) => {
         let msg: RpcResponse;
 
         // Handle both binary (MessagePack) and text (JSON) messages.
-        // Accept either format so server & client can be configured independently while remaining compatible.
         if (event.data instanceof ArrayBuffer) {
             msg = msgpackDecode(new Uint8Array(event.data)) as RpcResponse;
         } else {
-            // If the server advertises JSON we parse JSON, otherwise attempt JSON parse and fall back to msgpack decode
-            if (clientEncoding === "json") {
+            try {
                 msg = JSON.parse(event.data);
-            } else {
-                // Try JSON first (string) — if it isn't JSON, decode as msgpack binary
-                try {
-                    msg = JSON.parse(event.data);
-                } catch {
-                    // Sometimes servers send binary even if configured; handle it defensively
-                    msg = msgpackDecode(new Uint8Array(event.data)) as RpcResponse;
-                }
+            } catch {
+                msg = msgpackDecode(new Uint8Array(event.data)) as RpcResponse;
             }
         }
 
@@ -189,20 +165,14 @@ export async function rpcCall<TResult = unknown, TArgs = unknown>(methodId: stri
     const req: RpcRequest = { id, method: methodId, args };
 
     return new Promise<RpcResult<TResult>>((resolve, reject) => {
-        // Store generic handlers that take unknown; the wrapper will cast to RpcResult<TResult>
         pending.set(id, {
             resolve: (v: unknown) => resolve(v as RpcResult<TResult>),
             reject,
         });
         try {
-            // Encode according to preferred transport encoding
-            const clientEncoding: "json" | "msgpack" = (window.HELIUM_RPC_ENCODING as any) || "msgpack";
-            if (clientEncoding === "msgpack") {
-                const encoded = msgpackEncode(req);
-                ws.send(encoded);
-            } else {
-                ws.send(JSON.stringify(req));
-            }
+            // Always use msgpack encoding
+            const encoded = msgpackEncode(req);
+            ws.send(encoded);
         } catch (err) {
             pending.delete(id);
             reject(err);

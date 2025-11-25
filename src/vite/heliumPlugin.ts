@@ -4,7 +4,6 @@ import type { Plugin } from "vite";
 
 import { clearConfigCache, loadConfig } from "../server/config.js";
 import { attachToDevServer } from "../server/devServer.js";
-import { generateConnectionToken } from "../server/security.js";
 import { createEnvDefines, injectEnvToProcess, loadEnvFiles } from "../utils/envLoader.js";
 import { log } from "../utils/logger.js";
 import {
@@ -36,7 +35,7 @@ export default function helium(): Plugin {
         },
         transformIndexHtml: {
             order: "pre",
-            handler(html, ctx) {
+            handler(html, _ctx) {
                 // Check if HTML already has a script tag for entry
                 if (html.includes("src/main.tsx") || html.includes("src/main.ts")) {
                     return html; // User has their own entry, don't modify
@@ -56,17 +55,8 @@ export default function helium(): Plugin {
                 const entryPath = path.join(heliumDir, "entry.tsx");
                 fs.writeFileSync(entryPath, generateEntryModule());
 
-                // Generate connection token (only in dev mode, not during build)
-                const isDev = ctx.server !== undefined;
-                const token = isDev ? generateConnectionToken() : "build-time-placeholder";
-
-                // Return with tags to inject the entry
+                // Return with tags to inject the entry (runtime config is fetched by the client)
                 return [
-                    {
-                        tag: "script",
-                        children: `window.HELIUM_CONNECTION_TOKEN = "${token}";`,
-                        injectTo: "head",
-                    },
                     {
                         tag: "script",
                         attrs: {

@@ -99,6 +99,35 @@ If you prefer to use `.js` config files in production without transpilation:
 
 ## Environment Variables
 
+### Client-Side Environment Variables
+
+To expose environment variables to the browser, prefix them with `HELIUM_PUBLIC_`:
+
+```bash
+# .env or platform environment variables
+HELIUM_PUBLIC_APP_NAME=My App
+HELIUM_PUBLIC_API_URL=https://api.example.com
+HELIUM_PUBLIC_FEATURE_FLAG=true
+```
+
+Access them in your React components using `import.meta.env`:
+
+```typescript
+function MyComponent() {
+    const appName = import.meta.env.HELIUM_PUBLIC_APP_NAME;
+    const apiUrl = import.meta.env.HELIUM_PUBLIC_API_URL;
+    const featureEnabled = import.meta.env.HELIUM_PUBLIC_FEATURE_FLAG === 'true';
+    
+    return <div>{appName} - {apiUrl}</div>;
+}
+```
+
+**Important:**
+
+- Build-time injection: Environment variables are injected at **build time** by Vite. Make sure your hosting platform (Digital Ocean, Vercel, etc.) has the environment variables set before the build runs.
+- Only `HELIUM_PUBLIC_*` variables are exposed to the browser for security reasons
+- Server-side code can access all environment variables via `process.env`
+
 ### Using Platform Environment Variables (Recommended)
 
 Most cloud platforms (Digital Ocean, Vercel, Heroku, etc.) provide their own environment variable management. This is the **recommended approach** for production:
@@ -106,8 +135,8 @@ Most cloud platforms (Digital Ocean, Vercel, Heroku, etc.) provide their own env
 **Digital Ocean App Platform:**
 
 1. Go to your app's Settings → App-Level Environment Variables
-2. Add your variables (e.g., `DATABASE_URL`, `API_KEY`)
-3. They'll be automatically injected into `process.env`
+2. Add your variables (e.g., `DATABASE_URL`, `API_KEY`, `HELIUM_PUBLIC_APP_NAME`)
+3. They'll be automatically injected into `process.env` and exposed to the client if prefixed with `HELIUM_PUBLIC_`
 
 **Advantages:**
 
@@ -115,6 +144,7 @@ Most cloud platforms (Digital Ocean, Vercel, Heroku, etc.) provide their own env
 - Variables are managed securely by the platform
 - Different values per environment (staging/production)
 - No risk of committing secrets to git
+- **No rebuild required** when changing client-side variables
 
 ### Using .env Files in Production
 
