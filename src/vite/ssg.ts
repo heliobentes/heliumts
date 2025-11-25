@@ -27,17 +27,44 @@ interface SSGValidation {
 }
 
 /**
+ * Remove string literals from content to avoid false positives when checking for patterns
+ * This removes template literals, single-quoted strings, and double-quoted strings
+ */
+function stripStringLiterals(content: string): string {
+    // Remove template literals (backtick strings) - handle nested expressions
+    let result = content;
+
+    // Remove template literals with their content (simplified - doesn't handle all edge cases but good enough)
+    result = result.replace(/`(?:[^`\\]|\\.)*`/g, '""');
+
+    // Remove double-quoted strings
+    result = result.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+
+    // Remove single-quoted strings
+    result = result.replace(/'(?:[^'\\]|\\.)*'/g, "''");
+
+    // Also remove JSX text content between tags (but not the tags themselves)
+    // This helps with cases like <code>useState</code>
+    result = result.replace(/>([^<]+)</g, "><");
+
+    return result;
+}
+
+/**
  * Validate if a page file can be truly statically generated
  * Checks for React hooks and helium imports that would prevent static generation
  */
 function validateSSGPage(filePath: string): SSGValidation {
-    const content = fs.readFileSync(filePath, "utf-8");
+    const rawContent = fs.readFileSync(filePath, "utf-8");
     const warnings: string[] = [];
+
+    // Strip string literals and JSX text to avoid false positives
+    const content = stripStringLiterals(rawContent);
 
     // Check for React hooks (common ones)
     const hookPatterns = [
-        /\buse(State|Effect|Context|Reducer|Callback|Memo|Ref|ImperativeHandle|LayoutEffect|DebugValue)\b/,
-        /\buse[A-Z]\w+\b/, // Custom hooks (useXxx)
+        /\buse(State|Effect|Context|Reducer|Callback|Memo|Ref|ImperativeHandle|LayoutEffect|DebugValue)\s*\(/,
+        /\buse[A-Z]\w+\s*\(/, // Custom hooks (useXxx) - must be followed by ( to be a call
     ];
 
     const hasHooks = hookPatterns.some((pattern) => pattern.test(content));
@@ -45,14 +72,14 @@ function validateSSGPage(filePath: string): SSGValidation {
         warnings.push("Page uses React hooks which may cause hydration issues");
     }
 
-    // Check for helium/client imports
-    const hasClientImports = /from\s+['"]helium\/client['"]/.test(content) || /import\s+['"]helium\/client['"]/.test(content);
+    // Check for helium/client imports - use raw content since imports should be at top level
+    const hasClientImports = /^import\s+.*from\s+['"]helium\/client['"]/m.test(rawContent);
     if (hasClientImports) {
         warnings.push("Page imports from 'helium/client' which requires client-side execution");
     }
 
-    // Check for helium/server imports
-    const hasServerImports = /from\s+['"]helium\/server['"]/.test(content) || /import\s+['"]helium\/server['"]/.test(content);
+    // Check for helium/server imports - use raw content since imports should be at top level
+    const hasServerImports = /^import\s+.*from\s+['"]helium\/server['"]/m.test(rawContent);
     if (hasServerImports) {
         warnings.push("Page imports from 'helium/server' which may cause runtime issues");
     }
