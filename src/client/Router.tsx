@@ -145,10 +145,26 @@ export type LinkProps = React.PropsWithChildren<
 >;
 
 /**
+ * Check if a URL is external (different origin).
+ */
+function isExternalUrl(href: string): boolean {
+    if (typeof window === "undefined") {
+        return false;
+    }
+    try {
+        const url = new URL(href, window.location.origin);
+        return url.origin !== window.location.origin;
+    } catch {
+        return false;
+    }
+}
+
+/**
  * Client-side navigation link.
  *
  * Intercepts left-clicks and uses the router's navigation helpers for SPA
- * navigation. Keeps normal anchor behaviour when modifier keys are used.
+ * navigation. Keeps normal anchor behaviour when modifier keys are used
+ * or when the link is external.
  */
 export function Link(props: LinkProps) {
     const onClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
@@ -158,7 +174,8 @@ export function Link(props: LinkProps) {
             e.metaKey ||
             e.ctrlKey ||
             e.shiftKey ||
-            e.altKey
+            e.altKey ||
+            isExternalUrl(props.href) // let browser handle external links
         ) {
             return;
         }
