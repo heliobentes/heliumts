@@ -144,25 +144,6 @@ export type LinkProps = React.PropsWithChildren<
     }
 >;
 
-const preloadedUrls: Record<string, boolean> = {};
-
-function pointerenterHandler(e: React.PointerEvent<HTMLAnchorElement>) {
-    if (!HTMLScriptElement.supports || !HTMLScriptElement.supports("speculationrules")) {
-        return;
-    }
-    if (preloadedUrls[e.currentTarget.href]) {
-        return;
-    }
-    preloadedUrls[e.currentTarget.href] = true;
-    const prefetcher = document.createElement("link");
-
-    prefetcher.as = prefetcher.relList.supports("prefetch") ? "document" : "fetch";
-    prefetcher.rel = prefetcher.relList.supports("prefetch") ? "prefetch" : "preload";
-    prefetcher.href = e.currentTarget.href;
-
-    document.head.appendChild(prefetcher);
-}
-
 /**
  * Client-side navigation link.
  *
@@ -188,7 +169,7 @@ export function Link(props: LinkProps) {
     const { children, href, className, ...safeProps } = props;
 
     return (
-        <a href={href} onClick={onClick} className={className} onPointerEnter={pointerenterHandler} {...safeProps}>
+        <a href={href} onClick={onClick} className={className} {...safeProps}>
             {children}
         </a>
     );
