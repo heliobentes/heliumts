@@ -43,6 +43,18 @@ npm install github:heliobentes/heliumjs
 ```
 *NPM package is coming soon!*
 
+#### 1.1.3. Setup Vite Config
+Create or update `vite.config.ts` in the project root to include Helium's Vite plugin:
+
+```typescript
+import react from '@vitejs/plugin-react';
+import helium from 'helium/vite';
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+    plugins: [react(), helium()]
+});
+```
 
 ### 1.2. Running the Development Server
 
@@ -82,7 +94,9 @@ src/
     _middleware.ts   # Server middleware
   components/        # React components
   types/             # Shared types
-helium.config.ts    # Helium configuration
+helium.config.ts     # Helium configuration
+package.json         # NPM package file
+vite.config.ts       # Vite configuration
 ```
 
 ## 3. Core Concepts
