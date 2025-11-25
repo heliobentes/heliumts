@@ -64,6 +64,8 @@ CMD ["node", "dist/server.js"]
 
 These platforms typically run in development mode with Vite, so config transpilation isn't needed. The `.ts` config file works directly.
 
+Vercel might not be compatible with WebSocket-based features due to serverless limitations.
+
 ### Manual Config Conversion
 
 If you prefer to use `.js` config files in production without transpilation:

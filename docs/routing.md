@@ -1,0 +1,710 @@
+# Routing and useRouter
+
+## Overview
+
+HeliumJS uses file-based routing similar to Next.js Pages Router. Pages are automatically mapped to routes based on their file path in the `src/pages` directory. The framework provides a powerful routing system with support for dynamic routes, catch-all routes, layouts, and route groups.
+
+## File-Based Routing
+
+### Basic Routes
+
+Files in `src/pages` are automatically mapped to routes:
+
+```
+src/pages/
+├── index.tsx           → /
+├── about.tsx           → /about
+├── contact.tsx         → /contact
+└── blog/
+    ├── index.tsx       → /blog
+    └── post.tsx        → /blog/post
+```
+
+### Dynamic Routes
+
+Use square brackets `[param]` to create dynamic routes:
+
+```
+src/pages/
+├── users/
+│   └── [id].tsx        → /users/:id (matches /users/123, /users/abc, etc.)
+├── blog/
+│   └── [slug].tsx      → /blog/:slug
+└── products/
+    └── [category]/
+        └── [id].tsx    → /products/:category/:id
+```
+
+**Example usage:**
+
+```tsx
+// src/pages/users/[id].tsx
+import { useRouter } from "helium/client";
+
+export default function UserPage() {
+    const router = useRouter();
+    const userId = router.params.id;  // Get the dynamic parameter
+    
+    return <div>User ID: {userId}</div>;
+}
+```
+
+### Catch-All Routes
+
+Use `[...param]` to match any number of path segments:
+
+```
+src/pages/
+└── docs/
+    └── [...slug].tsx   → /docs/* (matches /docs/a, /docs/a/b/c, etc.)
+```
+
+**Example usage:**
+
+```tsx
+// src/pages/docs/[...slug].tsx
+import { useRouter } from "helium/client";
+
+export default function DocsPage() {
+    const router = useRouter();
+    const slug = router.params.slug;  // Array of path segments
+    
+    return <div>Docs path: {Array.isArray(slug) ? slug.join('/') : slug}</div>;
+}
+```
+
+### Index Routes
+
+Files named `index.tsx` represent the root of their directory:
+
+```
+src/pages/
+├── index.tsx           → /
+├── blog/
+│   ├── index.tsx       → /blog
+│   └── post.tsx        → /blog/post
+└── admin/
+    └── index.tsx       → /admin
+```
+
+## Route Groups
+
+Route groups allow you to organize pages without affecting URLs. Wrap folder names in parentheses:
+
+```
+src/pages/
+├── (marketing)/
+│   ├── _layout.tsx     # Layout for marketing pages
+│   ├── index.tsx       → /
+│   ├── about.tsx       → /about
+│   └── pricing.tsx     → /pricing
+├── (app)/
+│   ├── _layout.tsx     # Layout for app pages
+│   ├── dashboard.tsx   → /dashboard
+│   └── settings.tsx    → /settings
+└── (auth)/
+    ├── _layout.tsx     # Layout for auth pages
+    ├── login.tsx       → /login
+    └── register.tsx    → /register
+```
+
+The route group folders `(marketing)`, `(app)`, and `(auth)` are **stripped from URLs** but allow you to:
+- Organize related pages
+- Apply different layouts per group
+- Keep code organized by feature/domain
+
+See [Route Groups](./route-groups.md) for detailed information.
+
+## Layouts
+
+Layouts allow you to share UI between pages. They wrap page components and can be nested.
+
+### Root Layout
+
+Create `_layout.tsx` at the root of `src/pages` to wrap **all pages**:
+
+```tsx
+// src/pages/_layout.tsx
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+    return (
+        <div>
+            <header>Global Header</header>
+            <main>{children}</main>
+            <footer>Global Footer</footer>
+        </div>
+    );
+}
+```
+
+### Group Layouts
+
+Create `_layout.tsx` inside route groups to wrap **only pages in that group**:
+
+```tsx
+// src/pages/(app)/_layout.tsx
+export default function AppLayout({ children }: { children: React.ReactNode }) {
+    return (
+        <div className="app-layout">
+            <nav>App Navigation</nav>
+            <div className="content">{children}</div>
+        </div>
+    );
+}
+```
+
+### Nested Layouts
+
+Layouts can be nested in subdirectories:
+
+```
+src/pages/
+├── _layout.tsx                    # RootLayout - all pages
+├── (app)/
+│   ├── _layout.tsx                # AppLayout - (app) pages only
+│   ├── dashboard.tsx              # [RootLayout → AppLayout]
+│   └── settings/
+│       ├── _layout.tsx            # SettingsLayout - settings pages only
+│       └── profile.tsx            # [RootLayout → AppLayout → SettingsLayout]
+```
+
+**Rendering order:** Outer to inner (Root → Group → Nested)
+
+```tsx
+<RootLayout>
+    <AppLayout>
+        <SettingsLayout>
+            <ProfilePage />
+        </SettingsLayout>
+    </AppLayout>
+</RootLayout>
+```
+
+See [Route Groups - Layout Hierarchy](./route-groups.md#layout-hierarchy) for more details.
+
+## Navigation
+
+### Link Component
+
+Use the `Link` component for client-side navigation:
+
+```tsx
+import { Link } from "helium/client";
+
+export default function Nav() {
+    return (
+        <nav>
+            <Link href="/">Home</Link>
+            <Link href="/about">About</Link>
+            <Link href="/blog/my-post">Blog Post</Link>
+        </nav>
+    );
+}
+```
+
+**Props:**
+
+- `href` (string): Target URL
+- `replace` (boolean): Use `history.replace` instead of `history.push`
+- Standard `<a>` tag props (className, onClick, etc.)
+
+**Behavior:**
+
+- Left-clicks are intercepted for SPA navigation
+- Modifier keys (Ctrl, Cmd, Shift, Alt) preserve normal link behavior (open in new tab, etc.)
+- Right-clicks and middle-clicks work normally
+
+### Programmatic Navigation
+
+Use the `useRouter` hook for programmatic navigation:
+
+```tsx
+import { useRouter } from "helium/client";
+
+export default function LoginPage() {
+    const router = useRouter();
+    
+    const handleLogin = async () => {
+        // Perform login
+        await login();
+        
+        // Navigate to dashboard
+        router.push("/dashboard");
+    };
+    
+    return <button onClick={handleLogin}>Login</button>;
+}
+```
+
+## useRouter Hook
+
+The `useRouter` hook provides access to routing information and navigation methods.
+
+### Usage
+
+```tsx
+import { useRouter } from "helium/client";
+
+export default function MyComponent() {
+    const router = useRouter();
+    
+    // Access router properties
+    console.log(router.path);
+    console.log(router.params);
+    console.log(router.searchParams);
+    console.log(router.status);
+    
+    return <div>...</div>;
+}
+```
+
+### Properties
+
+#### `path` (string)
+
+Current pathname (without query string):
+
+```tsx
+const router = useRouter();
+console.log(router.path);  // "/blog/my-post"
+```
+
+#### `params` (Record<string, string | string[]>)
+
+Dynamic route parameters:
+
+```tsx
+// URL: /users/123
+const router = useRouter();
+console.log(router.params.id);  // "123"
+
+// URL: /docs/guide/getting-started
+const router = useRouter();
+console.log(router.params.slug);  // ["guide", "getting-started"]
+```
+
+#### `searchParams` (URLSearchParams)
+
+URL query parameters:
+
+```tsx
+// URL: /search?q=hello&page=2
+const router = useRouter();
+console.log(router.searchParams.get("q"));      // "hello"
+console.log(router.searchParams.get("page"));   // "2"
+
+// Get all values
+const allParams = Object.fromEntries(router.searchParams);
+console.log(allParams);  // { q: "hello", page: "2" }
+```
+
+#### `status` (200 | 404)
+
+Current route status:
+
+```tsx
+const router = useRouter();
+
+if (router.status === 404) {
+    return <div>Page not found</div>;
+}
+
+return <div>Content</div>;
+```
+
+### Methods
+
+#### `push(href: string)`
+
+Navigate to a new route (adds to history):
+
+```tsx
+const router = useRouter();
+
+router.push("/about");
+router.push("/users/123");
+router.push("/search?q=hello");
+```
+
+#### `replace(href: string)`
+
+Navigate to a new route (replaces current history entry):
+
+```tsx
+const router = useRouter();
+
+// Replace current URL (no back button entry)
+router.replace("/login");
+```
+
+**Use cases:**
+- Redirects after authentication
+- Replacing temporary URLs
+- Preventing back navigation to intermediate states
+
+#### `on(event: RouterEvent, listener: EventListener)`
+
+Subscribe to router events. Returns an unsubscribe function:
+
+```tsx
+const router = useRouter();
+
+useEffect(() => {
+    // Listen to navigation events
+    const unsubscribe = router.on("navigation", (event) => {
+        console.log(`Navigated from ${event.from} to ${event.to}`);
+    });
+    
+    // Cleanup
+    return unsubscribe;
+}, [router]);
+```
+
+**Event types:**
+
+- `"navigation"`: Fires after navigation completes
+- `"before-navigation"`: Fires before navigation (can be prevented)
+
+**Event object:**
+
+```typescript
+{
+    from: string;    // Previous path
+    to: string;      // New path
+    preventDefault?: () => void;  // Only for "before-navigation"
+}
+```
+
+### Router Events
+
+#### Navigation Event
+
+Fires after navigation completes:
+
+```tsx
+import { useRouter } from "helium/client";
+import { useEffect } from "react";
+
+export default function Analytics() {
+    const router = useRouter();
+    
+    useEffect(() => {
+        const unsubscribe = router.on("navigation", (event) => {
+            // Track page view
+            trackPageView(event.to);
+        });
+        
+        return unsubscribe;
+    }, [router]);
+    
+    return null;
+}
+```
+
+#### Before Navigation Event
+
+Fires before navigation (can be prevented):
+
+```tsx
+import { useRouter } from "helium/client";
+import { useEffect } from "react";
+
+export default function UnsavedChangesGuard() {
+    const router = useRouter();
+    const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+    
+    useEffect(() => {
+        const unsubscribe = router.on("before-navigation", (event) => {
+            if (hasUnsavedChanges) {
+                const confirmed = window.confirm(
+                    "You have unsaved changes. Do you want to leave?"
+                );
+                
+                if (!confirmed) {
+                    event.preventDefault?.();  // Prevent navigation
+                }
+            }
+        });
+        
+        return unsubscribe;
+    }, [router, hasUnsavedChanges]);
+    
+    return <form>...</form>;
+}
+```
+
+## Complete Examples
+
+### Blog with Dynamic Routes
+
+```tsx
+// src/pages/blog/[slug].tsx
+import { useRouter } from "helium/client";
+import { useFetch } from "helium/client";
+import { getBlogPost } from "helium/server";
+
+export default function BlogPostPage() {
+    const router = useRouter();
+    const slug = router.params.slug as string;
+    
+    const { data: post, isLoading } = useFetch(getBlogPost, { slug });
+    
+    if (isLoading) return <div>Loading...</div>;
+    if (!post) return <div>Post not found</div>;
+    
+    return (
+        <article>
+            <h1>{post.title}</h1>
+            <div>{post.content}</div>
+        </article>
+    );
+}
+```
+
+### Search with Query Parameters
+
+```tsx
+// src/pages/search.tsx
+import { useRouter } from "helium/client";
+import { useFetch } from "helium/client";
+import { searchProducts } from "helium/server";
+
+export default function SearchPage() {
+    const router = useRouter();
+    const query = router.searchParams.get("q") || "";
+    
+    const { data: results } = useFetch(searchProducts, { query });
+    
+    const handleSearch = (e: React.FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        const formData = new FormData(e.currentTarget);
+        const q = formData.get("q");
+        router.push(`/search?q=${q}`);
+    };
+    
+    return (
+        <div>
+            <form onSubmit={handleSearch}>
+                <input name="q" defaultValue={query} />
+                <button type="submit">Search</button>
+            </form>
+            
+            <div>
+                {results?.map(product => (
+                    <div key={product.id}>{product.name}</div>
+                ))}
+            </div>
+        </div>
+    );
+}
+```
+
+### Authentication Guard
+
+```tsx
+// src/pages/(app)/dashboard.tsx
+import { useRouter } from "helium/client";
+import { useEffect } from "react";
+
+export default function DashboardPage() {
+    const router = useRouter();
+    const isAuthenticated = checkAuth();  // Your auth logic
+    
+    useEffect(() => {
+        if (!isAuthenticated) {
+            router.replace("/login");
+        }
+    }, [isAuthenticated, router]);
+    
+    if (!isAuthenticated) {
+        return <div>Redirecting...</div>;
+    }
+    
+    return <div>Dashboard content</div>;
+}
+```
+
+### Breadcrumb Navigation
+
+```tsx
+// src/components/Breadcrumbs.tsx
+import { useRouter } from "helium/client";
+import { Link } from "helium/client";
+
+export default function Breadcrumbs() {
+    const router = useRouter();
+    const pathSegments = router.path.split("/").filter(Boolean);
+    
+    return (
+        <nav>
+            <Link href="/">Home</Link>
+            {pathSegments.map((segment, index) => {
+                const href = "/" + pathSegments.slice(0, index + 1).join("/");
+                return (
+                    <span key={href}>
+                        {" / "}
+                        <Link href={href}>{segment}</Link>
+                    </span>
+                );
+            })}
+        </nav>
+    );
+}
+```
+
+### Page Transition Analytics
+
+```tsx
+// src/components/Analytics.tsx
+import { useRouter } from "helium/client";
+import { useEffect } from "react";
+
+export default function Analytics() {
+    const router = useRouter();
+    
+    useEffect(() => {
+        // Track initial page view
+        trackPageView(router.path);
+        
+        // Track subsequent navigations
+        const unsubscribe = router.on("navigation", (event) => {
+            trackPageView(event.to);
+            trackNavigationTime(event.from, event.to);
+        });
+        
+        return unsubscribe;
+    }, [router]);
+    
+    return null;
+}
+
+function trackPageView(path: string) {
+    console.log("Page view:", path);
+    // Send to analytics service
+}
+
+function trackNavigationTime(from: string, to: string) {
+    console.log(`Navigation: ${from} → ${to}`);
+    // Track navigation performance
+}
+```
+
+## Route Collision Detection
+
+Helium automatically detects when multiple files resolve to the same URL:
+
+```
+❌ Route collision detected! Multiple files resolve to the same path "/":
+   - /src/pages/index.tsx
+   - /src/pages/(marketing)/index.tsx
+Only the first file will be used.
+```
+
+**Common causes:**
+- Multiple `index.tsx` files at the same level
+- Same filename in different route groups
+- Mixed grouped and non-grouped files
+
+**Solution:** Use unique filenames or nest pages in subdirectories.
+
+See [Route Groups - Route Collision Detection](./route-groups.md#route-collision-detection) for more details.
+
+## Best Practices
+
+1. **Use Link for internal navigation**: Enables SPA navigation and better performance
+2. **Use router.replace for redirects**: Prevents unwanted back button entries
+3. **Validate params**: Dynamic params are strings - validate and parse them
+4. **Handle loading states**: Show loading UI while data fetches
+5. **Use layouts wisely**: Share UI without duplication
+6. **Organize with route groups**: Keep related pages together
+7. **Subscribe to events carefully**: Always unsubscribe in cleanup
+8. **Type your params**: Use TypeScript to type route parameters
+
+## TypeScript Support
+
+### Typing Route Params
+
+```tsx
+import { useRouter } from "helium/client";
+
+type UserPageParams = {
+    id: string;
+};
+
+export default function UserPage() {
+    const router = useRouter();
+    const { id } = router.params as UserPageParams;
+    
+    // id is typed as string
+    return <div>User: {id}</div>;
+}
+```
+
+### Typing Search Params
+
+```tsx
+import { useRouter } from "helium/client";
+
+export default function SearchPage() {
+    const router = useRouter();
+    
+    const query = router.searchParams.get("q") ?? "";
+    const page = Number(router.searchParams.get("page") ?? "1");
+    
+    // query: string, page: number
+    return <div>Search: {query}, Page: {page}</div>;
+}
+```
+
+## Troubleshooting
+
+### useRouter throws "must be used inside <AppRouter>"
+
+**Cause:** `useRouter` called outside the router context
+
+**Solution:** Ensure your app is wrapped with `<AppRouter>`:
+
+```tsx
+// src/main.tsx
+import { AppRouter } from "helium/client";
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+    <AppRouter>
+        {/* Your app */}
+    </AppRouter>
+);
+```
+
+### Dynamic params are undefined
+
+**Cause:** Wrong param name or file structure
+
+**Solution:** Ensure param name matches filename:
+- File: `[id].tsx` → Param: `router.params.id`
+- File: `[slug].tsx` → Param: `router.params.slug`
+
+### Navigation not working
+
+**Cause:** Using `<a>` instead of `<Link>`
+
+**Solution:** Use `<Link>` for internal navigation:
+
+```tsx
+// ❌ Don't use <a> for internal links
+<a href="/about">About</a>
+
+// ✅ Use <Link>
+<Link href="/about">About</Link>
+```
+
+### Route groups affecting URLs
+
+**Cause:** Misunderstanding how route groups work
+
+**Solution:** Route groups are **stripped from URLs**. They're for organization only.
+
+## Related Documentation
+
+- [Route Groups](./route-groups.md) - Detailed guide on route groups and layouts
+- [SSG](./ssg.md) - Static site generation with routing
+- [Context API](./context-api.md) - Access request context
+- [RPC Methods](./README.md#rpc-remote-procedure-calls) - Fetch data in pages
