@@ -7,6 +7,10 @@ export type { LayoutProps } from "./routerManifest.js";
 export * from "./useCall.js";
 export * from "./useFetch.js";
 
+// RPC transport info (configured via helium.config.js)
+export type { RpcTransport } from "./rpcClient.js";
+export { getRpcTransport, isAutoHttpOnMobileEnabled, preconnect } from "./rpcClient.js";
+
 // Type definitions
 export * from "./types.js";
 

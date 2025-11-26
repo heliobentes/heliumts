@@ -7,6 +7,111 @@ export type RpcResult<T> = {
     stats: RpcStats;
 };
 
+/**
+ * Transport mode for RPC calls.
+ * - "http": Uses HTTP POST requests (faster on mobile/high-latency networks, benefits from HTTP/2)
+ * - "websocket": Uses persistent WebSocket connection (lower latency on desktop/low-latency networks)
+ * - "auto": Automatically selects based on connection type
+ */
+export type RpcTransport = "http" | "websocket" | "auto";
+
+// Build-time configuration injected by Vite plugin from helium.config.js
+declare const __HELIUM_RPC_TRANSPORT__: RpcTransport;
+declare const __HELIUM_RPC_AUTO_HTTP_ON_MOBILE__: boolean;
+
+// Read build-time config with fallback defaults
+const configuredTransport: RpcTransport = typeof __HELIUM_RPC_TRANSPORT__ !== "undefined" ? __HELIUM_RPC_TRANSPORT__ : "websocket";
+const configuredAutoHttpOnMobile: boolean = typeof __HELIUM_RPC_AUTO_HTTP_ON_MOBILE__ !== "undefined" ? __HELIUM_RPC_AUTO_HTTP_ON_MOBILE__ : false;
+
+/**
+ * Get the configured RPC transport mode (from helium.config.js).
+ */
+export function getRpcTransport(): RpcTransport {
+    return configuredTransport;
+}
+
+/**
+ * Check if auto HTTP on mobile is enabled (from helium.config.js).
+ */
+export function isAutoHttpOnMobileEnabled(): boolean {
+    return configuredAutoHttpOnMobile;
+}
+
+// Detect if we should prefer HTTP transport (mobile/slow networks)
+function shouldUseHttpTransport(): boolean {
+    if (configuredTransport === "http") {
+        return true;
+    }
+    if (configuredTransport === "websocket") {
+        return false;
+    }
+
+    // Auto mode: check if mobile HTTP optimization is enabled
+    if (!configuredAutoHttpOnMobile) {
+        return false;
+    }
+
+    // Prefer HTTP on mobile/slow connections
+    if (typeof navigator !== "undefined") {
+        const conn = (navigator as NavigatorWithConnection).connection;
+        if (conn) {
+            // Use HTTP for cellular connections or slow effective types
+            const slowTypes = ["slow-2g", "2g", "3g"];
+            if (conn.type === "cellular" || (conn.effectiveType && slowTypes.includes(conn.effectiveType))) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+interface NetworkInformation {
+    type?: string;
+    effectiveType?: string;
+}
+
+interface NavigatorWithConnection extends Navigator {
+    connection?: NetworkInformation;
+}
+
+// ============================================================================
+// HTTP Transport
+// ============================================================================
+
+async function rpcCallHttp<TResult, TArgs>(methodId: string, args?: TArgs): Promise<RpcResult<TResult>> {
+    const id = uuid();
+    const req: RpcRequest = { id, method: methodId, args };
+
+    const encoded = msgpackEncode(req);
+
+    const response = await fetch("/__helium__/rpc", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/msgpack",
+            Accept: "application/msgpack",
+        },
+        body: encoded as unknown as BodyInit,
+    });
+
+    if (!response.ok) {
+        throw new Error(`HTTP RPC failed: ${response.status}`);
+    }
+
+    const responseBuffer = await response.arrayBuffer();
+    const msg = msgpackDecode(new Uint8Array(responseBuffer)) as RpcResponse;
+
+    if (msg.ok) {
+        return { data: msg.result as TResult, stats: msg.stats };
+    } else {
+        throw { error: msg.error, stats: msg.stats };
+    }
+}
+
+// ============================================================================
+// WebSocket Transport (original implementation)
+// ============================================================================
+
 let socket: WebSocket | null = null;
 let connectionPromise: Promise<WebSocket> | null = null;
 
@@ -158,7 +263,10 @@ async function ensureSocketReady(): Promise<WebSocket> {
     return connectionPromise;
 }
 
-export async function rpcCall<TResult = unknown, TArgs = unknown>(methodId: string, args?: TArgs): Promise<RpcResult<TResult>> {
+/**
+ * WebSocket-based RPC call (original implementation).
+ */
+async function rpcCallWebSocket<TResult, TArgs>(methodId: string, args?: TArgs): Promise<RpcResult<TResult>> {
     const ws = await ensureSocketReady();
     const id = uuid();
 
@@ -178,4 +286,42 @@ export async function rpcCall<TResult = unknown, TArgs = unknown>(methodId: stri
             reject(err);
         }
     });
+}
+
+/**
+ * Make an RPC call using the appropriate transport.
+ * Automatically selects HTTP or WebSocket based on network conditions and configuration.
+ */
+export async function rpcCall<TResult = unknown, TArgs = unknown>(methodId: string, args?: TArgs): Promise<RpcResult<TResult>> {
+    if (shouldUseHttpTransport()) {
+        return rpcCallHttp<TResult, TArgs>(methodId, args);
+    }
+    return rpcCallWebSocket<TResult, TArgs>(methodId, args);
+}
+
+/**
+ * Pre-establishes the WebSocket connection.
+ * Call this early (e.g., on page load) to avoid connection latency on first RPC call.
+ * This is especially beneficial on high-latency networks like mobile LTE.
+ * Note: Only effective when using WebSocket transport (not HTTP transport).
+ */
+export function preconnect(): void {
+    if (typeof window === "undefined") {
+        return;
+    }
+    // Only preconnect if we're using WebSocket transport
+    if (shouldUseHttpTransport()) {
+        return;
+    }
+    // Fire and forget - establishes connection in background
+    ensureSocketReady().catch(() => {
+        // Silently ignore preconnect failures, will retry on actual call
+    });
+}
+
+// Auto-preconnect when the module loads (browser only, WebSocket transport only)
+if (typeof window !== "undefined" && typeof document !== "undefined") {
+    // Use requestIdleCallback if available, otherwise setTimeout
+    const schedulePreconnect = window.requestIdleCallback || ((cb: () => void) => setTimeout(cb, 1));
+    schedulePreconnect(() => preconnect());
 }

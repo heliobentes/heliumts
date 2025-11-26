@@ -141,6 +141,39 @@ export interface HeliumConfig {
         encoding?: "json" | "msgpack";
 
         /**
+         * Client-side transport mode for RPC calls.
+         *
+         * - `"websocket"` (default): Uses persistent WebSocket connection
+         *   - ✅ Lower latency for subsequent calls (connection reuse)
+         *   - ✅ Real-time bidirectional communication ready
+         *   - ⚠️ Higher initial connection overhead
+         *
+         * - `"http"`: Uses HTTP POST requests for each RPC call
+         *   - ✅ Better performance on mobile/cellular networks (HTTP/2 optimizations)
+         *   - ✅ No connection state to maintain
+         *   - ⚠️ Slightly higher per-request overhead on fast networks
+         *
+         * - `"auto"`: Automatically selects based on network conditions
+         *   - Uses HTTP on cellular/slow networks when `autoHttpOnMobile` is true
+         *   - Uses WebSocket on fast networks (WiFi, wired)
+         *
+         * @default "websocket"
+         */
+        transport?: "http" | "websocket" | "auto";
+
+        /**
+         * Automatically switch to HTTP transport on mobile/cellular networks.
+         *
+         * When enabled and `transport` is `"auto"`, the client will use HTTP
+         * instead of WebSocket on cellular connections (4G/LTE, 5G) and slow
+         * connections (2G, 3G). This improves performance on mobile networks
+         * where HTTP/2 is more efficient due to carrier network optimizations.
+         *
+         * @default false
+         */
+        autoHttpOnMobile?: boolean;
+
+        /**
          * WebSocket per-message compression configuration.
          *
          * Enable and configure the permessage-deflate extension to compress
@@ -274,6 +307,28 @@ export function getRpcConfig(config: HeliumConfig = {}) {
         encoding: (config.rpc?.encoding ?? "msgpack") as "json" | "msgpack",
         compression: getCompressionConfig(config),
         security: getRpcSecurityConfig(config),
+    };
+}
+
+/**
+ * Client-side RPC transport configuration.
+ * This is injected into the client bundle at build time.
+ */
+export interface RpcClientTransportConfig {
+    transport: "http" | "websocket" | "auto";
+    autoHttpOnMobile: boolean;
+}
+
+/**
+ * Get client-side RPC transport configuration.
+ * This configuration is injected into the client bundle via Vite defines.
+ *
+ * @internal - Used by framework internals only
+ */
+export function getRpcClientConfig(config: HeliumConfig = {}): RpcClientTransportConfig {
+    return {
+        transport: config.rpc?.transport ?? "websocket",
+        autoHttpOnMobile: config.rpc?.autoHttpOnMobile ?? false,
     };
 }
 

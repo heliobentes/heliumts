@@ -13,6 +13,11 @@ interface SocketMetadata {
     req: http.IncomingMessage;
 }
 
+export interface HttpRpcResult {
+    response: RpcResponse;
+    encoding: "json" | "msgpack";
+}
+
 export class RpcRegistry {
     private methods = new Map<string, HeliumMethodDef<any, any>>();
     private middleware: HeliumMiddleware | null = null;
@@ -165,6 +170,110 @@ export class RpcRegistry {
             } else {
                 socket.send(JSON.stringify(res));
             }
+        }
+    }
+
+    /**
+     * Handle an HTTP-based RPC request.
+     * This is an alternative to WebSocket for environments where HTTP performs better
+     * (e.g., mobile networks with high latency where HTTP/2 multiplexing helps).
+     */
+    async handleHttpRequest(reqBody: Buffer | string, ip: string, httpReq: http.IncomingMessage): Promise<HttpRpcResult> {
+        let req: RpcRequest;
+        let useMsgpack = false;
+
+        try {
+            // Check content type to determine encoding
+            const contentType = httpReq.headers["content-type"] || "";
+            if (contentType.includes("application/msgpack")) {
+                const buffer = Buffer.isBuffer(reqBody) ? reqBody : Buffer.from(reqBody);
+                req = msgpackDecode(buffer) as RpcRequest;
+                useMsgpack = true;
+            } else {
+                const str = Buffer.isBuffer(reqBody) ? reqBody.toString() : reqBody;
+                req = JSON.parse(str);
+            }
+        } catch {
+            const errorResponse: RpcResponse = {
+                id: "unknown",
+                ok: false,
+                stats: { remainingRequests: 0, resetInSeconds: 0 },
+                error: "Invalid request format",
+            };
+            return {
+                response: errorResponse,
+                encoding: useMsgpack ? "msgpack" : "json",
+            };
+        }
+
+        const def = this.methods.get(req.method);
+        if (!def) {
+            const res: RpcResponse = {
+                id: req.id,
+                ok: false,
+                stats: { remainingRequests: Infinity, resetInSeconds: 0 },
+                error: `Unknown method ${req.method}`,
+            };
+            return { response: res, encoding: useMsgpack ? "msgpack" : "json" };
+        }
+
+        try {
+            // Build context with request metadata
+            const ctx: HeliumContext = {
+                req: {
+                    ip,
+                    headers: httpReq.headers,
+                    url: httpReq.url,
+                    method: httpReq.method,
+                    raw: httpReq,
+                },
+            };
+            let result: unknown;
+
+            // Execute middleware if present
+            if (this.middleware) {
+                let nextCalled = false;
+                await this.middleware.handler(
+                    {
+                        ctx,
+                        type: "method",
+                        methodName: req.method,
+                    },
+                    async () => {
+                        nextCalled = true;
+                        result = await def.handler(req.args, ctx);
+                    }
+                );
+
+                if (!nextCalled) {
+                    const res: RpcResponse = {
+                        id: req.id,
+                        ok: false,
+                        stats: { remainingRequests: Infinity, resetInSeconds: 0 },
+                        error: "Request blocked by middleware",
+                    };
+                    return { response: res, encoding: useMsgpack ? "msgpack" : "json" };
+                }
+            } else {
+                result = await def.handler(req.args, ctx);
+            }
+
+            const res: RpcResponse = {
+                id: req.id,
+                ok: true,
+                stats: { remainingRequests: Infinity, resetInSeconds: 0 },
+                result,
+            };
+            return { response: res, encoding: useMsgpack ? "msgpack" : "json" };
+        } catch (err: unknown) {
+            const errorMessage = err instanceof Error ? err.message : "Server error";
+            const res: RpcResponse = {
+                id: req.id,
+                ok: false,
+                stats: { remainingRequests: Infinity, resetInSeconds: 0 },
+                error: errorMessage,
+            };
+            return { response: res, encoding: useMsgpack ? "msgpack" : "json" };
         }
     }
 }

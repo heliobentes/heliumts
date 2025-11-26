@@ -24,6 +24,53 @@ export default config;
 
 The `rpc` section configures WebSocket-based RPC communication between client and server.
 
+#### Transport Mode
+
+Configure the client-side transport for RPC calls:
+
+```typescript
+const config: HeliumConfig = {
+    rpc: {
+        transport: "websocket",    // "websocket" | "http" | "auto"
+        autoHttpOnMobile: false,   // Automatically use HTTP on mobile networks
+    },
+};
+```
+
+**Transport Options:**
+
+- **`"websocket"`** (default): Uses persistent WebSocket connection
+  - ✅ Lower latency for subsequent calls (connection reuse)
+  - ✅ Real-time bidirectional communication ready
+  - ⚠️ Higher initial connection overhead on high-latency networks
+
+- **`"http"`**: Uses HTTP POST requests for each RPC call
+  - ✅ Better performance on mobile/cellular networks (HTTP/2 optimizations)
+  - ✅ No connection state to maintain
+  - ⚠️ Slightly higher per-request overhead on fast networks
+
+- **`"auto"`**: Automatically selects based on network conditions
+  - Uses HTTP on cellular/slow networks when `autoHttpOnMobile` is `true`
+  - Uses WebSocket on fast networks (WiFi, wired)
+
+**Auto HTTP on Mobile:**
+
+When `autoHttpOnMobile` is enabled and `transport` is set to `"auto"`, the client will automatically use HTTP transport on:
+- Cellular connections (4G/LTE, 5G)
+- Slow connections (2G, 3G)
+
+This improves performance on mobile networks where HTTP/2 multiplexing is more efficient than WebSocket due to carrier network optimizations.
+
+```typescript
+// Optimize for mobile performance
+const config: HeliumConfig = {
+    rpc: {
+        transport: "auto",
+        autoHttpOnMobile: true,
+    },
+};
+```
+
 #### Message Encoding
 
 Choose how messages are serialized over the WebSocket connection:
@@ -183,6 +230,10 @@ const config: HeliumConfig = {
 
     // RPC configuration
     rpc: {
+        // Client-side transport mode
+        transport: "websocket",    // Default: WebSocket for lowest latency
+        autoHttpOnMobile: false,   // Set to true to optimize for mobile networks
+
         // Use MessagePack for better performance
         encoding: "msgpack",
 

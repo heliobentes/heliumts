@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import type { Plugin } from "vite";
 
-import { clearConfigCache, loadConfig } from "../server/config.js";
+import { clearConfigCache, getRpcClientConfig, loadConfig } from "../server/config.js";
 import { attachToDevServer } from "../server/devServer.js";
 import { createEnvDefines, injectEnvToProcess, loadEnvFiles } from "../utils/envLoader.js";
 import { log } from "../utils/logger.js";
@@ -68,13 +68,17 @@ export default function helium(): Plugin {
                 ];
             },
         },
-        config(config) {
+        async config(config) {
             // Load environment variables before config is finalized
             const mode = config.mode || "development";
             const envVars = loadEnvFiles({ root, mode });
 
             // Create defines for client-side env variables
             const envDefines = createEnvDefines(envVars);
+
+            // Load helium config to get client-side RPC transport settings
+            const heliumConfig = await loadConfig(root);
+            const rpcClientConfig = getRpcClientConfig(heliumConfig);
 
             // Provide default index.html if none exists
             return {
@@ -84,6 +88,8 @@ export default function helium(): Plugin {
                 },
                 define: {
                     ...envDefines,
+                    __HELIUM_RPC_TRANSPORT__: JSON.stringify(rpcClientConfig.transport),
+                    __HELIUM_RPC_AUTO_HTTP_ON_MOBILE__: JSON.stringify(rpcClientConfig.autoHttpOnMobile),
                 },
             };
         },

@@ -58,6 +58,34 @@ export function startProdServer(options: ProdServerOptions) {
             return;
         }
 
+        // Handle HTTP-based RPC endpoint (alternative to WebSocket for mobile networks)
+        if (req.url === "/__helium__/rpc" && req.method === "POST") {
+            const chunks: Buffer[] = [];
+            req.on("data", (chunk: Buffer) => chunks.push(chunk));
+            req.on("end", async () => {
+                try {
+                    const body = Buffer.concat(chunks);
+                    const ip = extractClientIP(req, trustProxyDepth);
+                    const result = await registry.handleHttpRequest(body, ip, req);
+
+                    const contentType = result.encoding === "msgpack" ? "application/msgpack" : "application/json";
+                    const encoded = result.encoding === "msgpack" ? msgpackEncode(result.response) : null;
+                    const responseBody = encoded ? Buffer.from(encoded as Uint8Array) : JSON.stringify(result.response);
+
+                    res.writeHead(200, {
+                        "Content-Type": contentType,
+                        "Cache-Control": "no-store",
+                    });
+                    res.end(responseBody);
+                } catch (error) {
+                    log("error", "HTTP RPC error:", error);
+                    res.writeHead(500, { "Content-Type": "application/json" });
+                    res.end(JSON.stringify({ ok: false, error: "Internal server error" }));
+                }
+            });
+            return;
+        }
+
         // Try HTTP handlers first (webhooks, auth, etc.)
         const handled = await httpRouter.handleRequest(req, res);
         if (handled) {
