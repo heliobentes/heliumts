@@ -117,6 +117,23 @@ let connectionPromise: Promise<WebSocket> | null = null;
 
 const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
 
+// Clean up WebSocket connection on HMR (Hot Module Replacement)
+if (import.meta.hot) {
+    import.meta.hot.dispose(() => {
+        if (socket) {
+            // Close the socket gracefully
+            socket.close();
+            socket = null;
+            connectionPromise = null;
+        }
+        // Reject all pending requests
+        pending.forEach((entry) => {
+            entry.reject(new Error("Module reloaded"));
+        });
+        pending.clear();
+    });
+}
+
 function uuid() {
     return Math.random().toString(36).slice(2);
 }
