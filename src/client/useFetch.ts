@@ -106,6 +106,54 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
         };
     }, [key, method.__id, ttl, enabled]);
 
+    // This is used to automatically refetch data after TTL expires
+    useEffect(() => {
+        if (!enabled || !ttl) {
+            return;
+        }
+
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+        const scheduleRefetch = () => {
+            // Clear any existing timeout
+            if (timeoutId !== undefined) {
+                clearTimeout(timeoutId);
+            }
+
+            // Schedule refetch after TTL
+            timeoutId = setTimeout(() => {
+                if (enabled) {
+                    rpcCall<TResult, TArgs>(method.__id, args as TArgs)
+                        .then((result) => {
+                            set(key, result.data, ttl);
+                            setData(result.data);
+                            setStats(result.stats);
+                            setError(null);
+                            // Schedule next refetch
+                            scheduleRefetch();
+                        })
+                        .catch((err) => {
+                            setError(err.error);
+                            setStats(err.stats);
+                            // Still schedule next refetch even on error
+                            scheduleRefetch();
+                        });
+                }
+            }, ttl);
+        };
+
+        // Only schedule if data is already cached
+        if (has(key)) {
+            scheduleRefetch();
+        }
+
+        return () => {
+            if (timeoutId !== undefined) {
+                clearTimeout(timeoutId);
+            }
+        };
+    }, [key, method.__id, args, ttl, enabled]);
+
     // This is used to manually refetch data
     const refetch = useCallback(async () => {
         setLoading(true);
