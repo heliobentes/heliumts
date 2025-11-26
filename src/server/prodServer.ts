@@ -25,8 +25,15 @@ interface ProdServerOptions {
 /**
  * Starts a production HTTP server that:
  * - Serves static files from the dist directory
+ * - Supports SSG (Static Site Generation) by serving .html files for routes (e.g., /about -> about.html)
+ * - Falls back to index.html for client-side routing (SPA)
  * - Handles custom HTTP endpoints (webhooks, auth, etc.)
  * - Hosts WebSocket RPC server
+ *
+ * SSG Behavior:
+ * - Production correctly serves SSG pages (e.g., /about serves about.html with pre-rendered content)
+ * - This ensures search engines and social media crawlers see the correct content
+ * - Client-side navigation between pages still works via React Router
  */
 export function startProdServer(options: ProdServerOptions) {
     const { port = Number(process.env.PORT || 3000), distDir = "dist", staticDir = path.resolve(process.cwd(), distDir), registerHandlers, config = {} } = options;
@@ -112,7 +119,13 @@ export function startProdServer(options: ProdServerOptions) {
 
             // Try different file paths for SSG support
             if (cleanUrl === "/") {
-                filePath = path.join(staticDir, "index.html");
+                // Try index.ssg.html first (if root page has SSG)
+                const ssgIndexPath = path.join(staticDir, "index.ssg.html");
+                if (fs.existsSync(ssgIndexPath)) {
+                    filePath = ssgIndexPath;
+                } else {
+                    filePath = path.join(staticDir, "index.html");
+                }
             } else {
                 // First, try the exact path (for assets like /assets/main.js)
                 filePath = path.join(staticDir, cleanUrl);

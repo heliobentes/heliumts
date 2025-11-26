@@ -189,13 +189,13 @@ function filePathToUrlPath(relativePath: string): string {
 
 /**
  * Convert URL path to output file path
- * / -> index.html
+ * / -> __index.html (special case - renamed later to prevent conflicts)
  * /about -> about.html
  * /blog/post -> blog/post.html
  */
 function urlPathToOutputPath(urlPath: string): string {
     if (urlPath === "/") {
-        return "index.html";
+        return "__index.html";
     }
 
     // Remove leading slash and add .html extension
@@ -481,6 +481,7 @@ export const cache = {
         const zlib = await import("zlib");
         let successCount = 0;
         let failureCount = 0;
+        let hasIndexSSG = false;
 
         for (const page of staticPages) {
             try {
@@ -488,6 +489,11 @@ export const cache = {
                 const html = await renderPageToHTML(page, root, htmlTemplate, viteServer, 10000);
                 const outputPath = urlPathToOutputPath(page.urlPath);
                 const fullOutputPath = path.join(distDir, outputPath);
+
+                // Track if the root page (/) has SSG
+                if (page.urlPath === "/") {
+                    hasIndexSSG = true;
+                }
 
                 // Ensure directory exists
                 const outputDir = path.dirname(fullOutputPath);
@@ -530,6 +536,27 @@ export const cache = {
 
                 failureCount++;
             }
+        }
+
+        // If index page has SSG, we need to handle it specially:
+        // 1. Rename __index.html to index.ssg.html (the SSG version)
+        // 2. Create a clean blank index.html as fallback for non-root routes
+        if (hasIndexSSG) {
+            const tempIndexPath = path.join(distDir, "__index.html");
+            const ssgIndexPath = path.join(distDir, "index.ssg.html");
+            const indexPath = path.join(distDir, "index.html");
+
+            // Move __index.html to index.ssg.html
+            if (fs.existsSync(tempIndexPath)) {
+                fs.renameSync(tempIndexPath, ssgIndexPath);
+            }
+
+            // Create a blank index.html as the SPA fallback
+            const blankIndexHtml = htmlTemplate.replace(/<div\s+id="root"[^>]*>.*?<\/div>/s, '<div id="root"></div>');
+            fs.writeFileSync(indexPath, blankIndexHtml, "utf-8");
+
+            log("info", "  index.ssg.html          (SSG root page)");
+            log("info", "  index.html              (blank SPA fallback)");
         }
 
         // Summary

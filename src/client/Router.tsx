@@ -1,11 +1,8 @@
 import type { ComponentType } from "react";
 import React, { useEffect, useMemo, useState } from "react";
 
+import type { RouteEntry } from "./routerManifest.js";
 import { buildRoutes } from "./routerManifest.js";
-
-// Build routes at module load time (client-side only)
-// During SSR, this will return empty routes
-const { routes, NotFound } = typeof window !== "undefined" ? buildRoutes() : { routes: [], NotFound: undefined };
 
 // Event emitter for router events
 type RouterEvent = "navigation" | "before-navigation";
@@ -62,7 +59,7 @@ function getLocation(): RouterState {
     };
 }
 
-function matchRoute(path: string) {
+function matchRoute(path: string, routes: RouteEntry[]) {
     for (const r of routes) {
         const m = r.matcher(path);
         if (m) {
@@ -205,7 +202,22 @@ export type AppShellProps = {
 
 // Main router component
 export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps> }) {
-    const [state, setState] = useState<RouterState>(() => (typeof window === "undefined" ? { path: "/", searchParams: new URLSearchParams() } : getLocation()));
+    // Build routes once on mount (client-side only)
+    const { routes, NotFound } = useMemo(() => {
+        if (typeof window === "undefined") {
+            return { routes: [], NotFound: undefined };
+        }
+        return buildRoutes();
+    }, []);
+
+    // Always use the current location if running in browser
+    // This prevents hydration mismatches and flash of wrong route
+    const [state, setState] = useState<RouterState>(() => {
+        if (typeof window === "undefined") {
+            return { path: "/", searchParams: new URLSearchParams() };
+        }
+        return getLocation();
+    });
 
     useEffect(() => {
         const onPop = () => setState(getLocation());
@@ -213,7 +225,7 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
         return () => window.removeEventListener("popstate", onPop);
     }, []);
 
-    const match = useMemo(() => matchRoute(state.path), [state.path]);
+    const match = useMemo(() => matchRoute(state.path, routes), [state.path, routes]);
 
     const routerValue: RouterContext = {
         path: state.path,

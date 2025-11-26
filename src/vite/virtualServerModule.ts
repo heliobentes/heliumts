@@ -77,7 +77,7 @@ import App from '/src/App';
 
 const rootEl = document.getElementById('root');
 if (!rootEl) {
-    throw new Error('Root element not found. Helium requires a <div id="root"></div> in your HTML.');
+    throw new Error('Root element not found. Helium requires a <div id=\"root\"></div> in your HTML.');
 }
 
 createRoot(rootEl).render(
