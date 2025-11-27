@@ -2,8 +2,10 @@ import { encode as msgpackEncode } from "@msgpack/msgpack";
 import type http from "http";
 import type http2 from "http2";
 import type https from "https";
+import { promisify } from "util";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
+import { brotliCompress, deflate, gzip } from "zlib";
 
 import { injectEnvToProcess, loadEnvFiles } from "../utils/envLoader.js";
 import { extractClientIP } from "../utils/ipExtractor.js";
@@ -15,6 +17,10 @@ import { RateLimiter } from "./rateLimiter.js";
 import { RpcRegistry } from "./rpcRegistry.js";
 import { initializeSecurity, verifyConnectionToken } from "./security.js";
 import { prepareForMsgpack } from "./serializer.js";
+
+const gzipAsync = promisify(gzip);
+const deflateAsync = promisify(deflate);
+const brotliCompressAsync = promisify(brotliCompress);
 
 type LoadHandlersFn = (registry: RpcRegistry, httpRouter: HTTPRouter) => void;
 type HttpServer = http.Server | https.Server | http2.Http2Server | http2.Http2SecureServer;
@@ -198,12 +204,28 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
                     const result = await currentRegistry.handleHttpRequest(body, ip, req);
 
                     const encoded = msgpackEncode(prepareForMsgpack(result.response));
-                    const responseBody = Buffer.from(encoded as Uint8Array);
-
-                    res.writeHead(200, {
+                    let responseBody = Buffer.from(encoded as Uint8Array);
+                    const headers: Record<string, string> = {
                         "Content-Type": "application/msgpack",
                         "Cache-Control": "no-store",
-                    });
+                    };
+
+                    // Handle compression
+                    const acceptEncoding = req.headers["accept-encoding"] as string;
+                    if (acceptEncoding && responseBody.length > 1024) {
+                        if (acceptEncoding.includes("br")) {
+                            responseBody = await brotliCompressAsync(responseBody);
+                            headers["Content-Encoding"] = "br";
+                        } else if (acceptEncoding.includes("gzip")) {
+                            responseBody = await gzipAsync(responseBody);
+                            headers["Content-Encoding"] = "gzip";
+                        } else if (acceptEncoding.includes("deflate")) {
+                            responseBody = await deflateAsync(responseBody);
+                            headers["Content-Encoding"] = "deflate";
+                        }
+                    }
+
+                    res.writeHead(200, headers);
                     res.end(responseBody);
                 } catch (error) {
                     log("error", "HTTP RPC error:", error);

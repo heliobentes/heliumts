@@ -239,9 +239,30 @@ async function createSocket(): Promise<WebSocket> {
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
 
-    ws.onmessage = (event) => {
+    ws.onmessage = async (event) => {
+        let data = new Uint8Array(event.data as ArrayBuffer);
+
+        // Check for Gzip header (0x1f 0x8b) to detect compressed messages
+        if (data.length > 2 && data[0] === 0x1f && data[1] === 0x8b) {
+            try {
+                // Use DecompressionStream if available (Chrome 80+, Firefox 113+, Safari 16.4+)
+                if (typeof DecompressionStream !== "undefined") {
+                    const ds = new DecompressionStream("gzip");
+                    const stream = new Response(data).body;
+                    if (stream) {
+                        const decompressed = stream.pipeThrough(ds);
+                        const buffer = await new Response(decompressed).arrayBuffer();
+                        data = new Uint8Array(buffer);
+                    }
+                }
+            } catch (err) {
+                console.error("Failed to decompress WebSocket message:", err);
+                return;
+            }
+        }
+
         // Always expect binary MessagePack
-        const msg = msgpackDecode(new Uint8Array(event.data as ArrayBuffer)) as RpcResponse | RpcResponse[];
+        const msg = msgpackDecode(data) as RpcResponse | RpcResponse[];
 
         const handleResponse = (res: RpcResponse) => {
             const entry = pending.get(res.id);

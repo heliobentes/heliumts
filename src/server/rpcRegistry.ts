@@ -1,6 +1,8 @@
 import { decode as msgpackDecode, encode as msgpackEncode } from "@msgpack/msgpack";
 import type http from "http";
+import { promisify } from "util";
 import WebSocket from "ws";
+import { gzip } from "zlib";
 
 import type { RpcRequest, RpcResponse, RpcStats } from "../runtime/protocol.js";
 import type { HeliumContext } from "./context.js";
@@ -8,6 +10,8 @@ import type { HeliumMethodDef } from "./defineMethod.js";
 import type { HeliumMiddleware } from "./middleware.js";
 import type { RateLimiter } from "./rateLimiter.js";
 import { prepareForMsgpack } from "./serializer.js";
+
+const gzipAsync = promisify(gzip);
 
 interface SocketMetadata {
     ip: string;
@@ -151,7 +155,14 @@ export class RpcRegistry {
             response = await this.processRequest(req, socket);
         }
 
-        socket.send(msgpackEncode(prepareForMsgpack(response)) as Buffer);
+        const encoded = msgpackEncode(prepareForMsgpack(response));
+        // Compress if larger than 1KB
+        if (encoded.length > 1024) {
+            const compressed = await gzipAsync(encoded);
+            socket.send(compressed);
+        } else {
+            socket.send(encoded as Buffer);
+        }
     }
 
     private async processRequestHttp(req: RpcRequest, ip: string, httpReq: http.IncomingMessage): Promise<RpcResponse> {
