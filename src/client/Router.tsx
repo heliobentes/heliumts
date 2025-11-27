@@ -127,8 +127,6 @@ function navigate(href: string, replace = false) {
     } else {
         window.history.pushState(null, "", href);
     }
-    const navEvent = new PopStateEvent("popstate");
-    window.dispatchEvent(navEvent);
 
     // Emit navigation event after navigation completes
     routerEventEmitter.emit("navigation", { from, to });
@@ -220,9 +218,13 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
     });
 
     useEffect(() => {
-        const onPop = () => setState(getLocation());
-        window.addEventListener("popstate", onPop);
-        return () => window.removeEventListener("popstate", onPop);
+        const onLocationChange = () => setState(getLocation());
+        window.addEventListener("popstate", onLocationChange);
+        const unsubscribe = routerEventEmitter.on("navigation", onLocationChange);
+        return () => {
+            window.removeEventListener("popstate", onLocationChange);
+            unsubscribe();
+        };
     }, []);
 
     const match = useMemo(() => matchRoute(state.path, routes), [state.path, routes]);
