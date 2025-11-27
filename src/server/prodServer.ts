@@ -13,6 +13,7 @@ import { HTTPRouter } from "./httpRouter.js";
 import { RateLimiter } from "./rateLimiter.js";
 import { RpcRegistry } from "./rpcRegistry.js";
 import { generateConnectionToken, initializeSecurity, verifyConnectionToken } from "./security.js";
+import { prepareForMsgpack } from "./serializer.js";
 
 interface ProdServerOptions {
     port?: number;
@@ -74,7 +75,7 @@ export function startProdServer(options: ProdServerOptions) {
                     const ip = extractClientIP(req, trustProxyDepth);
                     const result = await registry.handleHttpRequest(body, ip, req);
 
-                    const encoded = msgpackEncode(result.response);
+                    const encoded = msgpackEncode(prepareForMsgpack(result.response));
                     const responseBody = Buffer.from(encoded as Uint8Array);
 
                     res.writeHead(200, {

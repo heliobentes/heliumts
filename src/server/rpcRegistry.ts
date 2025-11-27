@@ -7,6 +7,7 @@ import type { HeliumContext } from "./context.js";
 import type { HeliumMethodDef } from "./defineMethod.js";
 import type { HeliumMiddleware } from "./middleware.js";
 import type { RateLimiter } from "./rateLimiter.js";
+import { prepareForMsgpack } from "./serializer.js";
 
 interface SocketMetadata {
     ip: string;
@@ -150,7 +151,7 @@ export class RpcRegistry {
             response = await this.processRequest(req, socket);
         }
 
-        socket.send(msgpackEncode(response) as Buffer);
+        socket.send(msgpackEncode(prepareForMsgpack(response)) as Buffer);
     }
 
     private async processRequestHttp(req: RpcRequest, ip: string, httpReq: http.IncomingMessage): Promise<RpcResponse> {

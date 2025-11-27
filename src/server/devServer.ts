@@ -14,6 +14,7 @@ import { HTTPRouter } from "./httpRouter.js";
 import { RateLimiter } from "./rateLimiter.js";
 import { RpcRegistry } from "./rpcRegistry.js";
 import { initializeSecurity, verifyConnectionToken } from "./security.js";
+import { prepareForMsgpack } from "./serializer.js";
 
 type LoadHandlersFn = (registry: RpcRegistry, httpRouter: HTTPRouter) => void;
 type HttpServer = http.Server | https.Server | http2.Http2Server | http2.Http2SecureServer;
@@ -196,7 +197,7 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
                     const ip = extractClientIP(req, trustProxyDepth);
                     const result = await currentRegistry.handleHttpRequest(body, ip, req);
 
-                    const encoded = msgpackEncode(result.response);
+                    const encoded = msgpackEncode(prepareForMsgpack(result.response));
                     const responseBody = Buffer.from(encoded as Uint8Array);
 
                     res.writeHead(200, {
