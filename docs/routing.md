@@ -43,8 +43,8 @@ import { useRouter } from "helium/client";
 
 export default function UserPage() {
     const router = useRouter();
-    const userId = router.params.id;  // Get the dynamic parameter
-    
+    const userId = router.params.id; // Get the dynamic parameter
+
     return <div>User ID: {userId}</div>;
 }
 ```
@@ -67,9 +67,9 @@ import { useRouter } from "helium/client";
 
 export default function DocsPage() {
     const router = useRouter();
-    const slug = router.params.slug;  // Array of path segments
-    
-    return <div>Docs path: {Array.isArray(slug) ? slug.join('/') : slug}</div>;
+    const slug = router.params.slug; // Array of path segments
+
+    return <div>Docs path: {Array.isArray(slug) ? slug.join("/") : slug}</div>;
 }
 ```
 
@@ -109,6 +109,7 @@ src/pages/
 ```
 
 The route group folders `(marketing)`, `(app)`, and `(auth)` are **stripped from URLs** but allow you to:
+
 - Organize related pages
 - Apply different layouts per group
 - Keep code organized by feature/domain
@@ -222,15 +223,15 @@ import { useRouter } from "helium/client";
 
 export default function LoginPage() {
     const router = useRouter();
-    
+
     const handleLogin = async () => {
         // Perform login
         await login();
-        
+
         // Navigate to dashboard
         router.push("/dashboard");
     };
-    
+
     return <button onClick={handleLogin}>Login</button>;
 }
 ```
@@ -246,13 +247,13 @@ import { useRouter } from "helium/client";
 
 export default function MyComponent() {
     const router = useRouter();
-    
+
     // Access router properties
     console.log(router.path);
     console.log(router.params);
     console.log(router.searchParams);
     console.log(router.status);
-    
+
     return <div>...</div>;
 }
 ```
@@ -265,7 +266,7 @@ Current pathname (without query string):
 
 ```tsx
 const router = useRouter();
-console.log(router.path);  // "/blog/my-post"
+console.log(router.path); // "/blog/my-post"
 ```
 
 #### `params` (Record<string, string | string[]>)
@@ -275,11 +276,11 @@ Dynamic route parameters:
 ```tsx
 // URL: /users/123
 const router = useRouter();
-console.log(router.params.id);  // "123"
+console.log(router.params.id); // "123"
 
 // URL: /docs/guide/getting-started
 const router = useRouter();
-console.log(router.params.slug);  // ["guide", "getting-started"]
+console.log(router.params.slug); // ["guide", "getting-started"]
 ```
 
 #### `searchParams` (URLSearchParams)
@@ -289,12 +290,12 @@ URL query parameters:
 ```tsx
 // URL: /search?q=hello&page=2
 const router = useRouter();
-console.log(router.searchParams.get("q"));      // "hello"
-console.log(router.searchParams.get("page"));   // "2"
+console.log(router.searchParams.get("q")); // "hello"
+console.log(router.searchParams.get("page")); // "2"
 
 // Get all values
 const allParams = Object.fromEntries(router.searchParams);
-console.log(allParams);  // { q: "hello", page: "2" }
+console.log(allParams); // { q: "hello", page: "2" }
 ```
 
 #### `status` (200 | 404)
@@ -309,6 +310,21 @@ if (router.status === 404) {
 }
 
 return <div>Content</div>;
+```
+
+#### `isNavigating` (boolean)
+
+Indicates whether a navigation is currently in progress. This is useful for showing loading indicators during page transitions:
+
+```tsx
+const router = useRouter();
+
+return (
+    <div>
+        {router.isNavigating && <LoadingSpinner />}
+        <main>{/* page content */}</main>
+    </div>
+);
 ```
 
 ### Methods
@@ -337,6 +353,7 @@ router.replace("/login");
 ```
 
 **Use cases:**
+
 - Redirects after authentication
 - Replacing temporary URLs
 - Preventing back navigation to intermediate states
@@ -381,11 +398,11 @@ export default function OldPage() {
 // Conditional redirect
 export default function ProtectedPage() {
     const isAuthenticated = useAuth();
-    
+
     if (!isAuthenticated) {
         return <Redirect to="/login" />;
     }
-    
+
     return <div>Protected content</div>;
 }
 ```
@@ -402,7 +419,7 @@ useEffect(() => {
     const unsubscribe = router.on("navigation", (event) => {
         console.log(`Navigated from ${event.from} to ${event.to}`);
     });
-    
+
     // Cleanup
     return unsubscribe;
 }, [router]);
@@ -435,16 +452,16 @@ import { useEffect } from "react";
 
 export default function Analytics() {
     const router = useRouter();
-    
+
     useEffect(() => {
         const unsubscribe = router.on("navigation", (event) => {
             // Track page view
             trackPageView(event.to);
         });
-        
+
         return unsubscribe;
     }, [router]);
-    
+
     return null;
 }
 ```
@@ -460,23 +477,21 @@ import { useEffect } from "react";
 export default function UnsavedChangesGuard() {
     const router = useRouter();
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-    
+
     useEffect(() => {
         const unsubscribe = router.on("before-navigation", (event) => {
             if (hasUnsavedChanges) {
-                const confirmed = window.confirm(
-                    "You have unsaved changes. Do you want to leave?"
-                );
-                
+                const confirmed = window.confirm("You have unsaved changes. Do you want to leave?");
+
                 if (!confirmed) {
-                    event.preventDefault?.();  // Prevent navigation
+                    event.preventDefault?.(); // Prevent navigation
                 }
             }
         });
-        
+
         return unsubscribe;
     }, [router, hasUnsavedChanges]);
-    
+
     return <form>...</form>;
 }
 ```
@@ -494,12 +509,12 @@ import { getBlogPost } from "helium/server";
 export default function BlogPostPage() {
     const router = useRouter();
     const slug = router.params.slug as string;
-    
+
     const { data: post, isLoading } = useFetch(getBlogPost, { slug });
-    
+
     if (isLoading) return <div>Loading...</div>;
     if (!post) return <div>Post not found</div>;
-    
+
     return (
         <article>
             <h1>{post.title}</h1>
@@ -520,25 +535,25 @@ import { searchProducts } from "helium/server";
 export default function SearchPage() {
     const router = useRouter();
     const query = router.searchParams.get("q") || "";
-    
+
     const { data: results } = useFetch(searchProducts, { query });
-    
+
     const handleSearch = (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         const formData = new FormData(e.currentTarget);
         const q = formData.get("q");
         router.push(`/search?q=${q}`);
     };
-    
+
     return (
         <div>
             <form onSubmit={handleSearch}>
                 <input name="q" defaultValue={query} />
                 <button type="submit">Search</button>
             </form>
-            
+
             <div>
-                {results?.map(product => (
+                {results?.map((product) => (
                     <div key={product.id}>{product.name}</div>
                 ))}
             </div>
@@ -554,12 +569,12 @@ export default function SearchPage() {
 import { Redirect } from "helium/client";
 
 export default function DashboardPage() {
-    const isAuthenticated = checkAuth();  // Your auth logic
-    
+    const isAuthenticated = checkAuth(); // Your auth logic
+
     if (!isAuthenticated) {
         return <Redirect to="/login" replace />;
     }
-    
+
     return <div>Dashboard content</div>;
 }
 ```
@@ -574,7 +589,7 @@ import { Link } from "helium/client";
 export default function Breadcrumbs() {
     const router = useRouter();
     const pathSegments = router.path.split("/").filter(Boolean);
-    
+
     return (
         <nav>
             <Link href="/">Home</Link>
@@ -601,20 +616,20 @@ import { useEffect } from "react";
 
 export default function Analytics() {
     const router = useRouter();
-    
+
     useEffect(() => {
         // Track initial page view
         trackPageView(router.path);
-        
+
         // Track subsequent navigations
         const unsubscribe = router.on("navigation", (event) => {
             trackPageView(event.to);
             trackNavigationTime(event.from, event.to);
         });
-        
+
         return unsubscribe;
     }, [router]);
-    
+
     return null;
 }
 
@@ -626,6 +641,42 @@ function trackPageView(path: string) {
 function trackNavigationTime(from: string, to: string) {
     console.log(`Navigation: ${from} → ${to}`);
     // Track navigation performance
+}
+```
+
+### Global Loading Indicator
+
+```tsx
+// src/components/NavigationLoader.tsx
+import { useRouter } from "helium/client";
+
+export default function NavigationLoader() {
+    const router = useRouter();
+
+    if (!router.isNavigating) {
+        return null;
+    }
+
+    return (
+        <div className="fixed top-0 left-0 right-0 z-50">
+            <div className="h-1 bg-blue-500 animate-pulse" />
+        </div>
+    );
+}
+
+// Use in your root layout
+// src/pages/_layout.tsx
+import NavigationLoader from "../components/NavigationLoader";
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+    return (
+        <div>
+            <NavigationLoader />
+            <header>Global Header</header>
+            <main>{children}</main>
+            <footer>Global Footer</footer>
+        </div>
+    );
 }
 ```
 
@@ -641,6 +692,7 @@ Only the first file will be used.
 ```
 
 **Common causes:**
+
 - Multiple `index.tsx` files at the same level
 - Same filename in different route groups
 - Mixed grouped and non-grouped files
@@ -674,7 +726,7 @@ type UserPageParams = {
 export default function UserPage() {
     const router = useRouter();
     const { id } = router.params as UserPageParams;
-    
+
     // id is typed as string
     return <div>User: {id}</div>;
 }
@@ -687,12 +739,16 @@ import { useRouter } from "helium/client";
 
 export default function SearchPage() {
     const router = useRouter();
-    
+
     const query = router.searchParams.get("q") ?? "";
     const page = Number(router.searchParams.get("page") ?? "1");
-    
+
     // query: string, page: number
-    return <div>Search: {query}, Page: {page}</div>;
+    return (
+        <div>
+            Search: {query}, Page: {page}
+        </div>
+    );
 }
 ```
 
@@ -708,11 +764,7 @@ export default function SearchPage() {
 // src/main.tsx
 import { AppRouter } from "helium/client";
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-    <AppRouter>
-        {/* Your app */}
-    </AppRouter>
-);
+ReactDOM.createRoot(document.getElementById("root")!).render(<AppRouter>{/* Your app */}</AppRouter>);
 ```
 
 ### Dynamic params are undefined
@@ -720,6 +772,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 **Cause:** Wrong param name or file structure
 
 **Solution:** Ensure param name matches filename:
+
 - File: `[id].tsx` → Param: `router.params.id`
 - File: `[slug].tsx` → Param: `router.params.slug`
 

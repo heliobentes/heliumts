@@ -66,6 +66,7 @@ if (typeof window !== "undefined" && import.meta.env?.DEV) {
 type RouterState = {
     path: string;
     searchParams: URLSearchParams;
+    isNavigating: boolean;
 };
 
 function getLocation(): RouterState {
@@ -73,6 +74,7 @@ function getLocation(): RouterState {
     return {
         path: pathname,
         searchParams: new URLSearchParams(search),
+        isNavigating: false,
     };
 }
 
@@ -87,7 +89,7 @@ function matchRoute(path: string, routes: RouteEntry[]) {
 }
 
 // Location store for useSyncExternalStore
-let currentLocation = typeof window !== "undefined" ? getLocation() : { path: "/", searchParams: new URLSearchParams() };
+let currentLocation = typeof window !== "undefined" ? getLocation() : { path: "/", searchParams: new URLSearchParams(), isNavigating: false };
 const locationListeners = new Set<() => void>();
 
 function subscribeToLocation(callback: () => void) {
@@ -100,11 +102,11 @@ function getLocationSnapshot() {
 }
 
 function getServerSnapshot() {
-    return { path: "/", searchParams: new URLSearchParams() };
+    return { path: "/", searchParams: new URLSearchParams(), isNavigating: false };
 }
 
-function updateLocation() {
-    currentLocation = getLocation();
+function updateLocation(isNavigating = false) {
+    currentLocation = { ...getLocation(), isNavigating };
     locationListeners.forEach((listener) => listener());
 }
 
@@ -115,10 +117,10 @@ if (typeof window !== "undefined") {
     if (!globalWindow.__heliumLocationListenerSetup) {
         globalWindow.__heliumLocationListenerSetup = true;
 
-        window.addEventListener("popstate", updateLocation);
+        window.addEventListener("popstate", () => updateLocation(false));
 
         // Also listen to navigation events from the emitter
-        routerEventEmitter.on("navigation", updateLocation);
+        routerEventEmitter.on("navigation", () => updateLocation(false));
     }
 }
 
@@ -131,6 +133,7 @@ type RouterContext = {
     replace: (href: string) => void;
     on: (event: RouterEvent, listener: EventListener) => () => void;
     status: 200 | 404;
+    isNavigating: boolean;
 };
 
 export const RouterContext = React.createContext<RouterContext | null>(null);
@@ -140,6 +143,7 @@ export const RouterContext = React.createContext<RouterContext | null>(null);
  *
  * Provides current path, route params, URL search params and navigation helpers
  * (\`push\`, \`replace\`) as well as an \`on\` method to subscribe to navigation events.
+ * The \`isNavigating\` property indicates when a navigation is in progress.
  * Throws when used outside of an <AppRouter /> provider.
  */
 export function useRouter() {
@@ -163,6 +167,7 @@ export function useRouter() {
                 },
                 on: () => () => {},
                 status: 200 as const,
+                isNavigating: false,
             };
         }
         throw new Error("useRouter must be used inside <AppRouter>");
@@ -219,14 +224,23 @@ function navigate(href: string, replace = false) {
         return; // Navigation was prevented
     }
 
+    // Set navigating state to true before navigation
+    currentLocation = { ...currentLocation, isNavigating: true };
+    locationListeners.forEach((listener) => listener());
+
     if (replace) {
         window.history.replaceState(null, "", href);
     } else {
         window.history.pushState(null, "", href);
     }
 
-    // Emit navigation event after navigation completes
-    routerEventEmitter.emit("navigation", { from, to });
+    // Update location and clear navigating state after navigation
+    // Use requestAnimationFrame to allow the new page to start rendering
+    requestAnimationFrame(() => {
+        updateLocation(false);
+        // Emit navigation event after navigation completes
+        routerEventEmitter.emit("navigation", { from, to });
+    });
 }
 
 export type LinkProps = React.PropsWithChildren<
@@ -290,9 +304,9 @@ export function Link(props: LinkProps) {
  *
  * \`Component\` — the page component to render. \`pageProps\` — props provided to the page.
  */
-export type AppShellProps = {
-    Component: ComponentType<unknown>;
-    pageProps: unknown;
+export type AppShellProps<TPageProps extends Record<string, unknown> = Record<string, unknown>> = {
+    Component: ComponentType<TPageProps>;
+    pageProps: TPageProps;
 };
 
 // Main router component
@@ -319,6 +333,7 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
         replace: (href) => navigate(href, true),
         on: (event, listener) => routerEventEmitter.on(event, listener),
         status: match ? 200 : 404,
+        isNavigating: state.isNavigating,
     };
 
     if (!match) {
