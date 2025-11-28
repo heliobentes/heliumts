@@ -29,15 +29,18 @@ function registerVisibilityListener() {
     }
     visibilityListenerRegistered = true;
 
-    document.addEventListener("visibilitychange", () => {
+    const handleVisibilityChange = () => {
         if (!document.hidden) {
             invalidateAll();
         }
-    });
+    };
 
-    window.addEventListener("focus", () => {
+    const handleFocus = () => {
         invalidateAll();
-    });
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange, { passive: true });
+    window.addEventListener("focus", handleFocus, { passive: true });
 }
 
 /**

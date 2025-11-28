@@ -488,7 +488,7 @@ Helium provides built-in support for smooth page transitions using React 18+ con
 The `useDeferredNavigation` hook integrates `useDeferredValue` and `useTransition` with the router for smoother navigation:
 
 ```tsx
-import { useDeferredNavigation } from "helium/client";
+import { useDeferredNavigation } from "helium/client/transitions";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
     const { isStale, isPending, isTransitioning } = useDeferredNavigation();
@@ -510,7 +510,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 The `PageTransition` component handles all navigation transition complexity with a simple API:
 
 ```tsx
-import { PageTransition } from "helium/client";
+import { PageTransition } from "helium/client/transitions";
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
     return (

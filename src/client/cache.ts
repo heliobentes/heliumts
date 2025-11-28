@@ -96,22 +96,3 @@ export function invalidateAll() {
         }
     }
 }
-
-export function cleanupExpired(): number {
-    let count = 0;
-    for (const [key, entry] of store.entries()) {
-        if (isExpired(entry)) {
-            store.delete(key);
-            count++;
-        }
-    }
-    return count;
-}
-
-export function clear() {
-    store.clear();
-}
-
-export function size(): number {
-    return store.size;
-}

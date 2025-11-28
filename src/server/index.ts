@@ -11,6 +11,6 @@ export type { RpcRegistry } from "./rpcRegistry.js";
 export type { HTTPRouter } from "./httpRouter.js";
 
 // Internal utilities needed by generated server code (from helium build)
-// These are exported for framework use but should not be used directly by end users
+// Note: These are exported for framework-generated code only, not for direct user consumption
 export { loadEnvFiles, injectEnvToProcess } from "../utils/envLoader.js";
 export { log } from "../utils/logger.js";

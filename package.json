@@ -1,6 +1,6 @@
 {
     "name": "helium",
-    "version": "0.2.1",
+    "version": "0.2.2",
     "bin": {
         "helium": "./dist/bin/helium.js"
     },
@@ -17,6 +17,16 @@
             "import": "./dist/client/index.js",
             "require": "./dist/client/index.js",
             "types": "./dist/client/index.d.ts"
+        },
+        "./client/transitions": {
+            "import": "./dist/client/transitions.js",
+            "require": "./dist/client/transitions.js",
+            "types": "./dist/client/transitions.d.ts"
+        },
+        "./client/prefetch": {
+            "import": "./dist/client/prefetch.js",
+            "require": "./dist/client/prefetch.js",
+            "types": "./dist/client/prefetch.d.ts"
         },
         "./server": {
             "import": "./dist/server/index.js",

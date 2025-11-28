@@ -411,17 +411,6 @@ export function useRouter() {
     return ctx;
 }
 
-// Mock useDeferredNavigation hook
-export function useDeferredNavigation() {
-    return {
-        path: '/',
-        deferredPath: '/',
-        isStale: false,
-        isPending: false,
-        isTransitioning: false,
-    };
-}
-
 // Mock AppRouter component (alias for Router)
 export function AppRouter({ children }) {
     return React.createElement(React.Fragment, null, children);
@@ -435,11 +424,6 @@ export function Router({ children }) {
 // Mock Link component
 export function Link({ href, children, prefetch, ...props }) {
     return React.createElement('a', { href, ...props }, children);
-}
-
-// Mock PageTransition component
-export function PageTransition({ children, loadingClassName, loadingStyle, fallback }) {
-    return React.createElement('div', null, children);
 }
 
 // Mock Redirect component
@@ -468,6 +452,61 @@ export const cache = {
     delete: () => {},
     clear: () => {},
 };
+
+// Mock PageTransition and useDeferredNavigation (also available from helium/client/transitions)
+export function useDeferredNavigation() {
+    return {
+        path: '/',
+        deferredPath: '/',
+        isStale: false,
+        isPending: false,
+        isTransitioning: false,
+    };
+}
+
+export function PageTransition({ children, loadingClassName, loadingStyle, fallback }) {
+    return React.createElement('div', null, children);
+}
+`;
+
+    // Create a stub for helium/client/transitions
+    const transitionsStubCode = `
+// Auto-generated SSG transitions stub
+import React from 'react';
+
+// Mock useDeferredNavigation hook - returns static values for SSG
+export function useDeferredNavigation() {
+    return {
+        path: '/',
+        deferredPath: '/',
+        isStale: false,
+        isPending: false,
+        isTransitioning: false,
+    };
+}
+
+// Mock PageTransition component - renders children without transition logic
+export function PageTransition({ children, loadingClassName, loadingStyle, fallback }) {
+    // During SSG, just render the children without any transition logic
+    return React.createElement('div', null, children);
+}
+
+export default {
+    useDeferredNavigation,
+    PageTransition,
+};
+`;
+
+    // Create a stub for helium/client/prefetch
+    const prefetchStubCode = `
+// Auto-generated SSG prefetch stub
+export function prefetchRoute() {
+    // No-op during SSG
+}
+
+export function clearPrefetchCache() {
+    // No-op during SSG
+}
 `;
 
     // Write stub files to node_modules/.helium
@@ -477,8 +516,12 @@ export const cache = {
     }
     const ssgServerStubPath = path.join(heliumInternalDir, "ssg-server-stub.mjs");
     const ssgClientStubPath = path.join(heliumInternalDir, "ssg-client-stub.mjs");
+    const ssgTransitionsStubPath = path.join(heliumInternalDir, "ssg-transitions-stub.mjs");
+    const ssgPrefetchStubPath = path.join(heliumInternalDir, "ssg-prefetch-stub.mjs");
     fs.writeFileSync(ssgServerStubPath, serverStubCode, "utf-8");
     fs.writeFileSync(ssgClientStubPath, clientStubCode, "utf-8");
+    fs.writeFileSync(ssgTransitionsStubPath, transitionsStubCode, "utf-8");
+    fs.writeFileSync(ssgPrefetchStubPath, prefetchStubCode, "utf-8");
 
     // Create a temporary Vite server for SSR rendering
     const { createServer } = await import("vite");
@@ -491,13 +534,19 @@ export const cache = {
         logLevel: "error",
         plugins: [heliumPlugin()],
         resolve: {
-            alias: {
-                "helium/server": ssgServerStubPath,
-                "helium/client": ssgClientStubPath,
-            },
+            alias: [
+                // Most specific aliases first - helium/client/transitions and helium/client/prefetch
+                { find: /^helium\/client\/transitions$/, replacement: ssgTransitionsStubPath },
+                { find: /^helium\/client\/prefetch$/, replacement: ssgPrefetchStubPath },
+                // Then helium/client and helium/server
+                { find: /^helium\/client$/, replacement: ssgClientStubPath },
+                { find: /^helium\/server$/, replacement: ssgServerStubPath },
+            ],
         },
         ssr: {
             external: ["react", "react-dom"],
+            // Don't externalize helium packages - we want to use our stubs
+            noExternal: ["helium"],
         },
     });
 
@@ -507,6 +556,9 @@ export const cache = {
         let successCount = 0;
         let failureCount = 0;
         let hasIndexSSG = false;
+
+        // Calculate max path length for proper alignment (min 35, max 80)
+        const maxPathLength = Math.min(80, Math.max(35, ...staticPages.map((p) => urlPathToOutputPath(p.urlPath).length)));
 
         for (const page of staticPages) {
             try {
@@ -537,7 +589,7 @@ export const cache = {
                 const gzipped = zlib.gzipSync(html);
                 const gzipSizeKB = (gzipped.length / 1024).toFixed(2);
 
-                log("info", `  ${outputPath.padEnd(35)} ${sizeKB.padStart(8)} kB │ gzip: ${gzipSizeKB.padStart(7)} kB`);
+                log("info", `  ${outputPath.padEnd(maxPathLength)} ${sizeKB.padStart(8)} kB │ gzip: ${gzipSizeKB.padStart(7)} kB`);
                 successCount++;
             } catch (error) {
                 const errorMsg = error instanceof Error ? error.message : String(error);
@@ -580,8 +632,8 @@ export const cache = {
             const blankIndexHtml = htmlTemplate.replace(/<div\s+id="root"[^>]*>.*?<\/div>/s, '<div id="root"></div>');
             fs.writeFileSync(indexPath, blankIndexHtml, "utf-8");
 
-            log("info", "  index.ssg.html          (SSG root page)");
-            log("info", "  index.html              (blank SPA fallback)");
+            log("info", `  ${"index.ssg.html".padEnd(maxPathLength)} (SSG root page)`);
+            log("info", `  ${"index.html".padEnd(maxPathLength)} (blank SPA fallback)`);
         }
 
         // Summary
