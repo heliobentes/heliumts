@@ -147,6 +147,34 @@ export default function helium(): Plugin {
             checkRouteCollisions(root);
         },
         configureServer(server) {
+            // Add middleware to handle HTML fallback for nested routes
+            // This ensures that routes like /docs/guides/auth properly serve index.html
+            // so the client-side router can handle them
+            server.middlewares.use((req, res, next) => {
+                const url = req.url || "";
+                const cleanUrl = url.split("?")[0];
+
+                // Skip if:
+                // - Has file extension (asset request)
+                // - Is an API/special endpoint
+                // - Is a dev server endpoint
+                if (
+                    path.extname(cleanUrl) !== "" ||
+                    cleanUrl.startsWith("/api") ||
+                    cleanUrl.startsWith("/webhooks") ||
+                    cleanUrl.startsWith("/auth") ||
+                    cleanUrl.startsWith("/@") ||
+                    cleanUrl.startsWith("/__helium__")
+                ) {
+                    return next();
+                }
+
+                // For all other routes (including nested paths like /docs/guides/auth),
+                // rewrite to index.html so Vite serves it and the client-side router handles routing
+                req.url = "/index.html";
+                next();
+            });
+
             const regenerateTypes = () => {
                 const { methods } = scanServerExports(root);
                 const dts = generateTypeDefinitions(methods, root);

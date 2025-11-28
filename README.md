@@ -346,6 +346,7 @@ See [SSG Documentation](./docs/ssg.md) for detailed information including limita
 ### Deployment & Advanced
 -   [Context API](./docs/context-api.md) - Access request metadata including client IPs and headers
 -   [Proxy Configuration](./docs/proxy-configuration.md) - Configure IP detection for rate limiting behind proxies
+-   [HTTP Handlers & Webhooks](./docs/http-handlers.md) - Create custom HTTP endpoints for webhooks and REST APIs
 -   [Production Deployment](./docs/production-deployment.md) - Deploy to production platforms (Digital Ocean, Docker, etc.)
 
 ## 6. Contributing

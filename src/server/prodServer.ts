@@ -148,15 +148,18 @@ export function startProdServer(options: ProdServerOptions) {
                     filePath = path.join(staticDir, "index.html");
                 }
             } else {
-                // First, try the exact path (for assets like /assets/main.js)
-                filePath = path.join(staticDir, cleanUrl);
-
-                // If it doesn't exist and has no extension, try appending .html (for SSG pages)
-                if (!fs.existsSync(filePath) && !path.extname(cleanUrl)) {
+                // If cleanUrl has no extension, prioritize .html files for SSG pages
+                if (!path.extname(cleanUrl)) {
                     const htmlPath = path.join(staticDir, cleanUrl + ".html");
                     if (fs.existsSync(htmlPath)) {
                         filePath = htmlPath;
+                    } else {
+                        // Fall back to exact path (for assets or directories)
+                        filePath = path.join(staticDir, cleanUrl);
                     }
+                } else {
+                    // Has an extension, try exact path (for assets like /assets/main.js)
+                    filePath = path.join(staticDir, cleanUrl);
                 }
             }
 
