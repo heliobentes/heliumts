@@ -124,13 +124,19 @@ if (typeof window !== "undefined") {
     }
 }
 
+/** Options for push/replace navigation methods */
+export interface RouterNavigationOptions {
+    /** Scroll to top after navigation (default: true) */
+    scrollToTop?: boolean;
+}
+
 // Context for useRouter hook
 type RouterContext = {
     path: string;
     params: Record<string, string | string[]>;
     searchParams: URLSearchParams;
-    push: (href: string) => void;
-    replace: (href: string) => void;
+    push: (href: string, options?: RouterNavigationOptions) => void;
+    replace: (href: string, options?: RouterNavigationOptions) => void;
     on: (event: RouterEvent, listener: EventListener) => () => void;
     status: 200 | 404;
     isNavigating: boolean;
@@ -189,12 +195,18 @@ export function useRouter() {
                 path: window.location.pathname,
                 params: {},
                 searchParams: new URLSearchParams(window.location.search),
-                push: (href: string) => {
+                push: (href: string, options?: RouterNavigationOptions) => {
                     window.history.pushState({}, "", href);
+                    if (options?.scrollToTop !== false) {
+                        window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+                    }
                     window.dispatchEvent(new PopStateEvent("popstate"));
                 },
-                replace: (href: string) => {
+                replace: (href: string, options?: RouterNavigationOptions) => {
                     window.history.replaceState({}, "", href);
+                    if (options?.scrollToTop !== false) {
+                        window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+                    }
                     window.dispatchEvent(new PopStateEvent("popstate"));
                 },
                 on: () => () => {},
@@ -291,8 +303,15 @@ export function Redirect({ to, replace = false }: { to: string; replace?: boolea
     return null;
 }
 
+/** Options for navigation */
+interface NavigateOptions {
+    replace?: boolean;
+    scrollToTop?: boolean;
+}
+
 // Navigation helper
-function navigate(href: string, replace = false) {
+function navigate(href: string, options: NavigateOptions = {}) {
+    const { replace = false, scrollToTop = true } = options;
     const from = window.location.pathname;
     const to = href.split("?")[0]; // Extract pathname from href
 
@@ -316,6 +335,10 @@ function navigate(href: string, replace = false) {
     // Use requestAnimationFrame to allow the new page to start rendering
     requestAnimationFrame(() => {
         updateLocation(false);
+        // Scroll to top if enabled
+        if (scrollToTop) {
+            window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+        }
         // Emit navigation event after navigation completes
         routerEventEmitter.emit("navigation", { from, to });
     });
@@ -327,6 +350,8 @@ export type LinkProps = React.PropsWithChildren<
         replace?: boolean;
         /** Disable prefetching on hover (default: false - prefetch is enabled) */
         prefetch?: boolean;
+        /** Scroll to top after navigation (default: true) */
+        scrollToTop?: boolean;
     }
 >;
 
@@ -358,7 +383,7 @@ let globalRoutes: RouteEntry[] = [];
  * Automatically prefetches page chunks on hover for faster navigation.
  */
 export function Link(props: LinkProps) {
-    const { prefetch = true } = props;
+    const { prefetch = true, scrollToTop = true } = props;
 
     const onClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
         if (
@@ -373,7 +398,7 @@ export function Link(props: LinkProps) {
             return;
         }
         e.preventDefault();
-        navigate(props.href, props.replace);
+        navigate(props.href, { replace: props.replace, scrollToTop });
         props.onClick?.(e);
     };
 
@@ -393,7 +418,7 @@ export function Link(props: LinkProps) {
         props.onFocus?.(e);
     };
 
-    const { children, href, className, prefetch: _prefetch, ...safeProps } = props;
+    const { children, href, className, prefetch: _prefetch, scrollToTop: _scrollToTop, ...safeProps } = props;
 
     return (
         <a href={href} onClick={onClick} onMouseEnter={onMouseEnter} onFocus={onFocus} className={className} {...safeProps}>
@@ -443,15 +468,15 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
         path: state.path,
         params: match?.params ?? {},
         searchParams: state.searchParams,
-        push: (href) => {
+        push: (href, options) => {
             // Wrap navigation in startTransition for smoother updates
             startTransition(() => {
-                navigate(href);
+                navigate(href, { scrollToTop: options?.scrollToTop });
             });
         },
-        replace: (href) => {
+        replace: (href, options) => {
             startTransition(() => {
-                navigate(href, true);
+                navigate(href, { replace: true, scrollToTop: options?.scrollToTop });
             });
         },
         on: (event, listener) => routerEventEmitter.on(event, listener),

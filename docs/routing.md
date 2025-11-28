@@ -207,6 +207,7 @@ export default function Nav() {
 - `href` (string): Target URL
 - `replace` (boolean): Use `history.replace` instead of `history.push`
 - `prefetch` (boolean, default: `true`): Prefetch page on hover for faster navigation
+- `scrollToTop` (boolean, default: `true`): Scroll to top of page after navigation
 - Standard `<a>` tag props (className, onClick, etc.)
 
 **Behavior:**
@@ -226,6 +227,9 @@ Links automatically prefetch page chunks on hover and focus (keyboard navigation
 
 // Disable prefetching for specific links
 <Link href="/settings" prefetch={false}>Settings</Link>
+
+// Disable scroll-to-top (e.g., for in-page tab navigation)
+<Link href="/settings/profile" scrollToTop={false}>Profile Tab</Link>
 ```
 
 ### Programmatic Navigation
@@ -357,7 +361,7 @@ return (
 
 ### Methods
 
-#### `push(href: string)`
+#### `push(href: string, options?: { scrollToTop?: boolean })`
 
 Navigate to a new route (adds to history):
 
@@ -367,9 +371,12 @@ const router = useRouter();
 router.push("/about");
 router.push("/users/123");
 router.push("/search?q=hello");
+
+// Navigate without scrolling to top
+router.push("/settings/notifications", { scrollToTop: false });
 ```
 
-#### `replace(href: string)`
+#### `replace(href: string, options?: { scrollToTop?: boolean })`
 
 Navigate to a new route (replaces current history entry):
 
@@ -378,6 +385,9 @@ const router = useRouter();
 
 // Replace current URL (no back button entry)
 router.replace("/login");
+
+// Replace without scrolling to top
+router.replace("/dashboard?tab=analytics", { scrollToTop: false });
 ```
 
 **Use cases:**
@@ -385,6 +395,7 @@ router.replace("/login");
 - Redirects after authentication
 - Replacing temporary URLs
 - Preventing back navigation to intermediate states
+- Updating query params without scroll reset (with `scrollToTop: false`)
 
 ### Redirect Component
 
@@ -482,11 +493,7 @@ import { useDeferredNavigation } from "helium/client";
 export default function Layout({ children }: { children: React.ReactNode }) {
     const { isStale, isPending, isTransitioning } = useDeferredNavigation();
 
-    return (
-        <div style={{ opacity: isTransitioning ? 0.7 : 1, transition: 'opacity 150ms' }}>
-            {children}
-        </div>
-    );
+    return <div style={{ opacity: isTransitioning ? 0.7 : 1, transition: "opacity 150ms" }}>{children}</div>;
 }
 ```
 
@@ -509,10 +516,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     return (
         <div>
             <Header />
-            <PageTransition
-                loadingClassName="opacity-50 transition-opacity"
-                fallback={<LoadingSpinner />}
-            >
+            <PageTransition loadingClassName="opacity-50 transition-opacity" fallback={<LoadingSpinner />}>
                 {children}
             </PageTransition>
             <Footer />
@@ -531,20 +535,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 **With inline styles:**
 
 ```tsx
-<PageTransition
-    loadingStyle={{ opacity: 0.6, transition: 'opacity 150ms ease' }}
->
-    {children}
-</PageTransition>
+<PageTransition loadingStyle={{ opacity: 0.6, transition: "opacity 150ms ease" }}>{children}</PageTransition>
 ```
 
 **With Tailwind CSS:**
 
 ```tsx
-<PageTransition
-    loadingClassName="opacity-60 transition-opacity duration-150"
-    fallback={<div className="animate-pulse">Loading...</div>}
->
+<PageTransition loadingClassName="opacity-60 transition-opacity duration-150" fallback={<div className="animate-pulse">Loading...</div>}>
     {children}
 </PageTransition>
 ```

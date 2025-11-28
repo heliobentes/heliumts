@@ -1,5 +1,5 @@
 // Router components and hooks
-export type { AppShellProps, LinkProps, PageTransitionProps } from "./Router.js";
+export type { AppShellProps, LinkProps, PageTransitionProps, RouterNavigationOptions } from "./Router.js";
 export { AppRouter, Link, PageTransition, Redirect, RouterContext, useDeferredNavigation, useRouter } from "./Router.js";
 export type { LayoutProps } from "./routerManifest.js";
 
