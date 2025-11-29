@@ -31,49 +31,21 @@ HeliumTS is a blazing fast 🚀 and opinionated full-stack React + Vite framewor
 
 ### 1.1. Installation
 
-An installation script is coming soon! Meanwhile, follow these steps to set up a new HeliumTS project.
-
-#### 1.1.1. Install React + Vite
+The easiest way to get started with HeliumTS is by using the scaffolding tool:
 
 ```bash
-npm create vite@latest my-helium-app -- --template react-ts
-```
-#### 1.1.2. Install HeliumTS
-
-```bash
-npm install heliumts
+npm create heliumts-app@latest my-helium-app
 ```
 
-#### 1.1.3. Setup Vite Config
-Create or update `vite.config.ts` in the project root to include Helium's Vite plugin:
+Or (to create in the current directory):
 
-```typescript
-import react from '@vitejs/plugin-react';
-import helium from 'heliumts/vite';
-import { defineConfig } from 'vite';
-
-export default defineConfig({
-    plugins: [react(), helium()]
-});
+```
+npm create heliumts-app@latest . 
 ```
 
-#### 1.1.4. Delete **main.tsx**
-Delete the `src/main.tsx` file created by Vite, as HeliumTS handles the client entry point automatically.
-Also, remove its reference from `index.html` if present.
-```html
-<!-- Remove this from index.html -->
-<script type="module" src="/src/main.tsx"></script>
-```
+This command will guide you through setting up a new project with everything configured for you.
 
-#### 1.1.5. Update `src/App.tsx`
-Replace the contents of `src/App.tsx` with the following content:
-```tsx
-import { type AppShellProps } from "heliumts/client";
-
-export default function App({ Component, pageProps }: AppShellProps) {
-    return <Component {...pageProps} />;
-}
-```
+If you prefer to set up the project manually, please refer to the [Manual Installation Guide](./docs/manual-installation.md).
 
 ### 1.2. Running the Development Server
 
@@ -335,6 +307,9 @@ See [SSG Documentation](./docs/ssg.md) for detailed information including limita
 -   `helium start`: Runs the bundled server (`dist/server.js`).
 
 ## 5. More Documentation
+
+### Getting Started
+-   [Manual Installation](./docs/manual-installation.md) - Step-by-step guide to setting up a HeliumTS project manually
 
 ### Core Features
 -   [Routing & useRouter](./docs/routing.md) - File-based routing, dynamic routes, navigation, and the useRouter hook
