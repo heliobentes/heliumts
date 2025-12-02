@@ -161,7 +161,6 @@ export function useRouter() {
         // During HMR in development, context might be temporarily unavailable
         // Provide a temporary fallback to prevent white screen of death
         if (typeof window !== "undefined" && import.meta.env?.DEV) {
-            console.warn("useRouter called before RouterContext is available (HMR reload). Using fallback.");
             return {
                 path: window.location.pathname,
                 params: {},
