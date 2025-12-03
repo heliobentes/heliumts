@@ -29,8 +29,9 @@ interface SSGValidation {
 /**
  * Remove string literals from content to avoid false positives when checking for patterns
  * This removes template literals, single-quoted strings, and double-quoted strings
+ * @internal Exported for testing
  */
-function stripStringLiterals(content: string): string {
+export function stripStringLiterals(content: string): string {
     // Remove template literals (backtick strings) - handle nested expressions
     let result = content;
 
@@ -53,8 +54,9 @@ function stripStringLiterals(content: string): string {
 /**
  * Validate if a page file can be truly statically generated
  * Checks for React hooks and helium imports that would prevent static generation
+ * @internal Exported for testing
  */
-function validateSSGPage(filePath: string): SSGValidation {
+export function validateSSGPage(filePath: string): SSGValidation {
     const rawContent = fs.readFileSync(filePath, "utf-8");
     const warnings: string[] = [];
 
@@ -160,8 +162,9 @@ export function scanSSGPages(root: string): SSGPage[] {
  * pages/blog/post.tsx -> /blog/post
  * pages/(website)/contact.tsx -> /contact
  * pages/(portal)/dashboard.tsx -> /dashboard
+ * @internal Exported for testing
  */
-function filePathToUrlPath(relativePath: string): string {
+export function filePathToUrlPath(relativePath: string): string {
     // Remove 'pages/' prefix and file extension
     let urlPath = relativePath.replace(/^pages\//, "").replace(/\.(tsx|jsx|ts|js)$/, "");
 
@@ -192,8 +195,9 @@ function filePathToUrlPath(relativePath: string): string {
  * / -> __index.html (special case - renamed later to prevent conflicts)
  * /about -> about.html
  * /blog/post -> blog/post.html
+ * @internal Exported for testing
  */
-function urlPathToOutputPath(urlPath: string): string {
+export function urlPathToOutputPath(urlPath: string): string {
     if (urlPath === "/") {
         return "__index.html";
     }
@@ -205,8 +209,9 @@ function urlPathToOutputPath(urlPath: string): string {
 
 /**
  * Find all layout file paths for a given page path (from root to leaf)
+ * @internal Exported for testing
  */
-function findLayoutPathsForPage(pagePath: string, root: string): string[] {
+export function findLayoutPathsForPage(pagePath: string, root: string): string[] {
     const pagesDir = path.join(root, "src", "pages");
     const relativePath = path.relative(pagesDir, pagePath);
     const pathParts = path

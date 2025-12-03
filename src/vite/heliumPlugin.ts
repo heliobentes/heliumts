@@ -329,11 +329,19 @@ export default function helium(): Plugin {
     };
 }
 
-function normalizeToPosix(filePath: string): string {
+/**
+ * Convert file path to POSIX format
+ * @internal Exported for testing
+ */
+export function normalizeToPosix(filePath: string): string {
     return filePath.split(path.sep).join("/");
 }
 
-function isServerModule(importer: string | undefined, root: string, serverDir: string): boolean {
+/**
+ * Check if an importer is a server module
+ * @internal Exported for testing
+ */
+export function isServerModule(importer: string | undefined, root: string, serverDir: string): boolean {
     if (!importer || importer.startsWith("\0")) {
         return false;
     }

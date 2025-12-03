@@ -27,8 +27,9 @@ export type RouteEntry = {
  * - /src/pages/404.tsx → __404__
  * - /src/pages/(website)/contact.tsx → /contact
  * - /src/pages/(portal)/dashboard.tsx → /dashboard
+ * @internal Exported for testing
  */
-function pathFromFile(file: string): string {
+export function pathFromFile(file: string): string {
     // Remove /src/pages prefix and file extension
     const withoutPrefix = file.replace("/src/pages", "").replace(/\.(tsx|jsx|ts|js)$/, "");
 
@@ -55,8 +56,9 @@ function pathFromFile(file: string): string {
  * Create a matcher function for a route pattern
  * Supports dynamic segments like :id, :slug, etc.
  * Supports catch-all segments like *slug for [...slug]
+ * @internal Exported for testing
  */
-function createMatcher(pattern: string) {
+export function createMatcher(pattern: string) {
     const segments = pattern.split("/").filter(Boolean);
 
     return (path: string) => {
