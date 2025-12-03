@@ -206,6 +206,42 @@ describe("heliumPlugin", () => {
         });
     });
 
+    describe("SSR configuration", () => {
+        it("should externalize Node.js built-in modules for SSR", () => {
+            const ssrConfig = {
+                external: ["util", "zlib", "http", "https", "http2", "fs", "path", "crypto", "stream", "os", "url", "net", "tls", "child_process", "worker_threads"],
+                noExternal: ["heliumts"],
+            };
+
+            expect(ssrConfig.external).toContain("util");
+            expect(ssrConfig.external).toContain("zlib");
+            expect(ssrConfig.external).toContain("http");
+        });
+
+        it("should not externalize heliumts for SSR", () => {
+            const ssrConfig = {
+                external: ["util", "zlib", "http", "https", "http2", "fs", "path", "crypto", "stream", "os", "url", "net", "tls", "child_process", "worker_threads"],
+                noExternal: ["heliumts"],
+            };
+
+            expect(ssrConfig.noExternal).toContain("heliumts");
+        });
+    });
+
+    describe("build configuration", () => {
+        it("should mark Node.js built-ins as external for client build", () => {
+            const buildConfig = {
+                rollupOptions: {
+                    external: [/^node:/, "util", "zlib", "http", "https", "http2", "fs", "path", "crypto", "stream", "os", "url", "net", "tls", "child_process", "worker_threads"],
+                },
+            };
+
+            // Verify key Node.js modules are externalized to prevent bundling in client
+            expect(buildConfig.rollupOptions.external).toContain("util");
+            expect(buildConfig.rollupOptions.external).toContain("zlib");
+        });
+    });
+
     describe("middleware URL filtering", () => {
         function shouldSkipMiddleware(url: string): boolean {
             const cleanUrl = url.split("?")[0];

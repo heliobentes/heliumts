@@ -89,6 +89,37 @@ export default function helium(): Plugin {
                     // This ensures changes to helium are picked up immediately
                     exclude: ["heliumts", "heliumts/client", "heliumts/server", "heliumts/vite"],
                 },
+                // SSR configuration to properly isolate server-only code
+                ssr: {
+                    // Externalize Node.js built-in modules - these should never be bundled
+                    external: ["util", "zlib", "http", "https", "http2", "fs", "path", "crypto", "stream", "os", "url", "net", "tls", "child_process", "worker_threads"],
+                    // Don't externalize heliumts - let the plugin handle the client/server split
+                    noExternal: ["heliumts"],
+                },
+                // Ensure Node.js built-ins are not bundled for client
+                build: {
+                    rollupOptions: {
+                        external: [
+                            // Node.js built-in modules should never be in client bundle
+                            /^node:/,
+                            "util",
+                            "zlib",
+                            "http",
+                            "https",
+                            "http2",
+                            "fs",
+                            "path",
+                            "crypto",
+                            "stream",
+                            "os",
+                            "url",
+                            "net",
+                            "tls",
+                            "child_process",
+                            "worker_threads",
+                        ],
+                    },
+                },
                 define: {
                     ...envDefines,
                     __HELIUM_RPC_TRANSPORT__: JSON.stringify(rpcClientConfig.transport),
