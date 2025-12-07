@@ -59,14 +59,29 @@ export function generateTypeDefinitions(methods: MethodExport[], root: string): 
         })
         .join("\n");
 
-    const exports = methodsWithSuffix
+    const methodExports = methodsWithSuffix
         .map((m) => {
-            return `export const ${m.name}: import('heliumts/client').MethodStub<
-    Parameters<typeof ${m.alias}['handler']>[0],
-    Awaited<ReturnType<typeof ${m.alias}['handler']>>
->;`;
+            return `    export const ${m.name}: import('heliumts/client').MethodStub<
+        Parameters<typeof ${m.alias}['handler']>[0],
+        Awaited<ReturnType<typeof ${m.alias}['handler']>>
+    >;`;
         })
         .join("\n");
+
+    // If there are no methods, we don't need to generate any augmentation
+    // This prevents shadowing the actual heliumts/server exports
+    if (methods.length === 0) {
+        return `/* eslint-disable */
+/**
+* Auto generated file - DO NOT EDIT!
+* # Helium Server Type Definitions
+* 
+* This file is empty because no methods have been defined yet.
+* Once you create a method using defineMethod(), type stubs will be generated here.
+**/
+export {};
+`;
+    }
 
     return `/* eslint-disable */
 /**
@@ -76,7 +91,8 @@ export function generateTypeDefinitions(methods: MethodExport[], root: string): 
 ${imports}
 
 declare module 'heliumts/server' {
-${exports}
+    // Method stubs for client-side type inference
+${methodExports}
 }
 `;
 }
