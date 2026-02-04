@@ -89,8 +89,45 @@ function matchRoute(path: string, routes: RouteEntry[]) {
 }
 
 // Location store for useSyncExternalStore
-let currentLocation = typeof window !== "undefined" ? getLocation() : { path: "/", searchParams: new URLSearchParams(), isNavigating: false };
-const locationListeners = new Set<() => void>();
+// Preserve across HMR by attaching to window in dev mode
+let currentLocation: RouterState;
+let locationListeners: Set<() => void>;
+
+if (typeof window !== "undefined" && import.meta.env?.DEV) {
+    const globalWindow = window as typeof window & {
+        __heliumCurrentLocation?: RouterState;
+        __heliumLocationListeners?: Set<() => void>;
+    };
+    if (!globalWindow.__heliumCurrentLocation) {
+        globalWindow.__heliumCurrentLocation = getLocation();
+    }
+    if (!globalWindow.__heliumLocationListeners) {
+        globalWindow.__heliumLocationListeners = new Set();
+    }
+    currentLocation = globalWindow.__heliumCurrentLocation;
+    locationListeners = globalWindow.__heliumLocationListeners;
+} else if (typeof window !== "undefined") {
+    currentLocation = getLocation();
+    locationListeners = new Set();
+} else {
+    currentLocation = { path: "/", searchParams: new URLSearchParams(), isNavigating: false };
+    locationListeners = new Set();
+}
+
+// Helper to re-extract params from path using stored routes during HMR
+function extractParamsFromPath(path: string): Record<string, string | string[]> {
+    if (typeof window !== "undefined" && import.meta.env?.DEV) {
+        const globalWindow = window as typeof window & { __heliumGlobalRoutes?: RouteEntry[] };
+        const routes = globalWindow.__heliumGlobalRoutes;
+        if (routes && routes.length > 0) {
+            const match = matchRoute(path, routes);
+            if (match) {
+                return match.params;
+            }
+        }
+    }
+    return {};
+}
 
 function subscribeToLocation(callback: () => void) {
     locationListeners.add(callback);
@@ -106,7 +143,12 @@ function getServerSnapshot() {
 }
 
 function updateLocation(isNavigating = false) {
-    currentLocation = { ...getLocation(), isNavigating };
+    const newLocation = { ...getLocation(), isNavigating };
+    currentLocation = newLocation;
+    // Update the global reference in dev mode
+    if (typeof window !== "undefined" && import.meta.env?.DEV) {
+        (window as typeof window & { __heliumCurrentLocation?: RouterState }).__heliumCurrentLocation = newLocation;
+    }
     locationListeners.forEach((listener) => listener());
 }
 
@@ -160,10 +202,12 @@ export function useRouter() {
     if (!ctx) {
         // During HMR in development, context might be temporarily unavailable
         // Provide a temporary fallback to prevent white screen of death
+        // Re-extract params from current path using stored routes
         if (typeof window !== "undefined" && import.meta.env?.DEV) {
+            const currentPath = window.location.pathname;
             return {
-                path: window.location.pathname,
-                params: {},
+                path: currentPath,
+                params: extractParamsFromPath(currentPath),
                 searchParams: new URLSearchParams(window.location.search),
                 push: (href: string, options?: RouterNavigationOptions) => {
                     window.history.pushState({}, "", href);
@@ -296,7 +340,18 @@ function isExternalUrl(href: string): boolean {
 }
 
 // Store routes globally for prefetching (set by AppRouter)
-let globalRoutes: RouteEntry[] = [];
+// Preserve across HMR in dev mode
+let globalRoutes: RouteEntry[];
+
+if (typeof window !== "undefined" && import.meta.env?.DEV) {
+    const globalWindow = window as typeof window & { __heliumGlobalRoutes?: RouteEntry[] };
+    if (!globalWindow.__heliumGlobalRoutes) {
+        globalWindow.__heliumGlobalRoutes = [];
+    }
+    globalRoutes = globalWindow.__heliumGlobalRoutes;
+} else {
+    globalRoutes = [];
+}
 
 /**
  * Client-side navigation link.
@@ -377,7 +432,16 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
         }
         const result = buildRoutes();
         // Store routes globally for Link prefetching
-        globalRoutes = result.routes;
+        // In dev mode, also update the global reference to survive HMR
+        if (import.meta.env?.DEV) {
+            const globalWindow = window as typeof window & { __heliumGlobalRoutes?: RouteEntry[] };
+            globalWindow.__heliumGlobalRoutes = result.routes;
+            // Update the module-level reference as well
+            globalRoutes.length = 0;
+            globalRoutes.push(...result.routes);
+        } else {
+            globalRoutes = result.routes;
+        }
         return result;
     }, []);
 
@@ -387,10 +451,16 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
 
     const match = useMemo(() => matchRoute(state.path, routes), [state.path, routes]);
 
+    // Use matched params, or fall back to re-extracting from path using global routes during HMR
+    const currentParams = match?.params ?? (import.meta.env?.DEV ? extractParamsFromPath(state.path) : {});
+
+    // In dev mode, always read fresh searchParams from URL to handle HMR edge cases
+    const currentSearchParams = import.meta.env?.DEV ? new URLSearchParams(window.location.search) : state.searchParams;
+
     const routerValue: RouterContext = {
         path: state.path,
-        params: match?.params ?? {},
-        searchParams: state.searchParams,
+        params: currentParams,
+        searchParams: currentSearchParams,
         push: (href, options) => {
             // Wrap navigation in startTransition for smoother updates
             startTransition(() => {
@@ -418,7 +488,7 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
     const Page = match.route.Component as ComponentType<{ params: Record<string, string | string[]>; searchParams: URLSearchParams }>;
     const pageProps = {
         params: match.params,
-        searchParams: state.searchParams,
+        searchParams: currentSearchParams,
     };
 
     // Create a wrapped component that includes all layouts

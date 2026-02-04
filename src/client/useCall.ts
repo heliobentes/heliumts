@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import type { RpcStats } from "../runtime/protocol.js";
 import { invalidateByMethod } from "./cache.js";
@@ -32,24 +32,34 @@ export function useCall<TArgs, TResult>(method: MethodStub<TArgs, TResult>, opti
     const [error, setError] = useState<string | null>(null);
     const [stats, setStats] = useState<RpcStats | null>(null);
 
-    async function call(args: TArgs): Promise<TResult | undefined> {
+    // Use refs to store latest values without causing callback recreation
+    const methodIdRef = useRef(method.__id);
+    const optionsRef = useRef(options);
+
+    // Update refs on each render
+    methodIdRef.current = method.__id;
+    optionsRef.current = options;
+
+    // Memoized call function - stable reference across renders
+    const call = useCallback(async (args: TArgs): Promise<TResult | undefined> => {
         setCalling(true);
         setError(null);
         try {
-            const result = await rpcCall<TResult, TArgs>(method.__id, args);
+            const result = await rpcCall<TResult, TArgs>(methodIdRef.current, args);
             setData(result.data);
             setStats(result.stats);
-            options.invalidate?.forEach((m) => invalidateByMethod(m.__id));
-            options.onSuccess?.(result.data);
+            optionsRef.current.invalidate?.forEach((m) => invalidateByMethod(m.__id));
+            optionsRef.current.onSuccess?.(result.data);
             return result.data;
-        } catch (err: any) {
-            setError(err.error);
-            setStats(err.stats);
+        } catch (err: unknown) {
+            const errorObj = err as { error?: string; stats?: RpcStats };
+            setError(errorObj.error ?? "Unknown error");
+            setStats(errorObj.stats ?? null);
             return undefined;
         } finally {
             setCalling(false);
         }
-    }
+    }, []); // Empty deps - uses refs for latest values
 
     return { data, call, isCalling, error, stats };
 }

@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { RpcStats } from "../runtime/protocol.js";
-import { cacheKey, get, has, invalidateAll, set, subscribeInvalidations } from "./cache.js";
+import { cacheKey, get, getPendingFetch, has, isPending, set, setPendingFetch, subscribeInvalidations } from "./cache.js";
 import { rpcCall } from "./rpcClient.js";
 import type { MethodStub } from "./types.js";
 
@@ -23,39 +23,72 @@ export interface UseFetchOptions {
     enabled?: boolean; // Whether to fetch data. Defaults to true. Useful for conditional fetching (e.g., only fetch when an ID exists)
 }
 
-// Global flag to track if visibility listener is registered
-let visibilityListenerRegistered = false;
-// Global flag to indicate refetch is due to focus/visibility (for silent updates)
-let isRefocusRefetch = false;
+// Store focus refetch callbacks globally (survives HMR)
+type FocusCallback = (showLoader: boolean) => void;
 
-function registerVisibilityListener() {
-    if (visibilityListenerRegistered || typeof document === "undefined") {
+function getFocusCallbacksSet(): Set<FocusCallback> {
+    if (typeof window === "undefined") {
+        return new Set();
+    }
+    const win = window as typeof window & {
+        __heliumFocusCallbacks?: Set<FocusCallback>;
+    };
+    if (!win.__heliumFocusCallbacks) {
+        win.__heliumFocusCallbacks = new Set();
+    }
+    return win.__heliumFocusCallbacks;
+}
+
+function getVisibilityState(): { registered: boolean; lastTrigger: number } {
+    if (typeof window === "undefined") {
+        return { registered: false, lastTrigger: 0 };
+    }
+    const win = window as typeof window & {
+        __heliumVisibilityState?: { registered: boolean; lastTrigger: number };
+    };
+    if (!win.__heliumVisibilityState) {
+        win.__heliumVisibilityState = { registered: false, lastTrigger: 0 };
+    }
+    return win.__heliumVisibilityState;
+}
+
+// Minimum time between focus-triggered refetches (debounce)
+const FOCUS_DEBOUNCE_MS = 2000;
+
+function setupFocusListeners() {
+    const state = getVisibilityState();
+    if (state.registered || typeof document === "undefined") {
         return;
     }
-    visibilityListenerRegistered = true;
+    state.registered = true;
 
-    const handleVisibilityChange = () => {
-        if (!document.hidden) {
-            isRefocusRefetch = true;
-            invalidateAll();
-            // Reset flag after a microtask to allow all listeners to see it
-            queueMicrotask(() => {
-                isRefocusRefetch = false;
-            });
+    const triggerRefetch = () => {
+        const now = Date.now();
+        // Debounce to prevent rapid refetches during HMR
+        if (now - state.lastTrigger < FOCUS_DEBOUNCE_MS) {
+            return;
         }
-    };
+        state.lastTrigger = now;
 
-    const handleFocus = () => {
-        isRefocusRefetch = true;
-        invalidateAll();
-        // Reset flag after a microtask to allow all listeners to see it
-        queueMicrotask(() => {
-            isRefocusRefetch = false;
+        // Get all registered callbacks and call them
+        const callbacks = getFocusCallbacksSet();
+        callbacks.forEach((cb) => {
+            try {
+                cb(false); // Silent refetch on focus
+            } catch {
+                // Ignore errors from stale callbacks
+            }
         });
     };
 
+    const handleVisibilityChange = () => {
+        if (!document.hidden) {
+            triggerRefetch();
+        }
+    };
+
     document.addEventListener("visibilitychange", handleVisibilityChange, { passive: true });
-    window.addEventListener("focus", handleFocus, { passive: true });
+    window.addEventListener("focus", triggerRefetch, { passive: true });
 }
 
 /**
@@ -69,93 +102,221 @@ function registerVisibilityListener() {
  * @returns { data, isLoading, error, stats, refetch } — `data` is the cached or latest value; `refetch` triggers an immediate request
  */
 export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, args?: TArgs, options?: UseFetchOptions) {
+    // Compute cache key
     const key = cacheKey(method.__id, args);
+
     const { ttl, refetchOnWindowFocus = true, showLoaderOnRefocus = false, enabled = true } = options ?? {};
 
-    // Register visibility listener if enabled
-    useEffect(() => {
-        if (refetchOnWindowFocus) {
-            registerVisibilityListener();
-        }
-    }, [refetchOnWindowFocus]);
+    // Use refs to store latest values without causing effect re-runs
+    const methodIdRef = useRef(method.__id);
+    const argsRef = useRef(args);
+    const keyRef = useRef(key);
+    const ttlRef = useRef(ttl);
+    const enabledRef = useRef(enabled);
+    const showLoaderOnRefocusRef = useRef(showLoaderOnRefocus);
+
+    // Update refs on each render
+    methodIdRef.current = method.__id;
+    argsRef.current = args;
+    keyRef.current = key;
+    ttlRef.current = ttl;
+    enabledRef.current = enabled;
+    showLoaderOnRefocusRef.current = showLoaderOnRefocus;
+
+    // Track if component is mounted
+    const isMountedRef = useRef(true);
 
     const [data, setData] = useState<TResult | undefined>(() => (has(key) ? get<TResult>(key) : undefined));
-    const [isLoading, setLoading] = useState(!has(key));
+    const [isLoading, setLoading] = useState(!has(key) && enabled);
     const [error, setError] = useState<string | null>(null);
     const [stats, setStats] = useState<RpcStats | null>(null);
 
-    // This is used to fetch data on mount
+    // Core fetch function using refs (stable reference)
+    // Uses global deduplication to prevent multiple fetches for the same key
+    const doFetch = useCallback(async (showLoader: boolean = true): Promise<TResult | undefined> => {
+        if (!isMountedRef.current) {
+            return undefined;
+        }
+
+        const currentKey = keyRef.current;
+
+        // Check if there's already a pending fetch for this key (global deduplication)
+        const existingFetch = getPendingFetch<{ data: TResult; stats: RpcStats }>(currentKey);
+        if (existingFetch) {
+            // Wait for the existing fetch and use its result
+            if (showLoader) {
+                setLoading(true);
+            }
+            try {
+                const result = await existingFetch;
+                if (isMountedRef.current) {
+                    setData(result.data);
+                    setStats(result.stats);
+                    setError(null);
+                }
+                return result.data;
+            } catch (err: unknown) {
+                if (isMountedRef.current) {
+                    const errorObj = err as { error?: string; stats?: RpcStats };
+                    setError(errorObj.error ?? "Unknown error");
+                    setStats(errorObj.stats ?? null);
+                }
+                return undefined;
+            } finally {
+                if (isMountedRef.current && showLoader) {
+                    setLoading(false);
+                }
+            }
+        }
+
+        if (showLoader) {
+            setLoading(true);
+        }
+        setError(null);
+
+        // Create the fetch promise and register it globally
+        const fetchPromise = rpcCall<TResult, TArgs>(methodIdRef.current, argsRef.current as TArgs);
+        const dedupedPromise = setPendingFetch(currentKey, fetchPromise);
+
+        try {
+            const result = await dedupedPromise;
+            if (!isMountedRef.current) {
+                return undefined;
+            }
+            set(currentKey, result.data, ttlRef.current);
+            setData(result.data);
+            setStats(result.stats);
+            return result.data;
+        } catch (err: unknown) {
+            if (!isMountedRef.current) {
+                return undefined;
+            }
+            const errorObj = err as { error?: string; stats?: RpcStats };
+            setError(errorObj.error ?? "Unknown error");
+            setStats(errorObj.stats ?? null);
+            return undefined;
+        } finally {
+            if (isMountedRef.current && showLoader) {
+                setLoading(false);
+            }
+        }
+    }, []); // No dependencies - uses refs
+
+    // Track mounted state
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
+
+    // Sync data from cache when key changes
+    useEffect(() => {
+        if (has(key)) {
+            const cachedData = get<TResult>(key);
+            if (cachedData !== undefined) {
+                setData(cachedData);
+                setLoading(false);
+            }
+        }
+    }, [key]);
+
+    // Initial fetch on mount or when key/enabled changes
     useEffect(() => {
         if (!enabled) {
             setLoading(false);
             return;
         }
 
-        let active = true;
-
-        if (!has(key)) {
+        // Only fetch if not in cache and not already pending globally
+        if (!has(key) && !isPending(key)) {
+            doFetch(true);
+        } else if (isPending(key)) {
+            // There's a pending fetch - wait for it
             setLoading(true);
-            setError(null);
+            const pendingFetch = getPendingFetch<{ data: TResult; stats: RpcStats }>(key);
+            if (pendingFetch) {
+                pendingFetch
+                    .then((result) => {
+                        if (isMountedRef.current) {
+                            setData(result.data);
+                            setStats(result.stats);
+                            setError(null);
+                        }
+                    })
+                    .catch((err: unknown) => {
+                        if (isMountedRef.current) {
+                            const errorObj = err as { error?: string; stats?: RpcStats };
+                            setError(errorObj.error ?? "Unknown error");
+                            setStats(errorObj.stats ?? null);
+                        }
+                    })
+                    .finally(() => {
+                        if (isMountedRef.current) {
+                            setLoading(false);
+                        }
+                    });
+            }
+        }
+    }, [key, enabled, doFetch]);
 
-            rpcCall<TResult, TArgs>(method.__id, args as TArgs)
-                .then((result) => {
-                    if (!active) {
-                        return;
-                    }
-                    set(key, result.data, ttl);
-                    setData(result.data);
-                    setStats(result.stats);
-                })
-                .catch((err) => {
-                    if (active) {
-                        setError(err.error);
-                        setStats(err.stats);
-                    }
-                })
-                .finally(() => {
-                    if (active) {
-                        setLoading(false);
-                    }
-                });
+    // Register for focus/visibility refetch
+    useEffect(() => {
+        if (!refetchOnWindowFocus) {
+            return;
         }
 
-        return () => {
-            active = false;
-        };
-    }, [key, method.__id, ttl, enabled]);
+        // Setup global focus listeners once
+        setupFocusListeners();
 
-    // This is used to automatically refetch data after TTL expires
+        // Create a stable callback for this hook instance
+        const focusCallback: FocusCallback = (showLoader: boolean) => {
+            if (enabledRef.current && isMountedRef.current && !isPending(keyRef.current)) {
+                doFetch(showLoaderOnRefocusRef.current || showLoader);
+            }
+        };
+
+        // Register this callback
+        const callbacks = getFocusCallbacksSet();
+        callbacks.add(focusCallback);
+
+        return () => {
+            callbacks.delete(focusCallback);
+        };
+    }, [refetchOnWindowFocus, doFetch]);
+
+    // Subscribe to cache invalidations (from useCall or manual invalidation)
+    useEffect(() => {
+        const unsubscribe = subscribeInvalidations((methodId) => {
+            if (methodId === methodIdRef.current && enabledRef.current && isMountedRef.current && !isPending(keyRef.current)) {
+                doFetch(true);
+            }
+        });
+
+        return unsubscribe;
+    }, [doFetch]);
+
+    // TTL-based auto-refetch
     useEffect(() => {
         if (!enabled || !ttl) {
             return;
         }
 
         let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        let isActive = true;
 
         const scheduleRefetch = () => {
-            // Clear any existing timeout
             if (timeoutId !== undefined) {
                 clearTimeout(timeoutId);
             }
 
-            // Schedule refetch after TTL
-            timeoutId = setTimeout(() => {
-                if (enabled) {
-                    rpcCall<TResult, TArgs>(method.__id, args as TArgs)
-                        .then((result) => {
-                            set(key, result.data, ttl);
-                            setData(result.data);
-                            setStats(result.stats);
-                            setError(null);
-                            // Schedule next refetch
-                            scheduleRefetch();
-                        })
-                        .catch((err) => {
-                            setError(err.error);
-                            setStats(err.stats);
-                            // Still schedule next refetch even on error
-                            scheduleRefetch();
-                        });
+            timeoutId = setTimeout(async () => {
+                if (!isActive || !enabledRef.current || !isMountedRef.current) {
+                    return;
+                }
+                await doFetch(false); // Silent refetch for TTL
+                if (isActive) {
+                    scheduleRefetch();
                 }
             }, ttl);
         };
@@ -166,50 +327,15 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
         }
 
         return () => {
+            isActive = false;
             if (timeoutId !== undefined) {
                 clearTimeout(timeoutId);
             }
         };
-    }, [key, method.__id, args, ttl, enabled]);
+    }, [key, ttl, enabled, doFetch]);
 
-    // This is used to manually refetch data
-    // When showLoader is false, data updates silently without triggering loading state
-    const refetch = useCallback(
-        async (showLoader: boolean = true) => {
-            if (showLoader) {
-                setLoading(true);
-            }
-            setError(null);
-            try {
-                const result = await rpcCall<TResult, TArgs>(method.__id, args as TArgs);
-                set(key, result.data, ttl);
-                setData(result.data);
-                setStats(result.stats);
-                return result.data;
-            } catch (err: any) {
-                setError(err.error);
-                setStats(err.stats);
-                return undefined;
-            } finally {
-                if (showLoader) {
-                    setLoading(false);
-                }
-            }
-        },
-        [args, key, method.__id, ttl]
-    );
-
-    // This is used to automatically refetch data when this method is invalidated
-    useEffect(() => {
-        return subscribeInvalidations((methodId) => {
-            if (methodId === method.__id) {
-                // Check if this invalidation is from focus/visibility change
-                // If so, only show loader if showLoaderOnRefocus is true
-                const shouldShowLoader = isRefocusRefetch ? showLoaderOnRefocus : true;
-                refetch(shouldShowLoader);
-            }
-        });
-    }, [method.__id, refetch, showLoaderOnRefocus]);
+    // Public refetch function
+    const refetch = useCallback((showLoader: boolean = true) => doFetch(showLoader), [doFetch]);
 
     return { data, isLoading, error, stats, refetch };
 }

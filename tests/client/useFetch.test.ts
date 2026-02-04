@@ -18,6 +18,10 @@ vi.mock("../../src/client/cache", () => ({
     set: vi.fn(),
     subscribeInvalidations: vi.fn(() => () => {}),
     invalidateAll: vi.fn(),
+    isPending: vi.fn(() => false),
+    getPendingFetch: vi.fn(() => undefined),
+    setPendingFetch: vi.fn((key: string, promise: Promise<unknown>) => promise),
+    clearPendingFetch: vi.fn(),
 }));
 
 describe("useFetch", () => {

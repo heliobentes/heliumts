@@ -4,8 +4,35 @@ interface CacheEntry {
     ttl?: number; // TTL in milliseconds
 }
 
-const store = new Map<string, CacheEntry>();
-const listeners = new Set<(methodId: string) => void>();
+// Preserve cache across HMR by attaching to window in dev mode
+let store: Map<string, CacheEntry>;
+let listeners: Set<(methodId: string) => void>;
+let pendingFetches: Map<string, Promise<unknown>>;
+
+if (typeof window !== "undefined" && import.meta.env?.DEV) {
+    const globalWindow = window as typeof window & {
+        __heliumCacheStore?: Map<string, CacheEntry>;
+        __heliumCacheListeners?: Set<(methodId: string) => void>;
+        __heliumPendingFetches?: Map<string, Promise<unknown>>;
+    };
+    if (!globalWindow.__heliumCacheStore) {
+        globalWindow.__heliumCacheStore = new Map();
+    }
+    if (!globalWindow.__heliumCacheListeners) {
+        globalWindow.__heliumCacheListeners = new Set();
+    }
+    if (!globalWindow.__heliumPendingFetches) {
+        globalWindow.__heliumPendingFetches = new Map();
+    }
+    store = globalWindow.__heliumCacheStore;
+    listeners = globalWindow.__heliumCacheListeners;
+    pendingFetches = globalWindow.__heliumPendingFetches;
+} else {
+    store = new Map();
+    listeners = new Set();
+    pendingFetches = new Map();
+}
+
 const DEFAULT_TTL = 5 * 60 * 1000; // 5 minutes
 
 export function cacheKey(methodId: string, args: unknown): string {
@@ -95,4 +122,42 @@ export function invalidateAll() {
             listener(methodId);
         }
     }
+}
+
+/**
+ * Check if a fetch is currently pending for a given cache key.
+ */
+export function isPending(key: string): boolean {
+    return pendingFetches.has(key);
+}
+
+/**
+ * Get an existing pending fetch promise, or undefined if none.
+ */
+export function getPendingFetch<T>(key: string): Promise<T> | undefined {
+    return pendingFetches.get(key) as Promise<T> | undefined;
+}
+
+/**
+ * Register a pending fetch. Returns the promise.
+ * If a fetch for this key is already pending, returns the existing promise.
+ */
+export function setPendingFetch<T>(key: string, promise: Promise<T>): Promise<T> {
+    const existing = pendingFetches.get(key);
+    if (existing) {
+        return existing as Promise<T>;
+    }
+    pendingFetches.set(key, promise);
+    // Clean up when done
+    promise.finally(() => {
+        pendingFetches.delete(key);
+    });
+    return promise;
+}
+
+/**
+ * Clear a pending fetch (if you need to cancel/reset).
+ */
+export function clearPendingFetch(key: string): void {
+    pendingFetches.delete(key);
 }
