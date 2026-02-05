@@ -48,15 +48,33 @@ export function scanServerExports(root: string): ServerExports {
     let middleware: MiddlewareExport | undefined;
 
     function walk(dir: string) {
-        const files = fs.readdirSync(dir);
+        let files: string[];
+        try {
+            files = fs.readdirSync(dir);
+        } catch {
+            // Directory might have been deleted during scan
+            return;
+        }
         for (const file of files) {
             const fullPath = path.join(dir, file);
-            const stat = fs.statSync(fullPath);
+            let stat: fs.Stats;
+            try {
+                stat = fs.statSync(fullPath);
+            } catch {
+                // File might have been deleted during scan
+                continue;
+            }
 
             if (stat.isDirectory()) {
                 walk(fullPath);
             } else if (file.endsWith(".ts")) {
-                const content = fs.readFileSync(fullPath, "utf-8");
+                let content: string;
+                try {
+                    content = fs.readFileSync(fullPath, "utf-8");
+                } catch {
+                    // File might be being written to or deleted
+                    continue;
+                }
 
                 // Check for _middleware.ts file
                 if (file === "_middleware.ts") {

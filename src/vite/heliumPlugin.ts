@@ -175,7 +175,16 @@ export default function helium(): Plugin {
             if (!fs.existsSync(typesDir)) {
                 fs.mkdirSync(typesDir, { recursive: true });
             }
-            fs.writeFileSync(dtsPath, dts);
+
+            // Only write if content has changed to avoid unnecessary TypeScript recompilation
+            if (fs.existsSync(dtsPath)) {
+                const existing = fs.readFileSync(dtsPath, "utf-8");
+                if (existing !== dts) {
+                    fs.writeFileSync(dtsPath, dts);
+                }
+            } else {
+                fs.writeFileSync(dtsPath, dts);
+            }
 
             // Check for route collisions in pages directory
             checkRouteCollisions(root);
@@ -209,17 +218,44 @@ export default function helium(): Plugin {
                 next();
             });
 
-            const regenerateTypes = () => {
-                const { methods } = scanServerExports(root);
-                const dts = generateTypeDefinitions(methods, root);
+            /**
+             * Write type definitions only if content has changed.
+             * This prevents unnecessary TypeScript recompilation.
+             */
+            const writeTypesIfChanged = (dts: string): boolean => {
                 const typesDir = path.join(root, "src", "types");
                 const dtsPath = path.join(typesDir, "heliumts-server.d.ts");
 
                 if (!fs.existsSync(typesDir)) {
                     fs.mkdirSync(typesDir, { recursive: true });
                 }
+
+                // Check if file exists and content is the same
+                if (fs.existsSync(dtsPath)) {
+                    const existing = fs.readFileSync(dtsPath, "utf-8");
+                    if (existing === dts) {
+                        return false; // No change needed
+                    }
+                }
+
                 fs.writeFileSync(dtsPath, dts);
+                return true; // File was written
             };
+
+            const regenerateTypes = (): boolean => {
+                try {
+                    const { methods } = scanServerExports(root);
+                    const dts = generateTypeDefinitions(methods, root);
+                    return writeTypesIfChanged(dts);
+                } catch (e) {
+                    log("error", "Failed to regenerate types", e);
+                    return false;
+                }
+            };
+
+            // Debounce timer for file changes
+            let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+            const DEBOUNCE_DELAY = 100; // ms
 
             const handleServerFileChange = async () => {
                 // Regenerate type definitions
@@ -287,19 +323,33 @@ export default function helium(): Plugin {
                 }
             }
 
+            /**
+             * Debounced handler for server file changes.
+             * This prevents multiple rapid regenerations during file saves.
+             */
+            const debouncedHandleServerFileChange = () => {
+                if (debounceTimer) {
+                    clearTimeout(debounceTimer);
+                }
+                debounceTimer = setTimeout(() => {
+                    debounceTimer = null;
+                    handleServerFileChange();
+                }, DEBOUNCE_DELAY);
+            };
+
             server.watcher.on("change", (file) => {
                 const relative = path.relative(root, file);
                 const normalized = normalizeToPosix(relative);
 
                 // If a server file changed, regenerate everything
                 if (normalized.startsWith(`${serverDir}/`)) {
-                    handleServerFileChange();
+                    debouncedHandleServerFileChange();
                 }
 
                 // If config file changed, reload config and regenerate
                 if (configFiles.some((cf) => normalized === cf)) {
                     log("info", `Config file changed: ${normalized}`);
-                    handleServerFileChange();
+                    debouncedHandleServerFileChange();
                 }
             });
 
@@ -309,7 +359,7 @@ export default function helium(): Plugin {
 
                 // If a server file was added, regenerate everything
                 if (normalized.startsWith(`${serverDir}/`)) {
-                    handleServerFileChange();
+                    debouncedHandleServerFileChange();
                 }
             });
 
@@ -319,7 +369,7 @@ export default function helium(): Plugin {
 
                 // If a server file was removed, regenerate everything
                 if (normalized.startsWith(`${serverDir}/`)) {
-                    handleServerFileChange();
+                    debouncedHandleServerFileChange();
                 }
             });
 

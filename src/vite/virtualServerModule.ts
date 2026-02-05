@@ -42,11 +42,29 @@ export function generateClientModule(methods: MethodExport[]): string {
     return exports;
 }
 
+/**
+ * Generate a deterministic hash from a string.
+ * This ensures stable type definitions across regenerations.
+ */
+function simpleHash(str: string): string {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = (hash << 5) - hash + char;
+        hash = hash & hash; // Convert to 32bit integer
+    }
+    return Math.abs(hash).toString(36).substring(0, 6);
+}
+
 export function generateTypeDefinitions(methods: MethodExport[], root: string): string {
-    const methodsWithSuffix = methods.map((m, i) => ({
-        ...m,
-        alias: `${m.name}_${i}${Math.random().toString(36).substring(2, 8)}`,
-    }));
+    const methodsWithSuffix = methods.map((m, i) => {
+        // Use deterministic hash based on file path and method name
+        const hashInput = `${m.filePath}:${m.name}:${i}`;
+        return {
+            ...m,
+            alias: `${m.name}_${simpleHash(hashInput)}`,
+        };
+    });
 
     const imports = methodsWithSuffix
         .map((m) => {
