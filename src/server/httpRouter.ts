@@ -116,17 +116,15 @@ export class HTTPRouter {
                     result = await route.handler.handler(httpRequest, httpCtx);
                 }
 
-                if (result instanceof Response) {
+                if (isWebResponse(result)) {
                     res.statusCode = result.status;
-                    result.headers.forEach((value, key) => {
+                    result.headers.forEach((value: string, key: string) => {
                         res.setHeader(key, value);
                     });
 
                     if (result.body) {
-                        const { Readable } = await import("stream");
-                        // @ts-ignore
-                        const nodeStream = Readable.fromWeb(result.body);
-                        nodeStream.pipe(res);
+                        const arrayBuf = await result.arrayBuffer();
+                        res.end(Buffer.from(arrayBuf));
                     } else {
                         res.end();
                     }
@@ -264,4 +262,37 @@ function parseCookies(cookieHeader: string): Record<string, string> {
         }
     }
     return cookies;
+}
+
+/**
+ * Detect a Web `Response` object using duck-typing instead of `instanceof`.
+ *
+ * In Vite's SSR environment the handler code runs inside a separate module
+ * context (`ssrLoadModule`), so the `Response` constructor available there
+ * may be a *different reference* than the global `Response` that
+ * `httpRouter.ts` sees.  The classic `instanceof Response` check therefore
+ * fails, causing the framework to fall through to `JSON.stringify(result)`
+ * which serialises a Response into a tiny broken payload (~126 bytes).
+ *
+ * By checking for the characteristic properties (`status`, `headers` as a
+ * `Headers`-like object, and `arrayBuffer` method) we reliably detect
+ * Response objects regardless of which realm they were created in.
+ */
+function isWebResponse(value: unknown): value is Response {
+    if (value instanceof Response) {
+        return true;
+    }
+
+    if (typeof value !== "object" || value === null) {
+        return false;
+    }
+
+    const candidate = value as Record<string, unknown>;
+    return (
+        typeof candidate.status === "number" &&
+        typeof candidate.arrayBuffer === "function" &&
+        typeof candidate.headers === "object" &&
+        candidate.headers !== null &&
+        typeof (candidate.headers as Record<string, unknown>).forEach === "function"
+    );
 }

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { RpcStats } from "../runtime/protocol.js";
 import { cacheKey, get, getPendingFetch, has, isPending, set, setPendingFetch, subscribeInvalidations } from "./cache.js";
 import { rpcCall } from "./rpcClient.js";
+import { RpcError } from "./RpcError.js";
 import type { MethodStub } from "./types.js";
 
 /**
@@ -157,9 +158,9 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
                 return result.data;
             } catch (err: unknown) {
                 if (isMountedRef.current) {
-                    const errorObj = err as { error?: string; stats?: RpcStats };
-                    setError(errorObj.error ?? "Unknown error");
-                    setStats(errorObj.stats ?? null);
+                    const rpcError = err instanceof RpcError ? err : new RpcError(err instanceof Error ? err.message : "Unknown error");
+                    setError(rpcError.message);
+                    setStats(rpcError.stats);
                 }
                 return undefined;
             } finally {
@@ -191,9 +192,9 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
             if (!isMountedRef.current) {
                 return undefined;
             }
-            const errorObj = err as { error?: string; stats?: RpcStats };
-            setError(errorObj.error ?? "Unknown error");
-            setStats(errorObj.stats ?? null);
+            const rpcError = err instanceof RpcError ? err : new RpcError(err instanceof Error ? err.message : "Unknown error");
+            setError(rpcError.message);
+            setStats(rpcError.stats);
             return undefined;
         } finally {
             if (isMountedRef.current && showLoader) {
@@ -246,9 +247,9 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
                     })
                     .catch((err: unknown) => {
                         if (isMountedRef.current) {
-                            const errorObj = err as { error?: string; stats?: RpcStats };
-                            setError(errorObj.error ?? "Unknown error");
-                            setStats(errorObj.stats ?? null);
+                            const rpcError = err instanceof RpcError ? err : new RpcError(err instanceof Error ? err.message : "Unknown error");
+                            setError(rpcError.message);
+                            setStats(rpcError.stats);
                         }
                     })
                     .finally(() => {

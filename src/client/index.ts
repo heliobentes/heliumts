@@ -11,6 +11,9 @@ export type { PageTransitionProps } from "./transitions.js";
 export * from "./useCall.js";
 export * from "./useFetch.js";
 
+// RPC error type
+export { RpcError } from "./RpcError.js";
+
 // RPC transport info (configured via helium.config.js)
 export type { RpcTransport } from "./rpcClient.js";
 export { getRpcTransport, isAutoHttpOnMobileEnabled, preconnect } from "./rpcClient.js";

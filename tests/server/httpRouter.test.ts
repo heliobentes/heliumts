@@ -660,6 +660,88 @@ describe("HTTPRouter Response handling", () => {
         expect(result).toBe(true);
         expect(res.statusCode).toBe(201);
         expect(res.setHeader).toHaveBeenCalledWith("x-custom-header", "custom-value");
+        // Verify the body is fully written via res.end()
+        const endCall = (res.end as ReturnType<typeof vi.fn>).mock.calls[0];
+        expect(endCall).toBeDefined();
+        expect(Buffer.isBuffer(endCall[0])).toBe(true);
+        expect(endCall[0].toString()).toBe("Hello World");
+    });
+
+    it("should handle binary Response bodies without truncation", async () => {
+        // Simulate a binary payload (e.g. an image) of known size
+        const binaryData = new Uint8Array(4096);
+        for (let i = 0; i < binaryData.length; i++) {
+            binaryData[i] = i % 256;
+        }
+
+        const mockResponse = new Response(binaryData, {
+            status: 200,
+            headers: { "Content-Type": "image/png" },
+        });
+
+        const mockHandler: HeliumHTTPDef = {
+            __kind: "http",
+            method: "GET",
+            path: "/api/image",
+            handler: vi.fn().mockResolvedValue(mockResponse),
+        };
+
+        router.registerRoutes([{ name: "imageHandler", handler: mockHandler }]);
+
+        const req = createMockReq("GET", "/api/image");
+        const res = createMockRes();
+
+        const result = await router.handleRequest(req, res);
+
+        expect(result).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res.setHeader).toHaveBeenCalledWith("content-type", "image/png");
+
+        const endCall = (res.end as ReturnType<typeof vi.fn>).mock.calls[0];
+        expect(endCall).toBeDefined();
+        const writtenBuffer = endCall[0] as Buffer;
+        expect(Buffer.isBuffer(writtenBuffer)).toBe(true);
+        // Verify the entire payload was written without truncation
+        expect(writtenBuffer.length).toBe(4096);
+        expect(writtenBuffer.equals(Buffer.from(binaryData))).toBe(true);
+    });
+
+    it("should detect cross-realm Response-like objects via duck-typing", async () => {
+        // Simulate a Response from a different realm (e.g. Vite SSR) where
+        // `instanceof Response` fails. We create a plain object that quacks
+        // like a Response.
+        const bodyContent = "cross-realm body";
+        const bodyBytes = new TextEncoder().encode(bodyContent);
+        const headers = new Headers({ "X-Realm": "other" });
+
+        const fakeResponse = {
+            status: 200,
+            headers,
+            body: true, // truthy, like a ReadableStream
+            arrayBuffer: async () => bodyBytes.buffer,
+        };
+
+        const mockHandler: HeliumHTTPDef = {
+            __kind: "http",
+            method: "GET",
+            path: "/api/cross-realm",
+            handler: vi.fn().mockResolvedValue(fakeResponse),
+        };
+
+        router.registerRoutes([{ name: "crossRealm", handler: mockHandler }]);
+
+        const req = createMockReq("GET", "/api/cross-realm");
+        const res = createMockRes();
+
+        const result = await router.handleRequest(req, res);
+
+        expect(result).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res.setHeader).toHaveBeenCalledWith("x-realm", "other");
+        const endCall = (res.end as ReturnType<typeof vi.fn>).mock.calls[0];
+        expect(endCall).toBeDefined();
+        expect(Buffer.isBuffer(endCall[0])).toBe(true);
+        expect(endCall[0].toString()).toBe("cross-realm body");
     });
 
     it("should handle Response objects without body", async () => {
@@ -681,6 +763,9 @@ describe("HTTPRouter Response handling", () => {
 
         expect(result).toBe(true);
         expect(res.statusCode).toBe(204);
+        // res.end() should be called with no body argument
+        const endCall = (res.end as ReturnType<typeof vi.fn>).mock.calls[0];
+        expect(endCall[0]).toBeUndefined();
     });
 
     it("should provide headers object to handler", async () => {

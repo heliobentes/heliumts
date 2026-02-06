@@ -99,6 +99,24 @@ describe("virtualServerModule", () => {
             expect(result).toContain("/* eslint-disable */");
             expect(result).toContain("Auto generated file - DO NOT EDIT!");
         });
+
+        it("should include method signature comment with method names", () => {
+            const methods: MethodExport[] = [
+                { name: "getUser", filePath: "/test/project/src/server/users.ts" },
+                { name: "createPost", filePath: "/test/project/src/server/posts.ts" },
+            ];
+
+            const result = generateTypeDefinitions(methods, "/test/project");
+
+            // Methods are sorted alphabetically
+            expect(result).toContain("@helium-methods createPost, getUser");
+        });
+
+        it("should include (none) signature when no methods exist", () => {
+            const result = generateTypeDefinitions([], "/test/project");
+
+            expect(result).toContain("@helium-methods (none)");
+        });
     });
 
     describe("generateEntryModule", () => {

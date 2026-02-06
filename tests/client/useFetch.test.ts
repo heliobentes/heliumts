@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { get, has, set, subscribeInvalidations } from "../../src/client/cache";
 import { rpcCall } from "../../src/client/rpcClient";
+import { RpcError } from "../../src/client/RpcError";
 import { useFetch } from "../../src/client/useFetch";
 
 // Mock rpcClient
@@ -84,10 +85,7 @@ describe("useFetch", () => {
     });
 
     it("should set error on fetch failure", async () => {
-        mockRpcCall.mockRejectedValueOnce({
-            error: "Fetch failed",
-            stats: { remainingRequests: 0, resetInSeconds: 30 },
-        });
+        mockRpcCall.mockRejectedValueOnce(new RpcError("Fetch failed", { remainingRequests: 0, resetInSeconds: 30 }));
 
         const { result } = renderHook(() => useFetch(mockMethod));
 
@@ -242,10 +240,7 @@ describe("useFetch", () => {
                 data: { initial: true },
                 stats: {},
             })
-            .mockRejectedValueOnce({
-                error: "Refetch failed",
-                stats: { remainingRequests: 0 },
-            });
+            .mockRejectedValueOnce(new RpcError("Refetch failed", { remainingRequests: 0, resetInSeconds: 0 }));
 
         const { result } = renderHook(() => useFetch(mockMethod));
 
@@ -306,10 +301,7 @@ describe("useFetch", () => {
                 data: { initial: true },
                 stats: {},
             })
-            .mockRejectedValueOnce({
-                error: "Error",
-                stats: {},
-            });
+            .mockRejectedValueOnce(new RpcError("Error"));
 
         const { result } = renderHook(() => useFetch(mockMethod));
 
@@ -327,10 +319,7 @@ describe("useFetch", () => {
 
     it("should set stats from error response", async () => {
         const errorStats = { remainingRequests: 0, resetInSeconds: 60 };
-        mockRpcCall.mockRejectedValueOnce({
-            error: "Rate limited",
-            stats: errorStats,
-        });
+        mockRpcCall.mockRejectedValueOnce(new RpcError("Rate limited", errorStats));
 
         const { result } = renderHook(() => useFetch(mockMethod));
 

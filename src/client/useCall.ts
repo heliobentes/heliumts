@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 
 import type { RpcStats } from "../runtime/protocol.js";
 import { invalidateByMethod } from "./cache.js";
+import { RpcError } from "./RpcError.js";
 import { rpcCall } from "./rpcClient.js";
 import type { MethodStub } from "./types.js";
 
@@ -52,10 +53,10 @@ export function useCall<TArgs, TResult>(method: MethodStub<TArgs, TResult>, opti
             optionsRef.current.onSuccess?.(result.data);
             return result.data;
         } catch (err: unknown) {
-            const errorObj = err as { error?: string; stats?: RpcStats };
-            setError(errorObj.error ?? "Unknown error");
-            setStats(errorObj.stats ?? null);
-            return undefined;
+            const rpcError = err instanceof RpcError ? err : new RpcError(err instanceof Error ? err.message : "Unknown error");
+            setError(rpcError.message);
+            setStats(rpcError.stats);
+            throw rpcError;
         } finally {
             setCalling(false);
         }

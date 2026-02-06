@@ -176,14 +176,11 @@ export default function helium(): Plugin {
                 fs.mkdirSync(typesDir, { recursive: true });
             }
 
-            // Only write if content has changed to avoid unnecessary TypeScript recompilation
-            if (fs.existsSync(dtsPath)) {
-                const existing = fs.readFileSync(dtsPath, "utf-8");
-                if (existing !== dts) {
-                    fs.writeFileSync(dtsPath, dts);
-                }
-            } else {
+            // At build start we always allow writing the canonical set.
+            // Only skip if content is identical to avoid needless TS invalidation.
+            if (!fs.existsSync(dtsPath) || fs.readFileSync(dtsPath, "utf-8") !== dts) {
                 fs.writeFileSync(dtsPath, dts);
+                touchTsConfig(root);
             }
 
             // Check for route collisions in pages directory
@@ -221,8 +218,13 @@ export default function helium(): Plugin {
             /**
              * Write type definitions only if content has changed.
              * This prevents unnecessary TypeScript recompilation.
+             *
+             * When `allowFewer` is false (default) the file will NOT be
+             * overwritten if the new content has fewer method declarations
+             * than the existing file — this guards against writing a
+             * degraded .d.ts while the user's file is only partially saved.
              */
-            const writeTypesIfChanged = (dts: string): boolean => {
+            const writeTypesIfChanged = (dts: string, allowFewer = false): boolean => {
                 const typesDir = path.join(root, "src", "types");
                 const dtsPath = path.join(typesDir, "heliumts-server.d.ts");
 
@@ -236,17 +238,36 @@ export default function helium(): Plugin {
                     if (existing === dts) {
                         return false; // No change needed
                     }
+
+                    // Guard: don't overwrite with fewer methods unless explicitly allowed
+                    // (e.g. on unlink). This prevents losing types during partial saves.
+                    if (!allowFewer) {
+                        const countExports = (s: string) => (s.match(/export const \w+:/g) || []).length;
+                        const existingCount = countExports(existing);
+                        const newCount = countExports(dts);
+                        if (newCount < existingCount) {
+                            log("info", `Skipping type generation: found ${newCount} methods, existing has ${existingCount} (likely partial save)`);
+                            return false;
+                        }
+                    }
                 }
 
                 fs.writeFileSync(dtsPath, dts);
+
+                // Touch tsconfig.json to force the TypeScript language server
+                // to reload the project. Without this, TS may cache stale
+                // module augmentations and autocomplete won't reflect the
+                // new methods until a manual restart.
+                touchTsConfig(root);
+
                 return true; // File was written
             };
 
-            const regenerateTypes = (): boolean => {
+            const regenerateTypes = (allowFewer = false): boolean => {
                 try {
                     const { methods } = scanServerExports(root);
                     const dts = generateTypeDefinitions(methods, root);
-                    return writeTypesIfChanged(dts);
+                    return writeTypesIfChanged(dts, allowFewer);
                 } catch (e) {
                     log("error", "Failed to regenerate types", e);
                     return false;
@@ -255,11 +276,11 @@ export default function helium(): Plugin {
 
             // Debounce timer for file changes
             let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-            const DEBOUNCE_DELAY = 100; // ms
+            const DEBOUNCE_DELAY = 300; // ms — long enough for format-on-save to finish
 
-            const handleServerFileChange = async () => {
+            const handleServerFileChange = async (allowFewer = false) => {
                 // Regenerate type definitions
-                regenerateTypes();
+                regenerateTypes(allowFewer);
 
                 // Invalidate the virtual modules so they get regenerated
                 const clientModule = server.environments.client?.moduleGraph.getModuleById(RESOLVED_VIRTUAL_CLIENT_MODULE_ID);
@@ -326,14 +347,23 @@ export default function helium(): Plugin {
             /**
              * Debounced handler for server file changes.
              * This prevents multiple rapid regenerations during file saves.
+             * @param allowFewer - pass true when files are deleted, so the
+             *                     method count is allowed to decrease.
              */
-            const debouncedHandleServerFileChange = () => {
+            let pendingAllowFewer = false;
+            const debouncedHandleServerFileChange = (allowFewer = false) => {
+                // If any event in the batch is an unlink, honour it
+                if (allowFewer) {
+                    pendingAllowFewer = true;
+                }
                 if (debounceTimer) {
                     clearTimeout(debounceTimer);
                 }
                 debounceTimer = setTimeout(() => {
                     debounceTimer = null;
-                    handleServerFileChange();
+                    const shouldAllowFewer = pendingAllowFewer;
+                    pendingAllowFewer = false;
+                    handleServerFileChange(shouldAllowFewer);
                 }, DEBOUNCE_DELAY);
             };
 
@@ -367,9 +397,9 @@ export default function helium(): Plugin {
                 const relative = path.relative(root, file);
                 const normalized = normalizeToPosix(relative);
 
-                // If a server file was removed, regenerate everything
+                // If a server file was removed, regenerate (allow fewer methods)
                 if (normalized.startsWith(`${serverDir}/`)) {
-                    debouncedHandleServerFileChange();
+                    debouncedHandleServerFileChange(true);
                 }
             });
 
@@ -439,4 +469,29 @@ export function isServerModule(importer: string | undefined, root: string, serve
 
     const normalized = normalizeToPosix(relative);
     return normalized === serverDir || normalized.startsWith(`${serverDir}/`);
+}
+
+/**
+ * Touch the project's tsconfig.json to force the TypeScript language server
+ * to reload the project and pick up changed module augmentations.
+ *
+ * TS language server watches tsconfig.json for changes. When a `.d.ts` file
+ * with `declare module` augmentations is regenerated, TS doesn't always
+ * detect the new content — leading to stale autocomplete.  By updating
+ * tsconfig.json's mtime we trigger a full project reload.
+ *
+ * The file content is NOT modified; only the filesystem timestamp changes.
+ *
+ * @internal Exported for testing
+ */
+export function touchTsConfig(root: string): void {
+    const tsconfigPath = path.join(root, "tsconfig.json");
+    try {
+        if (fs.existsSync(tsconfigPath)) {
+            const now = new Date();
+            fs.utimesSync(tsconfigPath, now, now);
+        }
+    } catch {
+        // Non-critical: if we can't touch the file, TS may just need a manual reload
+    }
 }

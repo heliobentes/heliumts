@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { invalidateByMethod } from "../../src/client/cache";
 import { rpcCall } from "../../src/client/rpcClient";
+import { RpcError } from "../../src/client/RpcError";
 import { useCall } from "../../src/client/useCall";
 
 // Mock rpcClient
@@ -100,15 +101,12 @@ describe("useCall", () => {
     });
 
     it("should set error on failure", async () => {
-        mockRpcCall.mockRejectedValueOnce({
-            error: "Something went wrong",
-            stats: { remainingRequests: 0, resetInSeconds: 30 },
-        });
+        mockRpcCall.mockRejectedValueOnce(new RpcError("Something went wrong", { remainingRequests: 0, resetInSeconds: 30 }));
 
         const { result } = renderHook(() => useCall(mockMethod));
 
         await act(async () => {
-            await result.current.call({});
+            await expect(result.current.call({})).rejects.toThrow(RpcError);
         });
 
         expect(result.current.error).toBe("Something went wrong");
@@ -175,19 +173,13 @@ describe("useCall", () => {
         expect(returnedData).toEqual(mockData);
     });
 
-    it("should return undefined from call on error", async () => {
-        mockRpcCall.mockRejectedValueOnce({
-            error: "Error",
-            stats: {},
-        });
+    it("should throw RpcError from call on error", async () => {
+        mockRpcCall.mockRejectedValueOnce(new RpcError("Error"));
 
         const { result } = renderHook(() => useCall(mockMethod));
 
-        let returnedData: unknown;
         await act(async () => {
-            returnedData = await result.current.call({});
+            await expect(result.current.call({})).rejects.toThrow("Error");
         });
-
-        expect(returnedData).toBeUndefined();
     });
 });

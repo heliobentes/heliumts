@@ -43,41 +43,43 @@ export function generateClientModule(methods: MethodExport[]): string {
 }
 
 /**
- * Generate a deterministic hash from a string.
- * This ensures stable type definitions across regenerations.
+ * Generate a deterministic suffix from a string.
+ * Uses only file path and method name (NOT index) so that adding/removing
+ * other methods does not change existing aliases.
  */
-function simpleHash(str: string): string {
+function stableAlias(filePath: string, name: string): string {
+    const input = `${filePath}:${name}`;
     let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-        const char = str.charCodeAt(i);
+    for (let i = 0; i < input.length; i++) {
+        const char = input.charCodeAt(i);
         hash = (hash << 5) - hash + char;
         hash = hash & hash; // Convert to 32bit integer
     }
-    return Math.abs(hash).toString(36).substring(0, 6);
+    return `${name}_${Math.abs(hash).toString(36)}`;
 }
 
 export function generateTypeDefinitions(methods: MethodExport[], root: string): string {
-    const methodsWithSuffix = methods.map((m, i) => {
-        // Use deterministic hash based on file path and method name
-        const hashInput = `${m.filePath}:${m.name}:${i}`;
-        return {
-            ...m,
-            alias: `${m.name}_${simpleHash(hashInput)}`,
-        };
-    });
+    // Sort methods by name for a stable output regardless of file-system walk order
+    const sorted = [...methods].sort((a, b) => a.name.localeCompare(b.name));
 
-    const imports = methodsWithSuffix
+    const methodsWithAlias = sorted.map((m) => ({
+        ...m,
+        alias: stableAlias(m.filePath, m.name),
+    }));
+
+    const imports = methodsWithAlias
         .map((m) => {
             let relPath = path.relative(path.join(root, "src"), m.filePath);
             if (!relPath.startsWith(".")) {
                 relPath = "../" + relPath;
             }
-            relPath = relPath.replace(/\.ts$/, "");
+            // Normalize to posix separators for import paths
+            relPath = relPath.replace(/\\/g, "/").replace(/\.ts$/, "");
             return `import type { ${m.name} as ${m.alias} } from '${relPath}';`;
         })
         .join("\n");
 
-    const methodExports = methodsWithSuffix
+    const methodExports = methodsWithAlias
         .map((m) => {
             return `    export const ${m.name}: import('heliumts/client').MethodStub<
         Parameters<typeof ${m.alias}['handler']>[0],
@@ -96,15 +98,21 @@ export function generateTypeDefinitions(methods: MethodExport[], root: string): 
 * 
 * This file is empty because no methods have been defined yet.
 * Once you create a method using defineMethod(), type stubs will be generated here.
+*
+* @helium-methods (none)
 **/
 export {};
 `;
     }
 
+    const methodSignature = methodsWithAlias.map((m) => m.name).join(", ");
+
     return `/* eslint-disable */
 /**
 * Auto generated file - DO NOT EDIT!
-* # Helium Server Type Definitions    
+* # Helium Server Type Definitions
+*
+* @helium-methods ${methodSignature}
 **/
 ${imports}
 

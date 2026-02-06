@@ -67,12 +67,17 @@ export function scanServerExports(root: string): ServerExports {
 
             if (stat.isDirectory()) {
                 walk(fullPath);
-            } else if (file.endsWith(".ts")) {
+            } else if (file.endsWith(".ts") && !file.endsWith(".d.ts")) {
                 let content: string;
                 try {
                     content = fs.readFileSync(fullPath, "utf-8");
                 } catch {
                     // File might be being written to or deleted
+                    continue;
+                }
+
+                // Skip empty or near-empty files (likely partial writes)
+                if (content.length < 10) {
                     continue;
                 }
 

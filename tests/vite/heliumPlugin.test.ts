@@ -3,7 +3,7 @@ import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Import actual functions from source
-import { isServerModule, normalizeToPosix } from "../../src/vite/heliumPlugin";
+import { isServerModule, normalizeToPosix, touchTsConfig } from "../../src/vite/heliumPlugin";
 
 describe("heliumPlugin", () => {
     describe("normalizeToPosix", () => {
@@ -293,6 +293,37 @@ describe("heliumPlugin", () => {
             expect(shouldSkipMiddleware("/")).toBe(false);
             expect(shouldSkipMiddleware("/about")).toBe(false);
             expect(shouldSkipMiddleware("/docs/guides/auth")).toBe(false);
+        });
+    });
+
+    describe("touchTsConfig", () => {
+        afterEach(() => {
+            vi.restoreAllMocks();
+        });
+
+        it("should update mtime of tsconfig.json when it exists", () => {
+            const existsSyncSpy = vi.spyOn(fs, "existsSync").mockReturnValue(true);
+            const utimesSyncSpy = vi.spyOn(fs, "utimesSync").mockImplementation(() => {});
+
+            touchTsConfig("/project");
+
+            expect(existsSyncSpy).toHaveBeenCalledWith(path.join("/project", "tsconfig.json"));
+            expect(utimesSyncSpy).toHaveBeenCalledWith(path.join("/project", "tsconfig.json"), expect.any(Date), expect.any(Date));
+        });
+
+        it("should not throw when tsconfig.json does not exist", () => {
+            vi.spyOn(fs, "existsSync").mockReturnValue(false);
+
+            expect(() => touchTsConfig("/project")).not.toThrow();
+        });
+
+        it("should not throw when utimesSync fails", () => {
+            vi.spyOn(fs, "existsSync").mockReturnValue(true);
+            vi.spyOn(fs, "utimesSync").mockImplementation(() => {
+                throw new Error("Permission denied");
+            });
+
+            expect(() => touchTsConfig("/project")).not.toThrow();
         });
     });
 });

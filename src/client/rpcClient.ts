@@ -1,6 +1,7 @@
 import { decode as msgpackDecode, encode as msgpackEncode } from "@msgpack/msgpack";
 
 import type { RpcRequest, RpcResponse, RpcStats } from "../runtime/protocol.js";
+import { RpcError } from "./RpcError.js";
 
 export type RpcResult<T> = {
     data: T;
@@ -150,10 +151,10 @@ async function sendBatchHttp(batch: PendingRequest[]) {
             if (res.ok) {
                 item.resolve({ data: res.result, stats: res.stats });
             } else {
-                item.reject({ error: res.error, stats: res.stats });
+                item.reject(new RpcError(res.error, res.stats));
             }
         } else {
-            item.reject(new Error("No response for request"));
+            item.reject(new RpcError("No response for request"));
         }
     }
 }
@@ -273,7 +274,7 @@ async function createSocket(): Promise<WebSocket> {
             if (res.ok) {
                 entry.resolve({ data: res.result, stats: res.stats });
             } else {
-                entry.reject({ error: res.error, stats: res.stats });
+                entry.reject(new RpcError(res.error, res.stats));
             }
         };
 
