@@ -47,6 +47,7 @@ const { data, isLoading } = useFetch(method, args, {
     ttl: 30000,
     refetchOnWindowFocus: true,
     showLoaderOnRefocus: false,
+    showLoaderOnInvalidate: false,
     enabled: true,
 });
 ```
@@ -56,6 +57,7 @@ const { data, isLoading } = useFetch(method, args, {
 | `ttl`                  | `number`  | `300000` (5 min) | Time-to-live for cached data in milliseconds. After TTL expires, data is automatically refetched.                                               |
 | `refetchOnWindowFocus` | `boolean` | `true`           | Automatically refetch when the browser tab becomes visible or window regains focus.                                                             |
 | `showLoaderOnRefocus`  | `boolean` | `false`          | Whether to show loading state during focus-triggered refetches. When `false`, data updates silently in the background without showing a loader. |
+| `showLoaderOnInvalidate` | `boolean` | `false`        | Whether to show loading state during refetches triggered by cache invalidation. When `false`, data updates silently in the background.          |
 | `enabled`              | `boolean` | `true`           | Set to `false` to disable automatic fetching. Useful for conditional fetching when a required value isn't available yet.                        |
 
 ### Examples
@@ -107,6 +109,16 @@ If you want to show a loading indicator when refetching on focus:
 const { data, isLoading } = useFetch(getPosts, undefined, {
     showLoaderOnRefocus: true, // Show loader when refetching on tab focus
 });
+
+#### Show Loader on Invalidate
+
+If you want invalidation-triggered refetches to show a loading indicator:
+
+```tsx
+const { data, isLoading } = useFetch(getPosts, undefined, {
+    showLoaderOnInvalidate: true, // Show loader when refetching after invalidation
+});
+```
 ```
 
 #### Disable Refetch on Window Focus

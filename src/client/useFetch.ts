@@ -14,6 +14,8 @@ import type { MethodStub } from "./types.js";
  *   window focus/visibility change and re-run the fetch.
  * - showLoaderOnRefocus: when false (default), refetches triggered by window
  *   focus/visibility will update data silently without showing the loading state.
+ * - showLoaderOnInvalidate: when false (default), refetches triggered by cache
+ *   invalidation will update data silently without showing the loading state.
  * - enabled: disable automatic fetching (defaults to true) — useful when
  *   you only want to fetch when a required value (e.g. id) is present.
  */
@@ -21,6 +23,7 @@ export interface UseFetchOptions {
     ttl?: number; // TTL in milliseconds
     refetchOnWindowFocus?: boolean; // Whether to refetch when tab becomes visible
     showLoaderOnRefocus?: boolean; // Whether to show loader when refetching on focus (defaults to false)
+    showLoaderOnInvalidate?: boolean; // Whether to show loader when refetching on cache invalidation (defaults to false)
     enabled?: boolean; // Whether to fetch data. Defaults to true. Useful for conditional fetching (e.g., only fetch when an ID exists)
 }
 
@@ -106,7 +109,7 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
     // Compute cache key
     const key = cacheKey(method.__id, args);
 
-    const { ttl, refetchOnWindowFocus = true, showLoaderOnRefocus = false, enabled = true } = options ?? {};
+    const { ttl, refetchOnWindowFocus = true, showLoaderOnRefocus = false, showLoaderOnInvalidate = false, enabled = true } = options ?? {};
 
     // Use refs to store latest values without causing effect re-runs
     const methodIdRef = useRef(method.__id);
@@ -115,6 +118,7 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
     const ttlRef = useRef(ttl);
     const enabledRef = useRef(enabled);
     const showLoaderOnRefocusRef = useRef(showLoaderOnRefocus);
+    const showLoaderOnInvalidateRef = useRef(showLoaderOnInvalidate);
 
     // Update refs on each render
     methodIdRef.current = method.__id;
@@ -123,6 +127,7 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
     ttlRef.current = ttl;
     enabledRef.current = enabled;
     showLoaderOnRefocusRef.current = showLoaderOnRefocus;
+    showLoaderOnInvalidateRef.current = showLoaderOnInvalidate;
 
     // Track if component is mounted
     const isMountedRef = useRef(true);
@@ -290,7 +295,7 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
     useEffect(() => {
         const unsubscribe = subscribeInvalidations((methodId) => {
             if (methodId === methodIdRef.current && enabledRef.current && isMountedRef.current && !isPending(keyRef.current)) {
-                doFetch(true);
+                doFetch(showLoaderOnInvalidateRef.current);
             }
         });
 
