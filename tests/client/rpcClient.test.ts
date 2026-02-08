@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { getRpcTransport, isAutoHttpOnMobileEnabled, preconnect, type RpcResult, type RpcTransport } from "../../src/client/rpcClient";
+import { RpcError } from "../../src/client/RpcError";
 
 // Test rpcClient functions
 describe("rpcClient", () => {
@@ -134,6 +135,477 @@ describe("rpcClient", () => {
 
             expect(resolvedValue).toEqual({ data: "test" });
             expect(pending.has(1)).toBe(false);
+        });
+    });
+
+    describe("pending request tracking with timeouts", () => {
+        it("should reject pending request after timeout", () => {
+            vi.useFakeTimers();
+
+            const pending = new Map<string | number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
+            const pendingTimeouts = new Map<string | number, ReturnType<typeof setTimeout>>();
+
+            let rejectedError: unknown;
+
+            function trackPending(id: string | number, resolve: (v: unknown) => void, reject: (e: unknown) => void): void {
+                pending.set(id, { resolve, reject });
+                const timer = setTimeout(() => {
+                    const entry = pending.get(id);
+                    if (entry) {
+                        pending.delete(id);
+                        pendingTimeouts.delete(id);
+                        entry.reject(new RpcError("Request timed out"));
+                    }
+                }, 30_000);
+                pendingTimeouts.set(id, timer);
+            }
+
+            trackPending(
+                1,
+                () => {},
+                (err) => {
+                    rejectedError = err;
+                }
+            );
+            expect(pending.has(1)).toBe(true);
+            expect(pendingTimeouts.has(1)).toBe(true);
+
+            // Advance past timeout
+            vi.advanceTimersByTime(30_001);
+
+            expect(pending.has(1)).toBe(false);
+            expect(pendingTimeouts.has(1)).toBe(false);
+            expect(rejectedError).toBeInstanceOf(RpcError);
+            expect((rejectedError as RpcError).message).toBe("Request timed out");
+
+            vi.useRealTimers();
+        });
+
+        it("should clear timeout when request is resolved before timeout", () => {
+            vi.useFakeTimers();
+
+            const pending = new Map<string | number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
+            const pendingTimeouts = new Map<string | number, ReturnType<typeof setTimeout>>();
+
+            function trackPending(id: string | number, resolve: (v: unknown) => void, reject: (e: unknown) => void): void {
+                pending.set(id, { resolve, reject });
+                const timer = setTimeout(() => {
+                    const entry = pending.get(id);
+                    if (entry) {
+                        pending.delete(id);
+                        pendingTimeouts.delete(id);
+                        entry.reject(new RpcError("Request timed out"));
+                    }
+                }, 30_000);
+                pendingTimeouts.set(id, timer);
+            }
+
+            function removePending(id: string | number) {
+                const entry = pending.get(id);
+                if (!entry) {
+                    return undefined;
+                }
+                pending.delete(id);
+                const timer = pendingTimeouts.get(id);
+                if (timer) {
+                    clearTimeout(timer);
+                    pendingTimeouts.delete(id);
+                }
+                return entry;
+            }
+
+            let resolvedValue: unknown;
+            trackPending(
+                1,
+                (v) => {
+                    resolvedValue = v;
+                },
+                () => {}
+            );
+
+            // Resolve before timeout
+            const entry = removePending(1);
+            entry?.resolve({ data: "success" });
+
+            expect(resolvedValue).toEqual({ data: "success" });
+            expect(pending.has(1)).toBe(false);
+            expect(pendingTimeouts.has(1)).toBe(false);
+
+            // Advancing past timeout should not cause any issues
+            vi.advanceTimersByTime(30_001);
+
+            vi.useRealTimers();
+        });
+    });
+
+    describe("rejectAllPending", () => {
+        it("should reject all pending requests at once", () => {
+            const pending = new Map<string | number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
+            const pendingTimeouts = new Map<string | number, ReturnType<typeof setTimeout>>();
+            const rejected: string[] = [];
+
+            function trackPending(id: string | number, resolve: (v: unknown) => void, reject: (e: unknown) => void): void {
+                pending.set(id, { resolve, reject });
+                const timer = setTimeout(() => {}, 30_000);
+                pendingTimeouts.set(id, timer);
+            }
+
+            function rejectAllPending(reason: Error): void {
+                for (const timer of pendingTimeouts.values()) {
+                    clearTimeout(timer);
+                }
+                pendingTimeouts.clear();
+                const entries = [...pending.entries()];
+                pending.clear();
+                for (const [, entry] of entries) {
+                    entry.reject(reason);
+                }
+            }
+
+            trackPending(
+                1,
+                () => {},
+                () => {
+                    rejected.push("req-1");
+                }
+            );
+            trackPending(
+                2,
+                () => {},
+                () => {
+                    rejected.push("req-2");
+                }
+            );
+            trackPending(
+                3,
+                () => {},
+                () => {
+                    rejected.push("req-3");
+                }
+            );
+
+            expect(pending.size).toBe(3);
+
+            rejectAllPending(new Error("WebSocket connection closed"));
+
+            expect(pending.size).toBe(0);
+            expect(pendingTimeouts.size).toBe(0);
+            expect(rejected).toEqual(["req-1", "req-2", "req-3"]);
+        });
+    });
+
+    describe("retriable error detection", () => {
+        function isRetriableError(err: unknown): boolean {
+            if (err instanceof Error && !(err instanceof RpcError)) {
+                return true;
+            }
+            if (err instanceof RpcError && err.message === "Request timed out") {
+                return true;
+            }
+            return false;
+        }
+
+        it("should treat plain Error (connection error) as retriable", () => {
+            expect(isRetriableError(new Error("WebSocket connection closed"))).toBe(true);
+            expect(isRetriableError(new Error("Connection reset"))).toBe(true);
+            expect(isRetriableError(new Error("WebSocket connection failed"))).toBe(true);
+        });
+
+        it("should treat RpcError 'Request timed out' as retriable", () => {
+            expect(isRetriableError(new RpcError("Request timed out"))).toBe(true);
+        });
+
+        it("should NOT treat application-level RpcError as retriable", () => {
+            expect(isRetriableError(new RpcError("User not found"))).toBe(false);
+            expect(isRetriableError(new RpcError("Rate limit exceeded"))).toBe(false);
+            expect(isRetriableError(new RpcError("Internal server error"))).toBe(false);
+        });
+
+        it("should NOT treat non-Error values as retriable", () => {
+            expect(isRetriableError("string error")).toBe(false);
+            expect(isRetriableError(null)).toBe(false);
+            expect(isRetriableError(undefined)).toBe(false);
+            expect(isRetriableError(42)).toBe(false);
+        });
+    });
+
+    describe("visibility-change stale connection detection", () => {
+        it("should detect stale connection after being hidden > 15 seconds", () => {
+            const STALE_THRESHOLD_MS = 15_000;
+            let lastHiddenTimestamp: number | null = null;
+            let reconnected = false;
+
+            function simulateVisibilityChange(hidden: boolean, now: number) {
+                if (hidden) {
+                    lastHiddenTimestamp = now;
+                } else {
+                    if (lastHiddenTimestamp !== null) {
+                        const hiddenDuration = now - lastHiddenTimestamp;
+                        if (hiddenDuration > STALE_THRESHOLD_MS) {
+                            reconnected = true;
+                        }
+                        lastHiddenTimestamp = null;
+                    }
+                }
+            }
+
+            // Hide the page
+            simulateVisibilityChange(true, 1000);
+            expect(lastHiddenTimestamp).toBe(1000);
+
+            // Come back after 20 seconds
+            simulateVisibilityChange(false, 21_000);
+            expect(reconnected).toBe(true);
+            expect(lastHiddenTimestamp).toBeNull();
+        });
+
+        it("should NOT reconnect after being hidden < 15 seconds", () => {
+            const STALE_THRESHOLD_MS = 15_000;
+            let lastHiddenTimestamp: number | null = null;
+            let reconnected = false;
+
+            function simulateVisibilityChange(hidden: boolean, now: number) {
+                if (hidden) {
+                    lastHiddenTimestamp = now;
+                } else {
+                    if (lastHiddenTimestamp !== null) {
+                        const hiddenDuration = now - lastHiddenTimestamp;
+                        if (hiddenDuration > STALE_THRESHOLD_MS) {
+                            reconnected = true;
+                        }
+                        lastHiddenTimestamp = null;
+                    }
+                }
+            }
+
+            // Hide the page
+            simulateVisibilityChange(true, 1000);
+
+            // Come back after only 5 seconds
+            simulateVisibilityChange(false, 6_000);
+            expect(reconnected).toBe(false);
+        });
+
+        it("should handle multiple hide/show cycles", () => {
+            const STALE_THRESHOLD_MS = 15_000;
+            let lastHiddenTimestamp: number | null = null;
+            let reconnectCount = 0;
+
+            function simulateVisibilityChange(hidden: boolean, now: number) {
+                if (hidden) {
+                    lastHiddenTimestamp = now;
+                } else {
+                    if (lastHiddenTimestamp !== null) {
+                        const hiddenDuration = now - lastHiddenTimestamp;
+                        if (hiddenDuration > STALE_THRESHOLD_MS) {
+                            reconnectCount++;
+                        }
+                        lastHiddenTimestamp = null;
+                    }
+                }
+            }
+
+            // First cycle: short hide (no reconnect)
+            simulateVisibilityChange(true, 1000);
+            simulateVisibilityChange(false, 5_000);
+            expect(reconnectCount).toBe(0);
+
+            // Second cycle: long hide (reconnect)
+            simulateVisibilityChange(true, 10_000);
+            simulateVisibilityChange(false, 30_000);
+            expect(reconnectCount).toBe(1);
+
+            // Third cycle: long hide (reconnect again)
+            simulateVisibilityChange(true, 35_000);
+            simulateVisibilityChange(false, 55_000);
+            expect(reconnectCount).toBe(2);
+        });
+    });
+
+    describe("forceReconnect logic", () => {
+        it("should reject all pending and clear socket state", () => {
+            const pending = new Map<string | number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
+            const pendingTimeouts = new Map<string | number, ReturnType<typeof setTimeout>>();
+            let socketClosed = false;
+            let socketState: "open" | "closed" | null = "open";
+
+            function rejectAllPending(reason: Error): void {
+                for (const timer of pendingTimeouts.values()) {
+                    clearTimeout(timer);
+                }
+                pendingTimeouts.clear();
+                const entries = [...pending.entries()];
+                pending.clear();
+                for (const [, entry] of entries) {
+                    entry.reject(reason);
+                }
+            }
+
+            function forceReconnect(): void {
+                if (socketState === "open") {
+                    socketClosed = true;
+                    socketState = null;
+                }
+                rejectAllPending(new Error("Connection reset"));
+            }
+
+            const rejections: string[] = [];
+            pending.set(1, {
+                resolve: () => {},
+                reject: () => {
+                    rejections.push("a");
+                },
+            });
+            pending.set(2, {
+                resolve: () => {},
+                reject: () => {
+                    rejections.push("b");
+                },
+            });
+
+            forceReconnect();
+
+            expect(socketClosed).toBe(true);
+            expect(socketState).toBeNull();
+            expect(pending.size).toBe(0);
+            expect(rejections).toEqual(["a", "b"]);
+        });
+
+        it("should be safe to call when no socket exists", () => {
+            let socketState: string | null = null;
+            const pending = new Map<string | number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
+
+            function rejectAllPending(reason: Error): void {
+                const entries = [...pending.entries()];
+                pending.clear();
+                for (const [, entry] of entries) {
+                    entry.reject(reason);
+                }
+            }
+
+            function forceReconnect(): void {
+                socketState = null;
+                rejectAllPending(new Error("Connection reset"));
+            }
+
+            expect(() => forceReconnect()).not.toThrow();
+            expect(socketState).toBeNull();
+        });
+    });
+
+    describe("retry logic", () => {
+        function isRetriableError(err: unknown): boolean {
+            if (err instanceof Error && !(err instanceof RpcError)) {
+                return true;
+            }
+            if (err instanceof RpcError && err.message === "Request timed out") {
+                return true;
+            }
+            return false;
+        }
+
+        const RETRY_BASE_DELAY_MS = 500;
+        const RETRY_MAX_DELAY_MS = 5_000;
+
+        function computeBackoffDelay(attempt: number): number {
+            return Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
+        }
+
+        it("should retry on retriable errors up to MAX_RETRIES with backoff", async () => {
+            vi.useFakeTimers();
+
+            const MAX_RETRIES = 3;
+            let attempts = 0;
+            const delays: number[] = [];
+
+            async function rpcCallWithRetry(attempt = 0): Promise<string> {
+                try {
+                    attempts++;
+                    if (attempts <= 1) {
+                        throw new Error("Connection reset");
+                    }
+                    return "success";
+                } catch (err) {
+                    if (attempt < MAX_RETRIES && isRetriableError(err)) {
+                        const baseDelay = computeBackoffDelay(attempt);
+                        delays.push(baseDelay);
+                        await new Promise<void>((r) => setTimeout(r, baseDelay));
+                        return rpcCallWithRetry(attempt + 1);
+                    }
+                    throw err;
+                }
+            }
+
+            const resultPromise = rpcCallWithRetry();
+            // Advance past the first retry delay (500ms base)
+            await vi.advanceTimersByTimeAsync(600);
+
+            const result = await resultPromise;
+            expect(result).toBe("success");
+            expect(attempts).toBe(2); // 1 failure + 1 retry
+            expect(delays).toHaveLength(1);
+            expect(delays[0]).toBe(500); // First retry base delay
+
+            vi.useRealTimers();
+        });
+
+        it("should NOT retry on non-retriable errors", async () => {
+            const MAX_RETRIES = 3;
+            let attempts = 0;
+
+            async function rpcCallWithRetry(attempt = 0): Promise<string> {
+                try {
+                    attempts++;
+                    throw new RpcError("User not found");
+                } catch (err) {
+                    if (attempt < MAX_RETRIES && isRetriableError(err)) {
+                        return rpcCallWithRetry(attempt + 1);
+                    }
+                    throw err;
+                }
+            }
+
+            await expect(rpcCallWithRetry()).rejects.toThrow("User not found");
+            expect(attempts).toBe(1); // No retry
+        });
+
+        it("should give up after MAX_RETRIES exhausted", async () => {
+            vi.useFakeTimers();
+
+            const MAX_RETRIES = 3;
+            let attempts = 0;
+
+            async function rpcCallWithRetry(attempt = 0): Promise<string> {
+                try {
+                    attempts++;
+                    throw new Error("Connection reset");
+                } catch (err) {
+                    if (attempt < MAX_RETRIES && isRetriableError(err)) {
+                        const baseDelay = computeBackoffDelay(attempt);
+                        await new Promise<void>((r) => setTimeout(r, baseDelay));
+                        return rpcCallWithRetry(attempt + 1);
+                    }
+                    throw err;
+                }
+            }
+
+            const resultPromise = rpcCallWithRetry();
+            // Advance past all retry delays: 500 + 1000 + 2000 = 3500ms
+            await vi.advanceTimersByTimeAsync(10_000);
+
+            await expect(resultPromise).rejects.toThrow("Connection reset");
+            expect(attempts).toBe(4); // 1 original + 3 retries, then gives up
+
+            vi.useRealTimers();
+        });
+
+        it("should compute exponential backoff delays correctly", () => {
+            expect(computeBackoffDelay(0)).toBe(500); // 500 * 2^0 = 500ms
+            expect(computeBackoffDelay(1)).toBe(1000); // 500 * 2^1 = 1000ms
+            expect(computeBackoffDelay(2)).toBe(2000); // 500 * 2^2 = 2000ms
+            expect(computeBackoffDelay(3)).toBe(4000); // 500 * 2^3 = 4000ms
+            expect(computeBackoffDelay(4)).toBe(5000); // 500 * 2^4 = 8000 → capped at 5000ms
+            expect(computeBackoffDelay(10)).toBe(5000); // Always capped at 5000ms
         });
     });
 

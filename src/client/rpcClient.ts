@@ -163,12 +163,9 @@ async function sendBatchWebSocket(batch: PendingRequest[]) {
     const ws = await ensureSocketReady();
     const requests = batch.map((b) => b.req);
 
-    // Register pending promises
+    // Register pending promises with timeout safeguards
     batch.forEach((item) => {
-        pending.set(item.req.id, {
-            resolve: (v: unknown) => item.resolve(v as RpcResult<any>),
-            reject: item.reject,
-        });
+        trackPending(item.req.id, (v: unknown) => item.resolve(v as RpcResult<any>), item.reject);
     });
 
     try {
@@ -177,7 +174,7 @@ async function sendBatchWebSocket(batch: PendingRequest[]) {
         ws.send(encoded);
     } catch (err) {
         batch.forEach((item) => {
-            pending.delete(item.req.id);
+            removePending(item.req.id);
             item.reject(err);
         });
     }
@@ -191,21 +188,125 @@ let socket: WebSocket | null = null;
 let connectionPromise: Promise<WebSocket> | null = null;
 
 const pending = new Map<string | number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
+const pendingTimeouts = new Map<string | number, ReturnType<typeof setTimeout>>();
+
+// ── Connection resilience constants ──────────────────────────────────────────
+
+/** How long (ms) the page must be hidden before we consider the WebSocket stale. */
+const STALE_THRESHOLD_MS = 15_000;
+
+/** Max time (ms) to wait for a response before timing out a request. */
+const REQUEST_TIMEOUT_MS = 30_000;
+
+/** Number of automatic retries on retriable connection errors. */
+const MAX_RETRIES = 3;
+
+/** Base delay (ms) for exponential backoff between retries (doubles each attempt). */
+const RETRY_BASE_DELAY_MS = 500;
+
+/** Maximum delay (ms) cap for backoff to avoid excessively long waits. */
+const RETRY_MAX_DELAY_MS = 5_000;
+
+/** Timestamp when the page was last hidden (for visibility-change detection). */
+let lastHiddenTimestamp: number | null = null;
+
+// ── Pending-request helpers ──────────────────────────────────────────────────
+
+/**
+ * Register a pending request with an automatic timeout safeguard.
+ * If no response arrives within REQUEST_TIMEOUT_MS the promise is rejected
+ * so the caller's retry logic can kick in.
+ */
+function trackPending(id: string | number, resolve: (v: unknown) => void, reject: (e: unknown) => void): void {
+    pending.set(id, { resolve, reject });
+    const timer = setTimeout(() => {
+        const entry = pending.get(id);
+        if (entry) {
+            pending.delete(id);
+            pendingTimeouts.delete(id);
+            entry.reject(new RpcError("Request timed out"));
+        }
+    }, REQUEST_TIMEOUT_MS);
+    pendingTimeouts.set(id, timer);
+}
+
+/**
+ * Remove a pending request and clear its timeout.
+ * Returns the entry so the caller can resolve/reject it.
+ */
+function removePending(id: string | number): { resolve: (v: unknown) => void; reject: (e: unknown) => void } | undefined {
+    const entry = pending.get(id);
+    if (!entry) {
+        return undefined;
+    }
+    pending.delete(id);
+    const timer = pendingTimeouts.get(id);
+    if (timer) {
+        clearTimeout(timer);
+        pendingTimeouts.delete(id);
+    }
+    return entry;
+}
+
+/** Reject every in-flight request (e.g. when the socket closes unexpectedly). */
+function rejectAllPending(reason: Error): void {
+    for (const timer of pendingTimeouts.values()) {
+        clearTimeout(timer);
+    }
+    pendingTimeouts.clear();
+    const entries = [...pending.entries()];
+    pending.clear();
+    for (const [, entry] of entries) {
+        entry.reject(reason);
+    }
+}
+
+// ── Reconnection helpers ─────────────────────────────────────────────────────
+
+/**
+ * Force-close the current WebSocket so the next call creates a fresh
+ * connection (which fetches a brand-new token).
+ */
+function forceReconnect(): void {
+    const oldSocket = socket;
+    socket = null;
+    connectionPromise = null;
+
+    if (oldSocket) {
+        // Detach handlers to avoid double-rejecting pending from the close event
+        oldSocket.onclose = null;
+        oldSocket.onerror = null;
+        oldSocket.onmessage = null;
+        oldSocket.close();
+    }
+
+    // Reject all in-flight requests – callers with retry logic will resend
+    rejectAllPending(new Error("Connection reset"));
+}
+
+/** Determine whether an error warrants an automatic retry. */
+function isRetriableError(err: unknown): boolean {
+    // Network / connection errors are always retriable
+    if (err instanceof Error && !(err instanceof RpcError)) {
+        return true;
+    }
+    // Timed-out requests are retriable (socket may have died silently)
+    if (err instanceof RpcError && err.message === "Request timed out") {
+        return true;
+    }
+    return false;
+}
 
 // Clean up WebSocket connection on HMR (Hot Module Replacement)
 if (import.meta.hot) {
     import.meta.hot.dispose(() => {
         if (socket) {
-            // Close the socket gracefully
+            socket.onclose = null;
             socket.close();
             socket = null;
             connectionPromise = null;
         }
-        // Reject all pending requests
-        pending.forEach((entry) => {
-            entry.reject(new Error("Module reloaded"));
-        });
-        pending.clear();
+        rejectAllPending(new Error("Module reloaded"));
     });
 }
 
@@ -266,11 +367,10 @@ async function createSocket(): Promise<WebSocket> {
         const msg = msgpackDecode(data) as RpcResponse | RpcResponse[];
 
         const handleResponse = (res: RpcResponse) => {
-            const entry = pending.get(res.id);
+            const entry = removePending(res.id);
             if (!entry) {
                 return;
             }
-            pending.delete(res.id);
             if (res.ok) {
                 entry.resolve({ data: res.result, stats: res.stats });
             } else {
@@ -285,10 +385,17 @@ async function createSocket(): Promise<WebSocket> {
         }
     };
 
+    ws.onerror = () => {
+        // WebSocket errors are always followed by a close event.
+        // The close handler takes care of rejecting pending promises.
+    };
+
     ws.onclose = () => {
         if (socket === ws) {
             socket = null;
             connectionPromise = null;
+            // Reject every in-flight request so callers can retry
+            rejectAllPending(new Error("WebSocket connection closed"));
         }
     };
 
@@ -381,15 +488,12 @@ async function rpcCallWebSocket<TResult, TArgs>(methodId: string, args?: TArgs):
         const id = nextId();
         const req: RpcRequest = { id, method: methodId, args };
         return new Promise<RpcResult<TResult>>((resolve, reject) => {
-            pending.set(id, {
-                resolve: (v: unknown) => resolve(v as RpcResult<TResult>),
-                reject,
-            });
+            trackPending(id, (v: unknown) => resolve(v as RpcResult<TResult>), reject);
             try {
                 const encoded = msgpackEncode(req);
                 socket!.send(encoded);
             } catch (err) {
-                pending.delete(id);
+                removePending(id);
                 reject(err);
             }
         });
@@ -401,16 +505,13 @@ async function rpcCallWebSocket<TResult, TArgs>(methodId: string, args?: TArgs):
     const req: RpcRequest = { id, method: methodId, args };
 
     return new Promise<RpcResult<TResult>>((resolve, reject) => {
-        pending.set(id, {
-            resolve: (v: unknown) => resolve(v as RpcResult<TResult>),
-            reject,
-        });
+        trackPending(id, (v: unknown) => resolve(v as RpcResult<TResult>), reject);
         try {
             // Always use msgpack encoding
             const encoded = msgpackEncode(req);
             ws.send(encoded);
         } catch (err) {
-            pending.delete(id);
+            removePending(id);
             reject(err);
         }
     });
@@ -419,19 +520,40 @@ async function rpcCallWebSocket<TResult, TArgs>(methodId: string, args?: TArgs):
 /**
  * Make an RPC call using the appropriate transport.
  * Automatically selects HTTP or WebSocket based on network conditions and configuration.
+ *
+ * Includes automatic retry logic: if a call fails due to a connection error
+ * (e.g. stale WebSocket after mobile browser was backgrounded), the client
+ * forces a fresh connection (with a new token) and retries once.
  */
 export async function rpcCall<TResult = unknown, TArgs = unknown>(methodId: string, args?: TArgs): Promise<RpcResult<TResult>> {
-    if (shouldUseHttpTransport()) {
-        const id = nextId();
-        const req: RpcRequest = { id, method: methodId, args };
+    return rpcCallWithRetry<TResult, TArgs>(methodId, args);
+}
 
-        return new Promise<RpcResult<TResult>>((resolve, reject) => {
-            pendingBatch.push({ req, resolve: resolve as any, reject });
-            scheduleBatch();
-        });
+async function rpcCallWithRetry<TResult, TArgs>(methodId: string, args: TArgs | undefined, attempt = 0): Promise<RpcResult<TResult>> {
+    try {
+        if (shouldUseHttpTransport()) {
+            const id = nextId();
+            const req: RpcRequest = { id, method: methodId, args };
+
+            return await new Promise<RpcResult<TResult>>((resolve, reject) => {
+                pendingBatch.push({ req, resolve: resolve as (value: RpcResult<TResult>) => void, reject });
+                scheduleBatch();
+            });
+        }
+
+        return await rpcCallWebSocket<TResult, TArgs>(methodId, args);
+    } catch (err) {
+        if (attempt < MAX_RETRIES && isRetriableError(err)) {
+            // Force a fresh connection (fetches a new token)
+            forceReconnect();
+            // Exponential backoff with jitter: 500ms, 1000ms, 2000ms (capped at 5s)
+            const baseDelay = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
+            const jitter = Math.random() * baseDelay * 0.3;
+            await new Promise<void>((r) => setTimeout(r, baseDelay + jitter));
+            return rpcCallWithRetry<TResult, TArgs>(methodId, args, attempt + 1);
+        }
+        throw err;
     }
-
-    return rpcCallWebSocket<TResult, TArgs>(methodId, args);
 }
 
 /**
@@ -459,4 +581,32 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     // Use requestIdleCallback if available, otherwise setTimeout
     const schedulePreconnect = window.requestIdleCallback || ((cb: () => void) => setTimeout(cb, 1));
     schedulePreconnect(() => preconnect());
+}
+
+// ============================================================================
+// Visibility-change reconnection (critical for mobile browsers)
+// ============================================================================
+//
+// Mobile browsers freeze or kill WebSocket connections when the tab is
+// backgrounded.  When the user returns the socket may *appear* open but
+// is actually stale.  We detect this via the Page Visibility API and
+// proactively tear down the old connection so the next RPC call creates
+// a fresh one (with a brand-new auth token).
+// ============================================================================
+
+if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", () => {
+        if (document.hidden) {
+            lastHiddenTimestamp = Date.now();
+        } else {
+            // Page became visible again
+            if (lastHiddenTimestamp !== null) {
+                const hiddenDuration = Date.now() - lastHiddenTimestamp;
+                if (hiddenDuration > STALE_THRESHOLD_MS && socket) {
+                    forceReconnect();
+                }
+                lastHiddenTimestamp = null;
+            }
+        }
+    });
 }
