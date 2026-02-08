@@ -144,7 +144,9 @@ export function startProdServer(options: ProdServerOptions) {
                 chunks.push(chunk);
             });
             req.on("end", async () => {
-                if (aborted) return;
+                if (aborted) {
+                    return;
+                }
                 try {
                     const body = Buffer.concat(chunks);
                     const ip = extractClientIP(req, trustProxyDepth);
@@ -325,6 +327,14 @@ export function startProdServer(options: ProdServerOptions) {
             return;
         }
 
+        // Prevent unhandled errors from crashing the process (e.g. maxPayload exceeded)
+        socket.on("error", (err) => {
+            log("warn", "WebSocket error:", err);
+            if (socket.readyState === socket.OPEN || socket.readyState === socket.CLOSING) {
+                socket.close(1009, "Message too large");
+            }
+        });
+
         socket.on("message", (msg: WebSocket.RawData, _isBinary: boolean) => {
             // Check rate limit
             if (!rateLimiter.checkRateLimit(socket)) {
@@ -375,7 +385,13 @@ export function startProdServer(options: ProdServerOptions) {
         if (req.url?.startsWith("/rpc")) {
             // Security: read token from Sec-WebSocket-Protocol header instead of query string
             const protocols = req.headers["sec-websocket-protocol"];
-            const token = typeof protocols === "string" ? protocols.split(",").map((p) => p.trim()).find((p) => p.includes(".")) : undefined;
+            const token =
+                typeof protocols === "string"
+                    ? protocols
+                          .split(",")
+                          .map((p) => p.trim())
+                          .find((p) => p.includes("."))
+                    : undefined;
 
             if (!token || !verifyConnectionToken(token)) {
                 log("warn", "WebSocket connection rejected - invalid token");

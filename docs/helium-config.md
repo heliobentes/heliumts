@@ -139,6 +139,34 @@ const config: HeliumConfig = {
   - Shorter durations improve security but may cause issues with slow networks
   - If a client takes longer than this to connect, the token expires and connection fails
 
+#### Payload Limits
+
+Configure maximum payload sizes for RPC requests and WebSocket messages:
+
+```typescript
+const config: HeliumConfig = {
+        rpc: {
+                maxWsPayload: 10_485_760, // 10 MB max WebSocket message size
+                maxBodySize: 10_485_760,  // 10 MB max HTTP RPC request body
+                maxBatchSize: 50,         // Max RPC calls per batch
+        },
+};
+```
+
+**Options:**
+
+- `maxWsPayload` (number): Maximum WebSocket message payload size in bytes
+    - Default: `1048576` (1 MB)
+    - Increase this for large binary uploads over WebSocket
+
+- `maxBodySize` (number): Maximum HTTP RPC request body size in bytes
+    - Default: `1048576` (1 MB)
+    - Applies to the `POST /__helium__/rpc` endpoint
+
+- `maxBatchSize` (number): Maximum number of RPC calls in a single batch
+    - Default: `20`
+    - Helps prevent oversized batch payloads
+
 ### Proxy Configuration
 
 Configure IP detection for deployments behind proxies, load balancers, or CDNs.
@@ -218,6 +246,11 @@ const config: HeliumConfig = {
             rateLimitWindowMs: 60000,
             tokenValidityMs: 30000,
         },
+
+        // Payload limits
+        maxWsPayload: 10_485_760,
+        maxBodySize: 10_485_760,
+        maxBatchSize: 50,
     },
 };
 

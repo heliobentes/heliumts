@@ -296,6 +296,9 @@ const config: HeliumConfig = {
             rateLimitWindowMs: 60000,
             tokenValidityMs: 30000,
         },
+        maxWsPayload: 10_485_760, // 10 MB max WebSocket message size
+        maxBodySize: 10_485_760,  // 10 MB max HTTP RPC body
+        maxBatchSize: 50,
     },
 };
 
