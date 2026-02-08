@@ -1,0 +1,103 @@
+Security Assessment Report
+Target: HeliumJS Framework Codebase
+Date: February 8, 2026
+Model: Gemini 3 Pro (Preview)
+
+1. EXECUTIVE SUMMARY
+====================
+The codebase implements a web framework with RPC capabilities in Node.js. 
+While it includes mechanisms for rate limiting and token-based checking, 
+critical vulnerabilities were identified that compromise the integrity of 
+the server and its filesystem.
+
+2. CRITICAL VULNERABILITIES
+===========================
+
+2.1. PATH TRAVERSAL (Filesystem Access)
+---------------------------------------
+Severity: CRITICAL
+Location: src/server/prodServer.ts
+Description: 
+The production server accepts a URL path and joins it directly with the 
+static directory root without validating that the resulting path is 
+contained within that root. An attacker can use ".." sequences (e.g., 
+/../../.env) to read arbitrary files from the server's filesystem, 
+including environment variables, source code, and system files.
+
+2.2. AUTHENTICATION BYPASS / WEAK TOKEN
+---------------------------------------
+Severity: HIGH
+Location: src/server/prodServer.ts, src/server/devServer.ts
+Description: 
+The WebSocket RPC connection relies on a "connection token" for security. 
+However, the server exposes a public, unauthenticated endpoint 
+(/__helium__/refresh-token) that generates valid tokens for any requestor. 
+This renders the token mechanism ineffective as a security control, serving 
+only as a handshake rather than an authentication check.
+
+3. MEDIUM VULNERABILITIES
+=========================
+
+3.1. DENIAL OF SERVICE (Recursive Serializer)
+---------------------------------------------
+Severity: MEDIUM
+Location: src/server/serializer.ts
+Description: 
+The `prepareForMsgpack` function recursively traverses objects to handle 
+`.toJSON()` calls. It lacks detection for circular references. Passing an 
+object that references itself will cause an infinite recursion, leading to 
+a "Maximum call stack size exceeded" crash of the Node.js process.
+
+3.2. IP SPOOFING RISK
+---------------------
+Severity: MEDIUM
+Location: src/utils/ipExtractor.ts
+Description: 
+The `extractClientIP` function trusts X-Forwarded-For headers based on 
+the `trustProxyDepth` configuration. If this is misconfigured (set > 0 
+while not behind a proxy), attackers can easily spoof their IP address to 
+bypass Rate Limiting controls.
+
+4. LOW / INFORMATIONAL ISSUES
+=============================
+
+4.1. HARDCODED INTERNAL IP IN DEV WORKERS
+-----------------------------------------
+Location: src/server/devServer.ts
+Description: Workers are started with a hardcoded IP of "127.0.0.1" in 
+their context, which may mask actual request origins during development.
+
+4.2. INCOMPLETE BLOCKLIST
+-------------------------
+Location: src/server/prodServer.ts
+Description: The server uses a deny-list approach for sensitive files 
+(helium.config.js, .env). This is inherently less secure than an allow-list 
+approach and is completely bypassed by the Path Traversal vulnerability (2.1).
+
+4.3. MISSING SECURITY HEADERS
+-----------------------------
+Description: The server responses lack standard security headers such as 
+Content-Security-Policy, X-Frame-Options, and X-Content-Type-Options.
+
+5. REMEDIATION SUGGESTIONS
+==========================
+
+[Fix for 2.1 - Path Traversal in src/server/prodServer.ts]
+
+    const path = require("path");
+    
+    // ... inside request handler ...
+    
+    const cleanUrl = url.split("?")[0].replace(/\/$/, "") || "/";
+    
+    // Normalize and Resolve to absolute path
+    const resolvedPath = path.resolve(staticDir, "." + path.sep + cleanUrl);
+    
+    // Ensure the path is still inside staticDir
+    if (!resolvedPath.startsWith(staticDir)) {
+        res.writeHead(403);
+        res.end("Forbidden");
+        return;
+    }
+    
+    filePath = resolvedPath;

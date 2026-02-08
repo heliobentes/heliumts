@@ -1,0 +1,107 @@
+SECURITY REVIEW REPORT FOR HELIUMJS
+===================================
+Date: February 8, 2026
+Reviewer: GitHub Copilot (Gemini 3 Pro)
+
+1. EXECUTIVE SUMMARY
+====================
+This report presents a comprehensive security review of the HeliumJS codebase. The review focused on identifying security flaws and potential sensitive information leaks. Several critical and high-severity issues were identified, primarily related to authentication bypasses and denial-of-service vulnerabilities. The framework relies heavily on user-implemented security measures, which could lead to insecure defaults if not properly configured.
+
+2. METHODOLOGY
+==============
+The review was conducted by analyzing the source code across all modules:
+- Client-side code: React components, routing, RPC client, caching
+- Server-side code: HTTP router, RPC registry, production/dev servers, security utilities
+- Utilities: Environment loading, logging, IP extraction
+- Configuration: Default settings and security parameters
+
+Key analysis techniques:
+- Static code analysis for hardcoded secrets and sensitive patterns
+- Manual review of authentication and authorization workflows
+- Assessment of input validation and parsing logic
+- Evaluation of DoS protections and rate limiting
+
+3. FINDINGS
+===========
+
+3.1. CRITICAL SEVERITY
+----------------------
+
+[C-01] Authentication Bypass in RPC Endpoints
+Location: src/server/prodServer.ts, src/server/security.ts
+Description: The /__helium__/refresh-token endpoint distributes connection tokens freely without authentication. WebSocket connections for RPC do not validate these tokens effectively, allowing unauthenticated access to all RPC methods.
+Impact: Attackers can execute arbitrary RPC methods, potentially leading to unauthorized actions or data breaches.
+Code Evidence:
+  if (req.url === "/__helium__/refresh-token") {
+      const token = generateConnectionToken(); // No auth check
+      res.end(JSON.stringify({ token }));
+  }
+
+[C-02] Denial of Service via Unbounded Request Bodies
+Location: src/server/httpRouter.ts, src/server/prodServer.ts
+Description: HTTP request bodies and WebSocket messages are read entirely into memory buffers without size limits.
+Impact: Attackers can send extremely large payloads to cause Out-Of-Memory (OOM) crashes and denial of service.
+
+3.2. HIGH SEVERITY
+------------------
+
+[H-01] Lack of Input Validation in RPC Arguments
+Location: src/server/rpcRegistry.ts
+Description: RPC method arguments are passed directly to handlers without framework-level validation or sanitization.
+Impact: Increases risk of injection attacks or logic errors in user handlers if they do not manually validate inputs.
+
+[H-02] Unhandled JSON Parsing Exceptions
+Location: src/server/httpRouter.ts
+Description: The HTTPRequest.json() method uses JSON.parse() without a try-catch block.
+Impact: Malformed JSON payloads can crash the server process.
+
+3.3. MEDIUM SEVERITY
+--------------------
+
+[M-01] Missing Default CORS Configuration
+Location: src/server/prodServer.ts
+Description: No default CORS headers are set, potentially leaving APIs exposed or causing issues for legitimate cross-origin clients.
+
+[M-02] No HTTPS Enforcement
+Location: General Configuration
+Description: The framework does not enforce HTTPS or HSTS headers, relying entirely on external proxies.
+
+[M-03] Information Disclosure in Error Messages
+Location: src/server/rpcRegistry.ts
+Description: Internal error messages (including stack traces in some environments) may be returned to the client.
+
+3.4. LOW SEVERITY
+-----------------
+
+[L-01] Environment Variable Validation
+Location: src/utils/envLoader.ts
+Description: Public environment variables (HELIUM_PUBLIC_*) are exposed without type or value validation.
+
+[L-02] Insufficient Default Rate Limits
+Location: src/server/config.ts
+Description: Default limits (10 messages/min, 10 connections/IP) may be too restrictive or too loose depending on the use case.
+
+4. POSITIVE SECURITY FINDINGS
+=============================
+- Encryption: Uses HMAC-SHA256 with timing-safe comparison for token validation.
+- Serialization: Uses MessagePack instead of JSON for RPC, reducing some JSON-based attack vectors.
+- Isolation: Client-side environment variables are correctly filtered to prevent secret leakage.
+- Protection: Sensitive files (e.g., .env) are explicitly blocked from being served statically.
+- No XSS: No dangerous sinks (dangerouslySetInnerHTML, eval) found in core framework code.
+
+5. RECOMMENDATIONS
+==================
+
+Immediate Actions:
+1. Implement authentication checks before generating connection tokens.
+2. Add strict, configurable size limits for HTTP bodies and WebSocket messages.
+3. Wrap all JSON parsing logic in try-catch blocks to prevent crashes.
+
+Medium-term Improvements:
+1. Add a schema validation layer (e.g., Zod integration) for RPC inputs.
+2. Implement configurable CORS middleware enabled by default.
+3. Sanitize error messages sent to clients in production mode.
+
+6. CONCLUSION
+=============
+While HeliumJS demonstrates some secure design choices (like secure token generation and safe serialization), the critical authentication bypass and DoS vulnerabilities present significant risks. These issues should be addressed immediately before any production deployment.

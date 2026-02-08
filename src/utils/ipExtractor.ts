@@ -46,25 +46,12 @@ export function extractClientIP(req: http.IncomingMessage, trustProxyDepth: numb
         return req.socket.remoteAddress || "unknown";
     }
 
-    // 1. Check CF-Connecting-IP (Cloudflare's guaranteed client IP)
-    const cfConnectingIP = req.headers["cf-connecting-ip"];
-    if (cfConnectingIP && typeof cfConnectingIP === "string" && cfConnectingIP.trim().length > 0) {
-        return cfConnectingIP.trim();
-    }
+    // Security: When trustProxyDepth >= 1, extract IP using X-Forwarded-For first.
+    // Single-value headers (CF-Connecting-IP, True-Client-IP, X-Real-IP) are only
+    // checked as a fallback since they can be spoofed by direct clients when no
+    // trusted proxy IP allowlist is configured.
 
-    // 2. Check True-Client-IP (Cloudflare Enterprise, Akamai)
-    const trueClientIP = req.headers["true-client-ip"];
-    if (trueClientIP && typeof trueClientIP === "string" && trueClientIP.trim().length > 0) {
-        return trueClientIP.trim();
-    }
-
-    // 3. Check X-Real-IP (Nginx, other proxies)
-    const xRealIP = req.headers["x-real-ip"];
-    if (xRealIP && typeof xRealIP === "string" && xRealIP.trim().length > 0) {
-        return xRealIP.trim();
-    }
-
-    // 4. Check X-Forwarded-For (Standard, but requires parsing)
+    // 1. Check X-Forwarded-For (Standard, most reliable with depth-based extraction)
     const forwardedFor = req.headers["x-forwarded-for"];
     if (forwardedFor) {
         const forwardedIPs = (Array.isArray(forwardedFor) ? forwardedFor.join(",") : forwardedFor)
@@ -79,6 +66,24 @@ export function extractClientIP(req: http.IncomingMessage, trustProxyDepth: numb
                 return forwardedIPs[0];
             }
         }
+    }
+
+    // 2. Fallback: Check CF-Connecting-IP (Cloudflare)
+    const cfConnectingIP = req.headers["cf-connecting-ip"];
+    if (cfConnectingIP && typeof cfConnectingIP === "string" && cfConnectingIP.trim().length > 0) {
+        return cfConnectingIP.trim();
+    }
+
+    // 3. Fallback: Check True-Client-IP (Cloudflare Enterprise, Akamai)
+    const trueClientIP = req.headers["true-client-ip"];
+    if (trueClientIP && typeof trueClientIP === "string" && trueClientIP.trim().length > 0) {
+        return trueClientIP.trim();
+    }
+
+    // 4. Fallback: Check X-Real-IP (Nginx, other proxies)
+    const xRealIP = req.headers["x-real-ip"];
+    if (xRealIP && typeof xRealIP === "string" && xRealIP.trim().length > 0) {
+        return xRealIP.trim();
     }
 
     // 5. Fall back to direct connection

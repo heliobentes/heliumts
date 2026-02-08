@@ -63,6 +63,7 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
     httpRouter.setTrustProxyDepth(trustProxyDepth);
     loadHandlers(registry, httpRouter);
     registry.setRateLimiter(rateLimiter);
+    registry.setMaxBatchSize(rpcConfig.maxBatchSize);
     currentRegistry = registry;
     currentHttpRouter = httpRouter;
 
@@ -128,6 +129,7 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
     if (!wss) {
         wss = new WebSocketServer({
             noServer: true,
+            maxPayload: rpcConfig.maxWsPayload,
             perMessageDeflate: compressionConfig.enabled
                 ? {
                       zlibDeflateOptions: {
@@ -208,8 +210,9 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
         // Handle WebSocket upgrade requests
         httpServer.on("upgrade", (req, socket, head) => {
             if (req.url?.startsWith("/rpc")) {
-                const url = new URL(req.url, "http://localhost");
-                const token = url.searchParams.get("token");
+                // Security: read token from Sec-WebSocket-Protocol header instead of query string
+                const protocols = req.headers["sec-websocket-protocol"];
+                const token = typeof protocols === "string" ? protocols.split(",").map((p) => p.trim()).find((p) => p.includes(".")) : undefined;
 
                 if (!token || !verifyConnectionToken(token)) {
                     log("warn", "WebSocket connection rejected - invalid token");
@@ -239,6 +242,9 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
         log("info", "WebSocket RPC attached to dev server at /rpc");
     }
 
+    // Security: max body size for HTTP requests
+    const maxBodySize = rpcConfig.maxBodySize ?? 1_048_576;
+
     // Attach HTTP request handler
     // We need to intercept requests before Vite handles them
     const originalListeners = httpServer.listeners("request").slice();
@@ -247,6 +253,18 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
     httpServer.on("request", async (req: any, res: any) => {
         // Handle token refresh endpoint
         if (req.url === "/__helium__/refresh-token") {
+            // Security: only allow POST to prevent CSRF via <img>/<script> tags
+            if (req.method !== "POST") {
+                res.writeHead(405, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: "Method not allowed" }));
+                return;
+            }
+            // Security: require custom header to prevent cross-origin requests
+            if (!req.headers["x-requested-with"]) {
+                res.writeHead(403, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: "Forbidden" }));
+                return;
+            }
             const { generateConnectionToken } = await import("./security.js");
             const token = generateConnectionToken();
             res.writeHead(200, { "Content-Type": "application/json" });
@@ -256,9 +274,38 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
 
         // Handle HTTP-based RPC endpoint (alternative to WebSocket for mobile networks)
         if (req.url === "/__helium__/rpc" && req.method === "POST") {
+            // Security: verify connection token for HTTP RPC
+            const authToken = req.headers["x-helium-token"] as string | undefined;
+            if (!authToken || !verifyConnectionToken(authToken)) {
+                res.writeHead(401, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ ok: false, error: "Unauthorized" }));
+                return;
+            }
+
+            // Security: check Content-Length before reading body
+            const contentLength = parseInt(req.headers["content-length"] || "0", 10);
+            if (contentLength > maxBodySize) {
+                res.writeHead(413, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ ok: false, error: "Request entity too large" }));
+                return;
+            }
+
             const chunks: Buffer[] = [];
-            req.on("data", (chunk: Buffer) => chunks.push(chunk));
+            let totalSize = 0;
+            let aborted = false;
+            req.on("data", (chunk: Buffer) => {
+                totalSize += chunk.length;
+                if (totalSize > maxBodySize) {
+                    aborted = true;
+                    req.destroy();
+                    res.writeHead(413, { "Content-Type": "application/json" });
+                    res.end(JSON.stringify({ ok: false, error: "Request entity too large" }));
+                    return;
+                }
+                chunks.push(chunk);
+            });
             req.on("end", async () => {
+                if (aborted) return;
                 try {
                     if (!currentRegistry) {
                         res.writeHead(503, { "Content-Type": "application/json" });

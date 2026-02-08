@@ -316,12 +316,15 @@ describe("HTTPRouter", () => {
 describe("pathToRegex logic", () => {
     function pathToRegex(path: string): { pattern: RegExp; keys: string[] } {
         const keys: string[] = [];
+        const multiSegmentToken = "__WILDCARD_MULTI__";
         const pattern = path
+            .replace(/\/\*\*/g, `/${multiSegmentToken}`)
             .replace(/\/:([^/]+)/g, (_, key) => {
                 keys.push(key);
                 return "/([^/]+)";
             })
-            .replace(/\*/g, ".*")
+            .replace(/\*/g, "[^/]*")
+            .replace(new RegExp(multiSegmentToken, "g"), ".*")
             .replace(/\//g, "\\/");
 
         return {
@@ -353,11 +356,21 @@ describe("pathToRegex logic", () => {
         expect(pattern.test("/api/users/1/posts/2")).toBe(true);
     });
 
-    it("should handle wildcard", () => {
+    it("should handle single-segment wildcard", () => {
         const { pattern, keys } = pathToRegex("/api/*");
 
         expect(keys).toEqual([]);
+        expect(pattern.test("/api/anything/here")).toBe(false);
+        expect(pattern.test("/api/anything")).toBe(true);
+        expect(pattern.test("/api/")).toBe(true);
+    });
+
+    it("should handle multi-segment wildcard", () => {
+        const { pattern, keys } = pathToRegex("/api/**");
+
+        expect(keys).toEqual([]);
         expect(pattern.test("/api/anything/here")).toBe(true);
+        expect(pattern.test("/api/anything")).toBe(true);
         expect(pattern.test("/api/")).toBe(true);
     });
 });

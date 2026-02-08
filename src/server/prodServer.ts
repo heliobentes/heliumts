@@ -70,11 +70,41 @@ export function startProdServer(options: ProdServerOptions) {
     httpRouter.setTrustProxyDepth(trustProxyDepth);
     registerHandlers(registry, httpRouter);
     registry.setRateLimiter(rateLimiter);
+    registry.setMaxBatchSize(rpcConfig.maxBatchSize);
+
+    // Security: max body size for HTTP requests (1 MB default)
+    const maxBodySize = rpcConfig.maxBodySize ?? 1_048_576;
+    // Security: max batch size for RPC requests
+    const maxBatchSize = rpcConfig.maxBatchSize ?? 20;
 
     // Create HTTP server
     const server = http.createServer(async (req, res) => {
+        // Apply security headers to all responses
+        setSecurityHeaders(res, config);
+
+        // Handle CORS preflight
+        if (req.method === "OPTIONS") {
+            handleCorsHeaders(req, res, config);
+            res.writeHead(204);
+            res.end();
+            return;
+        }
+        handleCorsHeaders(req, res, config);
+
         // Handle token refresh endpoint
         if (req.url === "/__helium__/refresh-token") {
+            // Security: only allow POST to prevent CSRF via <img>/<script> tags
+            if (req.method !== "POST") {
+                res.writeHead(405, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: "Method not allowed" }));
+                return;
+            }
+            // Security: require custom header to prevent cross-origin requests
+            if (!req.headers["x-requested-with"]) {
+                res.writeHead(403, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: "Forbidden" }));
+                return;
+            }
             const token = generateConnectionToken();
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ token }));
@@ -83,9 +113,38 @@ export function startProdServer(options: ProdServerOptions) {
 
         // Handle HTTP-based RPC endpoint (alternative to WebSocket for mobile networks)
         if (req.url === "/__helium__/rpc" && req.method === "POST") {
+            // Security: verify connection token for HTTP RPC
+            const authToken = req.headers["x-helium-token"] as string | undefined;
+            if (!authToken || !verifyConnectionToken(authToken)) {
+                res.writeHead(401, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ ok: false, error: "Unauthorized" }));
+                return;
+            }
+
+            // Security: check Content-Length before reading body
+            const contentLength = parseInt(req.headers["content-length"] || "0", 10);
+            if (contentLength > maxBodySize) {
+                res.writeHead(413, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ ok: false, error: "Request entity too large" }));
+                return;
+            }
+
             const chunks: Buffer[] = [];
-            req.on("data", (chunk: Buffer) => chunks.push(chunk));
+            let totalSize = 0;
+            let aborted = false;
+            req.on("data", (chunk: Buffer) => {
+                totalSize += chunk.length;
+                if (totalSize > maxBodySize) {
+                    aborted = true;
+                    req.destroy();
+                    res.writeHead(413, { "Content-Type": "application/json" });
+                    res.end(JSON.stringify({ ok: false, error: "Request entity too large" }));
+                    return;
+                }
+                chunks.push(chunk);
+            });
             req.on("end", async () => {
+                if (aborted) return;
                 try {
                     const body = Buffer.concat(chunks);
                     const ip = extractClientIP(req, trustProxyDepth);
@@ -137,7 +196,7 @@ export function startProdServer(options: ProdServerOptions) {
         const blockedFiles = ["helium.config.js", "helium.config.mjs", "helium.config.ts", "server.js", ".env", ".env.local", ".env.production"];
 
         const requestedFile = path.basename(url.split("?")[0]);
-        let filePath: string;
+        let filePath: string = path.join(staticDir, "index.html");
         let is404 = false;
 
         if (blockedFiles.some((blocked) => requestedFile === blocked || requestedFile.startsWith(".env"))) {
@@ -148,8 +207,16 @@ export function startProdServer(options: ProdServerOptions) {
             // Clean URL (remove query params and trailing slash)
             const cleanUrl = url.split("?")[0].replace(/\/$/, "") || "/";
 
+            // Security: path traversal prevention — resolve and verify
+            const resolvedStaticDir = path.resolve(staticDir);
+            const candidatePath = path.resolve(staticDir, "." + cleanUrl);
+            if (!candidatePath.startsWith(resolvedStaticDir + path.sep) && candidatePath !== resolvedStaticDir) {
+                filePath = path.join(staticDir, "index.html");
+                is404 = true;
+            }
+
             // Try different file paths for SSG support
-            if (cleanUrl === "/") {
+            if (!is404 && cleanUrl === "/") {
                 // Try index.ssg.html first (if root page has SSG)
                 const ssgIndexPath = path.join(staticDir, "index.ssg.html");
                 if (fs.existsSync(ssgIndexPath)) {
@@ -157,7 +224,7 @@ export function startProdServer(options: ProdServerOptions) {
                 } else {
                     filePath = path.join(staticDir, "index.html");
                 }
-            } else {
+            } else if (!is404) {
                 // If cleanUrl has no extension, prioritize .html files for SSG pages
                 if (!path.extname(cleanUrl)) {
                     const htmlPath = path.join(staticDir, cleanUrl + ".html");
@@ -174,7 +241,7 @@ export function startProdServer(options: ProdServerOptions) {
             }
 
             // If file doesn't exist or is a directory, fall back to index.html for SPA routing
-            const isFileOrExists = fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+            const isFileOrExists = !is404 && filePath && fs.existsSync(filePath) && fs.statSync(filePath).isFile();
             if (!isFileOrExists && !url.startsWith("/api") && !url.startsWith("/webhooks") && !url.startsWith("/auth")) {
                 // Fall back to index.html for SPA routing
                 // Note: We don't set is404 here because the client-side router will determine
@@ -229,6 +296,7 @@ export function startProdServer(options: ProdServerOptions) {
     // Setup WebSocket server for RPC
     const wss = new WebSocketServer({
         noServer: true,
+        maxPayload: rpcConfig.maxWsPayload,
         perMessageDeflate: compressionConfig.enabled
             ? {
                   zlibDeflateOptions: {
@@ -305,8 +373,9 @@ export function startProdServer(options: ProdServerOptions) {
     // Handle WebSocket upgrade requests
     server.on("upgrade", (req, socket, head) => {
         if (req.url?.startsWith("/rpc")) {
-            const url = new URL(req.url, "http://localhost");
-            const token = url.searchParams.get("token");
+            // Security: read token from Sec-WebSocket-Protocol header instead of query string
+            const protocols = req.headers["sec-websocket-protocol"];
+            const token = typeof protocols === "string" ? protocols.split(",").map((p) => p.trim()).find((p) => p.includes(".")) : undefined;
 
             if (!token || !verifyConnectionToken(token)) {
                 log("warn", "WebSocket connection rejected - invalid token");
@@ -383,4 +452,57 @@ export function startProdServer(options: ProdServerOptions) {
     process.on("SIGTERM", shutdown);
 
     return server;
+}
+
+// ============================================================================
+// Security helper functions
+// ============================================================================
+
+/**
+ * Set default security headers on every HTTP response.
+ */
+function setSecurityHeaders(res: http.ServerResponse, config: HeliumConfig): void {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("X-XSS-Protection", "0");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+
+    const csp = config.security?.contentSecurityPolicy;
+    if (csp) {
+        res.setHeader("Content-Security-Policy", csp);
+    }
+
+    if (config.security?.hsts !== false) {
+        res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    }
+}
+
+/**
+ * Handle CORS headers based on configuration.
+ * Default: restrict to same-origin (no CORS header = browser blocks cross-origin).
+ */
+function handleCorsHeaders(req: http.IncomingMessage, res: http.ServerResponse, config: HeliumConfig): void {
+    const allowedOrigins = config.security?.corsOrigins;
+    if (!allowedOrigins || allowedOrigins.length === 0) {
+        // No CORS configured — same-origin only by default
+        return;
+    }
+
+    const origin = req.headers.origin;
+    if (!origin) {
+        return;
+    }
+
+    const isAllowed = allowedOrigins.includes("*") || allowedOrigins.includes(origin);
+    if (isAllowed) {
+        res.setHeader("Access-Control-Allow-Origin", allowedOrigins.includes("*") ? "*" : origin);
+        res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Requested-With, X-Helium-Token");
+        res.setHeader("Access-Control-Max-Age", "86400");
+
+        if (!allowedOrigins.includes("*")) {
+            res.setHeader("Vary", "Origin");
+        }
+    }
 }

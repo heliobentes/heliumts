@@ -58,14 +58,16 @@ export const getProduct = defineHTTPRequest("GET", "/api/products/:category/:id"
 
 ### Catch-All Routes
 
-Use `*` to match any remaining path segments (useful for proxying or auth providers):
+Use `*` to match a **single** path segment, or `/**` to match **multiple** segments.
+This keeps default matching safe and predictable while still allowing deep matches
+when you need them (e.g., auth providers or proxies).
 
 ```typescript
 import { defineHTTPRequest } from "heliumts/server";
 import { auth } from "./auth"; // Better Auth or similar
 
 // Matches /api/auth/signin, /api/auth/signout, /api/auth/callback/google, etc.
-export const authHandler = defineHTTPRequest("ALL", "/api/auth/*", async (req, ctx) => {
+export const authHandler = defineHTTPRequest("ALL", "/api/auth/**", async (req, ctx) => {
     // Convert to Web Request for third-party auth libraries
     const webRequest = await req.toWebRequest();
 

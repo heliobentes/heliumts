@@ -37,7 +37,7 @@ describe("ipExtractor", () => {
             expect(ip).toBe("unknown");
         });
 
-        it("should prioritize cf-connecting-ip header when trustProxyDepth > 0", () => {
+        it("should prioritize x-forwarded-for over single-value headers when trustProxyDepth > 0", () => {
             const req = createMockRequest({
                 "cf-connecting-ip": "203.0.113.50",
                 "x-forwarded-for": "203.0.113.1, 198.51.100.1",
@@ -46,13 +46,23 @@ describe("ipExtractor", () => {
 
             const ip = extractClientIP(req, 1);
 
+            // X-Forwarded-For is now checked first for security (prevents single-header spoofing)
+            expect(ip).toBe("203.0.113.1");
+        });
+
+        it("should fall back to cf-connecting-ip when x-forwarded-for is not present", () => {
+            const req = createMockRequest({
+                "cf-connecting-ip": "203.0.113.50",
+            });
+
+            const ip = extractClientIP(req, 1);
+
             expect(ip).toBe("203.0.113.50");
         });
 
-        it("should use true-client-ip when cf-connecting-ip is not present", () => {
+        it("should use true-client-ip when cf-connecting-ip and x-forwarded-for are not present", () => {
             const req = createMockRequest({
                 "true-client-ip": "203.0.113.75",
-                "x-forwarded-for": "203.0.113.1, 198.51.100.1",
             });
 
             const ip = extractClientIP(req, 1);
@@ -63,7 +73,6 @@ describe("ipExtractor", () => {
         it("should use x-real-ip when other headers are not present", () => {
             const req = createMockRequest({
                 "x-real-ip": "203.0.113.25",
-                "x-forwarded-for": "203.0.113.1, 198.51.100.1",
             });
 
             const ip = extractClientIP(req, 1);

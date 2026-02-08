@@ -1,0 +1,66 @@
+Security Review Report (GPT-5.2-Codex)
+Date: 2026-02-08
+Scope: HeliumJS/HeliumTS codebase (server, client, runtime, utils, vite)
+Focus: Security flaws and sensitive information leaks
+
+Summary
+- One critical file path traversal risk in production static file serving.
+- Two high-severity risks: unbounded request body buffering and HTTP RPC bypassing rate limits.
+- One medium risk: WebSocket auth token in URL query string.
+- One low risk: partial secret hash logged at startup.
+- No hardcoded secrets identified in source.
+
+Findings
+
+1) Critical - Directory traversal / arbitrary file read in production static server
+Description:
+The production static file handler builds file paths using path.join(staticDir, cleanUrl). Because cleanUrl can be absolute (leading "/") or include "..", requests can escape staticDir and read arbitrary files (for example /etc/passwd or ../.env). The code then reads with fs.readFileSync without enforcing that the resolved path remains under staticDir.
+Impact:
+Arbitrary file read and potential leakage of secrets or system files.
+Evidence:
+src/server/prodServer.ts (static file handling, path.join with cleanUrl)
+
+2) High - Unbounded request body buffering enables memory DoS
+Description:
+Several request paths accumulate the entire request body in memory without a size limit. A large payload can exhaust memory and crash the process.
+Impact:
+Denial of service via memory exhaustion.
+Evidence:
+src/server/httpRouter.ts (readBody)
+src/server/devServer.ts (HTTP RPC endpoint request body buffering)
+src/server/prodServer.ts (HTTP RPC endpoint request body buffering)
+
+3) High - HTTP RPC path bypasses rate limiting
+Description:
+Rate limiting is enforced for WebSocket messages, but HTTP-based RPC requests are handled without applying rate limits. This allows a single client to send unlimited HTTP RPC requests.
+Impact:
+Abuse of RPC endpoints and potential service degradation or outage.
+Evidence:
+src/server/rpcRegistry.ts (handleHttpRequest does not apply rate limiting)
+
+4) Medium - WebSocket auth token in URL query string
+Description:
+The RPC connection token is appended to the WebSocket URL as a query parameter. Query parameters are frequently logged by proxies, servers, and browser tooling, which increases token exposure risk.
+Impact:
+Token leakage through logs or intermediaries; potential replay within validity window.
+Evidence:
+src/client/rpcClient.ts (token appended to ws URL)
+src/server/prodServer.ts and src/server/devServer.ts (token parsed from query string)
+
+5) Low - Secret hash logged at startup
+Description:
+The server logs the first 8 hex chars of the SHA-256 hash of the server secret. While not the secret itself, this can aid correlation across environments or logs.
+Impact:
+Minor information disclosure risk in shared logs.
+Evidence:
+src/server/security.ts (Initialized with secret hash)
+
+Notes
+- No hardcoded secrets or API keys were found in source.
+- Authentication and authorization are not enforced by default; protection relies on middleware. This is a design choice but could be risky if users forget to add middleware.
+
+Recommendations (High level)
+- Enforce static file path containment under staticDir using path.resolve and a prefix check.
+- Add request body size limits and early rejection for oversized payloads.
+- Apply IP-based rate limiting to HTTP RPC requests.
+- Avoid passing auth tokens in query strings; consider cookies or a subprotocol header.

@@ -149,12 +149,16 @@ export class HTTPRouter {
 
 function pathToRegex(path: string): { pattern: RegExp; keys: string[] } {
     const keys: string[] = [];
+    const multiSegmentToken = "__WILDCARD_MULTI__";
     const pattern = path
+        .replace(/\/\*\*/g, `/${multiSegmentToken}`)
         .replace(/\/:([^/]+)/g, (_, key) => {
             keys.push(key);
             return "/([^/]+)";
         })
-        .replace(/\*/g, ".*")
+        // * matches a single path segment, /** matches across segments.
+        .replace(/\*/g, "[^/]*")
+        .replace(new RegExp(multiSegmentToken, "g"), ".*")
         .replace(/\//g, "\\/");
 
     return {
@@ -194,7 +198,11 @@ async function createHTTPRequest(req: IncomingMessage, query: Record<string, str
         cookies,
         json: async () => {
             const body = await getBody();
-            return JSON.parse(body.toString("utf-8"));
+            try {
+                return JSON.parse(body.toString("utf-8"));
+            } catch {
+                throw new Error("Invalid JSON in request body");
+            }
         },
         text: async () => {
             const body = await getBody();
@@ -239,10 +247,19 @@ async function createHTTPRequest(req: IncomingMessage, query: Record<string, str
     };
 }
 
-function readBody(req: IncomingMessage): Promise<Buffer> {
+function readBody(req: IncomingMessage, maxBytes: number = 1_048_576): Promise<Buffer> {
     return new Promise((resolve, reject) => {
         const chunks: Buffer[] = [];
-        req.on("data", (chunk) => chunks.push(chunk));
+        let totalSize = 0;
+        req.on("data", (chunk) => {
+            totalSize += chunk.length;
+            if (totalSize > maxBytes) {
+                req.destroy();
+                reject(new Error("Request entity too large"));
+                return;
+            }
+            chunks.push(chunk);
+        });
         req.on("end", () => resolve(Buffer.concat(chunks)));
         req.on("error", reject);
     });
@@ -258,7 +275,12 @@ function parseCookies(cookieHeader: string): Record<string, string> {
     for (const pair of pairs) {
         const [key, value] = pair.split("=").map((s) => s.trim());
         if (key && value) {
-            cookies[key] = decodeURIComponent(value);
+            try {
+                cookies[key] = decodeURIComponent(value);
+            } catch {
+                // Malformed encoding (e.g. %ZZ) — use raw value
+                cookies[key] = value;
+            }
         }
     }
     return cookies;

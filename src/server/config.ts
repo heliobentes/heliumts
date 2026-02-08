@@ -67,6 +67,36 @@ export interface HeliumRpcSecurityConfig {
 }
 
 /**
+ * Security configuration for HTTP responses.
+ */
+export interface HeliumSecurityConfig {
+    /**
+     * Content-Security-Policy header value.
+     * Set to a CSP string to enable, or omit to skip CSP.
+     *
+     * @default undefined (no CSP header)
+     */
+    contentSecurityPolicy?: string;
+
+    /**
+     * Enable Strict-Transport-Security header.
+     * Set to false to disable HSTS.
+     *
+     * @default true
+     */
+    hsts?: boolean;
+
+    /**
+     * Allowed CORS origins.
+     * Set to ["*"] to allow all origins, or provide specific origins.
+     * Empty array or omit to restrict to same-origin only (default, most secure).
+     *
+     * @default [] (same-origin only)
+     */
+    corsOrigins?: string[];
+}
+
+/**
  * Helium framework configuration.
  *
  * Configure your Helium application behavior including RPC transport settings,
@@ -107,6 +137,12 @@ export interface HeliumConfig {
      * @default 0
      */
     trustProxyDepth?: number;
+
+    /**
+     * HTTP response security configuration.
+     * Controls CORS, CSP, HSTS, and other security headers.
+     */
+    security?: HeliumSecurityConfig;
 
     /**
      * RPC transport configuration.
@@ -163,6 +199,30 @@ export interface HeliumConfig {
          * to protect your RPC endpoints from abuse.
          */
         security?: HeliumRpcSecurityConfig;
+
+        /**
+         * Maximum HTTP request body size in bytes.
+         * Requests exceeding this limit receive a 413 status.
+         *
+         * @default 1048576 (1 MB)
+         */
+        maxBodySize?: number;
+
+        /**
+         * Maximum number of RPC calls in a single batch request.
+         * Batches exceeding this limit are rejected.
+         *
+         * @default 20
+         */
+        maxBatchSize?: number;
+
+        /**
+         * Maximum WebSocket message payload size in bytes.
+         * Messages exceeding this limit cause the connection to be closed.
+         *
+         * @default 1048576 (1 MB)
+         */
+        maxWsPayload?: number;
     };
 }
 
@@ -281,6 +341,9 @@ export function getRpcConfig(config: HeliumConfig = {}) {
     return {
         compression: getCompressionConfig(config),
         security: getRpcSecurityConfig(config),
+        maxBodySize: config.rpc?.maxBodySize ?? 1_048_576,
+        maxBatchSize: config.rpc?.maxBatchSize ?? 20,
+        maxWsPayload: config.rpc?.maxWsPayload ?? 1_048_576,
     };
 }
 

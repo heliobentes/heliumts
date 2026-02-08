@@ -5,6 +5,7 @@ import WebSocket from "ws";
 import { gzip } from "zlib";
 
 import type { RpcRequest, RpcResponse, RpcStats } from "../runtime/protocol.js";
+import { log } from "../utils/logger.js";
 import type { HeliumContext } from "./context.js";
 import type { HeliumMethodDef } from "./defineMethod.js";
 import type { HeliumMiddleware } from "./middleware.js";
@@ -27,6 +28,7 @@ export class RpcRegistry {
     private middleware: HeliumMiddleware | null = null;
     private rateLimiter: RateLimiter | null = null;
     private socketMetadata = new WeakMap<WebSocket, SocketMetadata>();
+    private maxBatchSize: number = 20;
 
     register(id: string, def: HeliumMethodDef<any, any>) {
         def.__id = id;
@@ -39,6 +41,10 @@ export class RpcRegistry {
 
     setRateLimiter(rateLimiter: RateLimiter) {
         this.rateLimiter = rateLimiter;
+    }
+
+    setMaxBatchSize(size: number) {
+        this.maxBatchSize = size;
     }
 
     /**
@@ -129,11 +135,12 @@ export class RpcRegistry {
                 result,
             };
         } catch (err: any) {
+            log("error", `RPC method '${req.method}' failed:`, err);
             return {
                 id: req.id,
                 ok: false,
                 stats: this.getStats(socket),
-                error: err?.message ?? "Server error",
+                error: sanitizeErrorMessage(err),
             };
         }
     }
@@ -145,6 +152,18 @@ export class RpcRegistry {
             const buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
             req = msgpackDecode(buffer) as RpcRequest | RpcRequest[];
         } catch {
+            return;
+        }
+
+        // Security: cap batch size
+        if (Array.isArray(req) && req.length > this.maxBatchSize) {
+            const errorResponse: RpcResponse = {
+                id: "batch",
+                ok: false,
+                stats: this.getStats(socket),
+                error: `Batch size ${req.length} exceeds maximum of ${this.maxBatchSize}`,
+            };
+            socket.send(msgpackEncode(prepareForMsgpack(errorResponse)) as Buffer);
             return;
         }
 
@@ -223,12 +242,12 @@ export class RpcRegistry {
                 result,
             };
         } catch (err: unknown) {
-            const errorMessage = err instanceof Error ? err.message : "Server error";
+            log("error", `HTTP RPC method '${req.method}' failed:`, err);
             return {
                 id: req.id,
                 ok: false,
                 stats: { remainingRequests: Infinity, resetInSeconds: 0 },
-                error: errorMessage,
+                error: sanitizeErrorMessage(err),
             };
         }
     }
@@ -259,6 +278,16 @@ export class RpcRegistry {
 
         let response: RpcResponse | RpcResponse[];
         if (Array.isArray(req)) {
+            // Security: cap batch size
+            if (req.length > this.maxBatchSize) {
+                const errorResponse: RpcResponse = {
+                    id: "batch",
+                    ok: false,
+                    stats: { remainingRequests: 0, resetInSeconds: 0 },
+                    error: `Batch size ${req.length} exceeds maximum of ${this.maxBatchSize}`,
+                };
+                return { response: errorResponse };
+            }
             response = await Promise.all(req.map((r) => this.processRequestHttp(r, ip, httpReq)));
         } else {
             response = await this.processRequestHttp(req as RpcRequest, ip, httpReq);
@@ -266,4 +295,19 @@ export class RpcRegistry {
 
         return { response };
     }
+}
+
+/**
+ * Sanitize error messages before sending to clients.
+ * In production, returns a generic message to prevent information leakage.
+ * In development, returns the actual error message for debugging.
+ */
+function sanitizeErrorMessage(err: unknown): string {
+    if (process.env.NODE_ENV === "production") {
+        return "Server error";
+    }
+    if (err instanceof Error) {
+        return err.message;
+    }
+    return "Server error";
 }

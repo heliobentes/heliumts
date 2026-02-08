@@ -1,0 +1,411 @@
+================================================================================
+SECURITY REVIEW REPORT — HeliumTS Framework
+================================================================================
+Date:       February 8, 2026
+Reviewer:   GitHub Copilot (Claude Opus 4.6)
+Scope:      Full codebase (src/**)
+Repository: heliobentes/heliumts
+Branch:     main
+================================================================================
+
+
+SUMMARY
+-------
+The codebase demonstrates solid security awareness in several areas (HMAC token
+verification with timing-safe comparison, rate limiting, IP extraction with
+proxy trust controls, sensitive file filtering for client-side env). However,
+multiple findings warrant attention, ranging from CRITICAL to LOW severity.
+
+18 findings total: 3 Critical, 5 High, 6 Medium, 5 Low.
+
+
+================================================================================
+CRITICAL FINDINGS
+================================================================================
+
+[C-1] UNAUTHENTICATED TOKEN ENDPOINT — NO CSRF / ORIGIN VALIDATION
+     Severity: CRITICAL
+     Files:    src/server/prodServer.ts (lines 80-84)
+               src/server/devServer.ts (lines 250-255)
+
+     The /__helium__/refresh-token endpoint generates a valid WebSocket
+     connection token for anyone who can reach the server. There is no:
+       - Origin check
+       - Referer check
+       - CSRF token requirement
+       - Rate limiting on the endpoint itself
+
+     An attacker on a different origin can call
+     fetch("https://target.com/__helium__/refresh-token") and obtain a valid
+     token if CORS isn't restricted (and it isn't — see finding C-3). This
+     allows establishing authenticated WebSocket connections from external
+     origins.
+
+     Recommendation: Validate the Origin header against an allowlist. Add rate
+     limiting per IP on this endpoint. Consider requiring a CSRF token for
+     non-same-origin requests.
+
+------------------------------------------------------------------------------
+
+[C-2] HTTP RPC ENDPOINT HAS NO AUTHENTICATION OR RATE LIMITING
+     Severity: CRITICAL
+     Files:    src/server/prodServer.ts (lines 88-120)
+               src/server/devServer.ts (lines 258-305)
+
+     The /__helium__/rpc HTTP POST endpoint:
+       - Requires NO connection token (unlike WebSocket which requires
+         verifyConnectionToken())
+       - Has NO rate limiting applied (the RateLimiter is per-WebSocket-
+         connection, not per IP for HTTP)
+       - Allows unlimited RPC method invocation
+
+     This makes the HTTP transport a complete bypass for all WebSocket security
+     controls. An attacker can invoke arbitrary RPC methods without
+     authentication or rate limiting.
+
+     Recommendation: Apply token-based authentication to the HTTP RPC endpoint.
+     Implement per-IP rate limiting for HTTP RPC requests. Consider requiring
+     the token in an Authorization header.
+
+------------------------------------------------------------------------------
+
+[C-3] NO CORS HEADERS SET ON ANY ENDPOINT
+     Severity: CRITICAL
+     Files:    src/server/prodServer.ts
+               src/server/devServer.ts
+
+     No Access-Control-Allow-Origin or related CORS headers are set on any HTTP
+     endpoint. The browser defaults allow same-origin only for fetch with
+     credentials, but simple requests (GET/POST with certain content types) can
+     be made cross-origin. The /__helium__/refresh-token endpoint returns JSON
+     with Content-Type: application/json, meaning cross-origin JavaScript can
+     read the response and obtain tokens.
+
+     Recommendation: Explicitly set restrictive Access-Control-Allow-Origin
+     headers and validate the Origin header on both token and RPC endpoints.
+     Deny cross-origin requests by default.
+
+
+================================================================================
+HIGH FINDINGS
+================================================================================
+
+[H-1] SECRET LOGGED ON INITIALIZATION (PARTIAL HASH LEAK)
+     Severity: HIGH
+     File:     src/server/security.ts (line 23)
+
+     Code:
+       log("info", `Initialized with secret hash: ${
+         crypto.createHash("sha256").update(secret).digest("hex").substring(0, 8)
+       }`);
+
+     While only the first 8 hex characters of the SHA-256 hash are logged, this
+     still leaks a deterministic fingerprint of the secret. In containerized
+     environments or cloud log aggregators, this could help an attacker verify a
+     brute-forced secret. Secrets should never appear in logs in any form.
+
+     Recommendation: Remove the hash from the log message entirely. Log only
+     that security was initialized successfully.
+
+------------------------------------------------------------------------------
+
+[H-2] NO REQUEST BODY SIZE LIMITS
+     Severity: HIGH
+     Files:    src/server/prodServer.ts (lines 91-92)
+               src/server/devServer.ts (lines 263-264)
+               src/server/httpRouter.ts (lines 242-248)
+
+     All body reading follows the pattern:
+       const chunks: Buffer[] = [];
+       req.on("data", (chunk) => chunks.push(chunk));
+       req.on("end", () => resolve(Buffer.concat(chunks)));
+
+     There is no Content-Length check or max body size enforcement. An attacker
+     can send a multi-gigabyte payload to crash the server via memory exhaustion
+     (OOM).
+
+     Recommendation: Enforce a maximum body size (e.g., 1MB). Abort the
+     request and return 413 Payload Too Large if exceeded. Make the limit
+     configurable via HeliumConfig.
+
+------------------------------------------------------------------------------
+
+[H-3] NO WEBSOCKET MESSAGE SIZE LIMITS
+     Severity: HIGH
+     Files:    src/server/prodServer.ts (lines 258-273)
+               src/server/devServer.ts (lines 146-186)
+
+     The WebSocketServer is created with noServer: true but no maxPayload
+     option is set. The ws library defaults to 100MB. A malicious client can
+     send extremely large WebSocket frames to consume server memory.
+
+     Recommendation: Set maxPayload to a reasonable limit (e.g., 1MB) on the
+     WebSocketServer configuration. Make it configurable via HeliumConfig.
+
+------------------------------------------------------------------------------
+
+[H-4] PATH TRAVERSAL IN STATIC FILE SERVING
+     Severity: HIGH
+     File:     src/server/prodServer.ts (lines 136-178)
+
+     The file-serving logic constructs filePath from user-supplied URL:
+       const cleanUrl = url.split("?")[0].replace(/\/$/, "") || "/";
+       filePath = path.join(staticDir, cleanUrl);
+
+     While path.join normalizes ".." segments, it does NOT prevent breakout.
+     For example, if staticDir = "/app/dist" and cleanUrl =
+     "/../../../etc/passwd", path.join resolves to "/etc/passwd". The
+     blocked-file check only inspects the basename, not the resolved path.
+
+     The filePath is never validated to be within staticDir after resolution.
+
+     Recommendation: After resolving the filePath, verify that it starts with
+     the resolved staticDir:
+       const resolved = path.resolve(filePath);
+       if (!resolved.startsWith(path.resolve(staticDir))) {
+           res.writeHead(403); res.end("Forbidden"); return;
+       }
+
+------------------------------------------------------------------------------
+
+[H-5] IP EXTRACTION TRUSTS SPOOFABLE HEADERS WHEN PROXY IS ENABLED
+     Severity: HIGH
+     File:     src/utils/ipExtractor.ts (lines 50-77)
+
+     When trustProxyDepth >= 1, the function trusts CF-Connecting-IP,
+     True-Client-IP, X-Real-IP, and X-Forwarded-For — all of which can be set
+     by the client if the first proxy doesn't strip them. The function should
+     only trust these headers when the incoming request actually comes from a
+     known proxy. Currently, any direct client that sets
+     CF-Connecting-IP: 1.2.3.4 will be accepted as having that IP.
+
+     This undermines rate limiting and IP-based security controls.
+
+     Recommendation: Document clearly that trustProxyDepth > 0 should only be
+     used when the server is exclusively accessible behind a trusted proxy.
+     Consider adding a trustedProxyIPs allowlist for additional safety.
+
+
+================================================================================
+MEDIUM FINDINGS
+================================================================================
+
+[M-1] GLOBALTHIS USED AS SECRET STORAGE WITH TYPE ASSERTION
+     Severity: MEDIUM
+     File:     src/server/security.ts (lines 20-21)
+
+     Code:
+       (globalThis as any)[GLOBAL_SECRET_KEY] = secret;
+       (globalThis as any)[GLOBAL_CONFIG_KEY] = config;
+
+     Storing the server secret on globalThis (even via Symbol) makes it
+     accessible to any code running in the same Node.js process, including
+     third-party dependencies. A supply-chain attack on any dependency could
+     read Object.getOwnPropertySymbols(globalThis) to extract the secret.
+
+     Recommendation: Use a module-scoped variable instead of globalThis.
+     If cross-module sharing is needed, use a dedicated singleton module.
+
+------------------------------------------------------------------------------
+
+[M-2] ERROR MESSAGES LEAK INTERNAL DETAILS
+     Severity: MEDIUM
+     File:     src/server/rpcRegistry.ts (line 132)
+
+     Code:
+       error: err?.message ?? "Server error"
+
+     The raw Error.message from handler exceptions is sent directly to the
+     client. This can leak stack traces, database errors, file system paths, or
+     other internal details depending on the user's handler code.
+
+     Recommendation: Return a generic "Internal server error" message by
+     default. Add an option for users to opt-in to detailed error messages in
+     development mode. Log the full error server-side.
+
+------------------------------------------------------------------------------
+
+[M-3] TOKEN PASSED IN WEBSOCKET URL QUERY STRING
+     Severity: MEDIUM
+     File:     src/client/rpcClient.ts (line 340)
+
+     Code:
+       const url = `${protocol}//${host}/rpc${token ? `?token=${token}` : ""}`;
+
+     The connection token is passed as a URL query parameter. This means:
+       - It appears in server access logs
+       - It is stored in browser history
+       - It can be leaked via the Referer header
+       - It is visible in proxy logs
+
+     Recommendation: Pass the token in a WebSocket sub-protocol header or
+     use the first message after connection as an auth handshake.
+
+------------------------------------------------------------------------------
+
+[M-4] NO SECURITY HEADERS ON ANY RESPONSE
+     Severity: MEDIUM
+     Files:    src/server/prodServer.ts
+               src/server/devServer.ts
+
+     The production server serves HTML files without any security headers:
+       - No Content-Security-Policy
+       - No X-Content-Type-Options: nosniff
+       - No X-Frame-Options
+       - No Strict-Transport-Security
+       - No X-XSS-Protection (legacy but still recommended)
+
+     Recommendation: Add a default set of security headers to all responses.
+     Make them configurable via HeliumConfig so users can customize CSP etc.
+
+------------------------------------------------------------------------------
+
+[M-5] DECODEURICOMPONENT IN COOKIE PARSING WITHOUT TRY/CATCH
+     Severity: MEDIUM
+     File:     src/server/httpRouter.ts (line 261)
+
+     Code:
+       cookies[key] = decodeURIComponent(value);
+
+     A malformed cookie value (e.g., %ZZ) will throw a URIError and crash the
+     request handling. This is a minor DoS vector.
+
+     Recommendation: Wrap decodeURIComponent in a try/catch and fall back to
+     the raw value on failure.
+
+------------------------------------------------------------------------------
+
+[M-6] REGEX-BASED ROUTE MATCHING WITH POTENTIAL ReDoS
+     Severity: MEDIUM
+     File:     src/server/httpRouter.ts (lines 155-164)
+
+     The pathToRegex function uses .* for wildcard routes (*). Depending on the
+     route pattern, this could create catastrophic backtracking with
+     pathological input paths.
+
+     Recommendation: Use [^/]* instead of .* for path segments. Set a timeout
+     on regex matching or use a non-backtracking regex engine.
+
+
+================================================================================
+LOW FINDINGS
+================================================================================
+
+[L-1] shell: true IN spawn CALLS
+     Severity: LOW
+     File:     src/bin/helium.ts (lines 18, 248)
+
+     Both spawn("vite", ...) and spawn("node", [serverPath], ...) use
+     { shell: true }. While the arguments here are not user-controlled, using
+     shell: true is generally discouraged as it opens command injection vectors
+     if arguments are ever derived from user input in the future.
+
+     Recommendation: Remove shell: true and use direct process execution.
+
+------------------------------------------------------------------------------
+
+[L-2] NO CONTENT-LENGTH VALIDATION ON CLIENT-SIDE HTTP RPC RESPONSES
+     Severity: LOW
+     File:     src/client/rpcClient.ts (lines 139-148)
+
+     The client reads the full response.arrayBuffer() without any size check,
+     trusting the server entirely. If a MITM attack replaces the response with
+     a huge payload, the client would attempt to decode it.
+
+     Recommendation: Set a reasonable maximum response size before decoding.
+
+------------------------------------------------------------------------------
+
+[L-3] __helium__ ENDPOINT NAMESPACE NOT PROTECTED
+     Severity: LOW
+     Files:    src/server/prodServer.ts
+               src/server/devServer.ts
+
+     User-defined HTTP handlers could potentially register routes that shadow
+     or conflict with __helium__/refresh-token or __helium__/rpc. The framework
+     processes __helium__ endpoints first, but there's no validation when
+     registering user routes to prevent confusion.
+
+     Recommendation: Reject user route registrations that start with
+     /__helium__/.
+
+------------------------------------------------------------------------------
+
+[L-4] BUILD-TIME PLACEHOLDER TOKEN IN HTML
+     Severity: LOW
+     File:     src/bin/helium.ts (line 69)
+
+     Code references a build-time-placeholder token that was once injected
+     server-side. If any code path fails to strip it, the literal string
+     "build-time-placeholder" could be served to clients.
+
+     Recommendation: Ensure the placeholder is always stripped and add a test
+     to verify.
+
+------------------------------------------------------------------------------
+
+[L-5] CLIENT-SIDE CACHE ATTACHED TO WINDOW IN DEV MODE
+     Severity: LOW
+     File:     src/client/cache.ts (lines 10-30)
+
+     In development mode, the cache store is attached to window as
+     window.__heliumCacheStore, window.__heliumCacheListeners, and
+     window.__heliumPendingFetches. This makes cached data (which could include
+     sensitive information from RPC calls) accessible via the browser console or
+     any injected script.
+
+     Recommendation: Document this behavior. Consider using a WeakRef or
+     non-enumerable property to reduce discoverability.
+
+
+================================================================================
+POSITIVE SECURITY OBSERVATIONS
+================================================================================
+
++ Timing-safe token comparison using crypto.timingSafeEqual
+  (src/server/security.ts, line 68)
+
++ HMAC-SHA256 token generation with timestamp binding
+  (src/server/security.ts, lines 31-35)
+
++ Client env filtering — only HELIUM_PUBLIC_ prefixed vars exposed to client
+  (src/utils/envLoader.ts, lines 59-67)
+
++ Blocked file list for sensitive configurations in static serving
+  (src/server/prodServer.ts, lines 129-131)
+
++ Proxy trust depth is zero by default (no proxy headers trusted)
+  (src/server/config.ts, line 108)
+
++ Rate limiting is implemented with per-IP connection limits and
+  per-connection message limits
+
++ WebSocket auto-reconnect doesn't leak stale tokens (forces new token)
+
++ Token expiry is enforced with configurable validity window
+
++ Random 32-byte secret generated when HELIUM_SECRET env is not set
+  (src/server/security.ts, line 19)
+
+
+================================================================================
+REMEDIATION PRIORITY
+================================================================================
+
+  Priority | Finding | Effort
+  ---------+---------+-------
+  1        | C-2     | Medium  — Add auth + rate limiting to HTTP RPC endpoint
+  2        | C-1     | Medium  — Add Origin/CSRF validation to token endpoint
+  3        | C-3     | Low     — Add restrictive CORS headers
+  4        | H-4     | Low     — Fix path traversal in static file serving
+  5        | H-2     | Low     — Add request body size limits
+  6        | H-3     | Low     — Set WebSocket maxPayload option
+  7        | H-1     | Low     — Remove secret hash from logs
+  8        | M-4     | Low     — Add security headers to responses
+  9        | M-2     | Low     — Sanitize error messages sent to clients
+  10       | M-5     | Low     — Fix cookie parsing crash
+
+
+================================================================================
+END OF REPORT
+================================================================================

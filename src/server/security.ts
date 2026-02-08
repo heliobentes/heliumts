@@ -3,27 +3,26 @@ import crypto from "crypto";
 import { log } from "../utils/logger.js";
 import type { HeliumRpcSecurityConfig } from "./config.js";
 
-// Generate a random secret for this server instance if one isn't provided
-const GLOBAL_SECRET_KEY = Symbol.for("helium.server.secret");
-const GLOBAL_CONFIG_KEY = Symbol.for("helium.server.securityConfig");
-
-let SERVER_SECRET: string;
-// SECURITY_CONFIG stores the RPC-specific security settings
+// Module-scoped secrets — not accessible via globalThis enumeration
+let SERVER_SECRET: string = "";
 let SECURITY_CONFIG: Required<HeliumRpcSecurityConfig>;
+let isInitialized = false;
 
 export function initializeSecurity(config: Required<HeliumRpcSecurityConfig>): void {
-    const globalSymbols = Object.getOwnPropertySymbols(globalThis);
-    const hasSecret = globalSymbols.indexOf(GLOBAL_SECRET_KEY) > -1;
-
-    if (!hasSecret) {
-        const secret = process.env.HELIUM_SECRET || crypto.randomBytes(32).toString("hex");
-        (globalThis as any)[GLOBAL_SECRET_KEY] = secret;
-        (globalThis as any)[GLOBAL_CONFIG_KEY] = config;
-        log("info", `Initialized with secret hash: ${crypto.createHash("sha256").update(secret).digest("hex").substring(0, 8)}`);
+    if (!isInitialized) {
+        const envSecret = process.env.HELIUM_SECRET;
+        if (!envSecret) {
+            SERVER_SECRET = crypto.randomBytes(32).toString("hex");
+            if (process.env.NODE_ENV === "production") {
+                log("warn", "HELIUM_SECRET is not set. A random secret was generated. Tokens will NOT verify across cluster instances or restarts. Set HELIUM_SECRET for production.");
+            }
+        } else {
+            SERVER_SECRET = envSecret;
+        }
+        SECURITY_CONFIG = config;
+        isInitialized = true;
+        log("info", "Security module initialized");
     }
-
-    SERVER_SECRET = (globalThis as any)[GLOBAL_SECRET_KEY] as string;
-    SECURITY_CONFIG = (globalThis as any)[GLOBAL_CONFIG_KEY] as Required<HeliumRpcSecurityConfig>;
 }
 
 export function generateConnectionToken(): string {
@@ -69,4 +68,13 @@ export function verifyConnectionToken(token: string): boolean {
         log("warn", "Invalid signature");
     }
     return isValid;
+}
+
+/**
+ * Reset security state. Only for testing.
+ * @internal
+ */
+export function resetSecurity(): void {
+    SERVER_SECRET = "";
+    isInitialized = false;
 }

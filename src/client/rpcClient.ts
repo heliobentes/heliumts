@@ -126,12 +126,20 @@ async function sendBatchHttp(batch: PendingRequest[]) {
     const requests = batch.map((b) => b.req);
     const encoded = msgpackEncode(requests);
 
+    // Fetch a fresh token for HTTP RPC authentication
+    const token = await fetchFreshToken();
+
+    const headers: Record<string, string> = {
+        "Content-Type": "application/msgpack",
+        Accept: "application/msgpack",
+    };
+    if (token) {
+        headers["X-Helium-Token"] = token;
+    }
+
     const response = await fetch("/__helium__/rpc", {
         method: "POST",
-        headers: {
-            "Content-Type": "application/msgpack",
-            Accept: "application/msgpack",
-        },
+        headers,
         body: encoded as unknown as BodyInit,
     });
 
@@ -317,7 +325,12 @@ function nextId() {
 
 async function fetchFreshToken(): Promise<string | undefined> {
     try {
-        const response = await fetch("/__helium__/refresh-token");
+        const response = await fetch("/__helium__/refresh-token", {
+            method: "POST",
+            headers: {
+                "X-Requested-With": "HeliumRPC",
+            },
+        });
         if (!response.ok) {
             console.warn("Failed to fetch fresh token:", response.status);
             return undefined;
@@ -337,8 +350,9 @@ async function createSocket(): Promise<WebSocket> {
     // Use the same protocol, hostname and port as the current page
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const host = window.location.host; // includes hostname and port
-    const url = `${protocol}//${host}/rpc${token ? `?token=${token}` : ""}`;
-    const ws = new WebSocket(url);
+    const url = `${protocol}//${host}/rpc`;
+    // Security: pass token via Sec-WebSocket-Protocol header instead of query string
+    const ws = token ? new WebSocket(url, [token]) : new WebSocket(url);
     ws.binaryType = "arraybuffer";
 
     ws.onmessage = async (event) => {
@@ -353,8 +367,28 @@ async function createSocket(): Promise<WebSocket> {
                     const stream = new Response(data).body;
                     if (stream) {
                         const decompressed = stream.pipeThrough(ds);
-                        const buffer = await new Response(decompressed).arrayBuffer();
-                        data = new Uint8Array(buffer);
+                        const reader = decompressed.getReader();
+                        const chunks: Uint8Array[] = [];
+                        let totalSize = 0;
+                        const MAX_DECOMPRESSED_SIZE = 10 * 1024 * 1024; // 10 MB
+                        while (true) {
+                            const { value, done } = await reader.read();
+                            if (done) break;
+                            totalSize += value.length;
+                            if (totalSize > MAX_DECOMPRESSED_SIZE) {
+                                reader.cancel();
+                                console.error("Decompressed message exceeds size limit");
+                                return;
+                            }
+                            chunks.push(value);
+                        }
+                        const combined = new Uint8Array(totalSize);
+                        let offset = 0;
+                        for (const chunk of chunks) {
+                            combined.set(chunk, offset);
+                            offset += chunk.length;
+                        }
+                        data = combined;
                     }
                 }
             } catch (err) {

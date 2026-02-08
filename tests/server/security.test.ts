@@ -1,17 +1,14 @@
 import crypto from "crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { generateConnectionToken, initializeSecurity, verifyConnectionToken } from "../../src/server/security";
+import { generateConnectionToken, initializeSecurity, resetSecurity, verifyConnectionToken } from "../../src/server/security";
 
 describe("security", () => {
     const originalEnv = process.env.HELIUM_SECRET;
 
     beforeEach(() => {
-        // Clear global symbols for fresh initialization
-        const GLOBAL_SECRET_KEY = Symbol.for("helium.server.secret");
-        const GLOBAL_CONFIG_KEY = Symbol.for("helium.server.securityConfig");
-        delete (globalThis as Record<symbol, unknown>)[GLOBAL_SECRET_KEY];
-        delete (globalThis as Record<symbol, unknown>)[GLOBAL_CONFIG_KEY];
+        // Reset security module state for fresh initialization
+        resetSecurity();
 
         // Reset environment
         delete process.env.HELIUM_SECRET;
