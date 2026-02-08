@@ -1,6 +1,6 @@
 {
     "name": "heliumts",
-    "version": "0.5.2",
+    "version": "0.5.3",
     "description": "A lightweight full-stack React framework with file-based routing, RPC, and SSG support",
     "keywords": [
         "react",
