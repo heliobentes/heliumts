@@ -259,6 +259,201 @@ describe("Router", () => {
             const link = screen.getByTestId("test-link");
             expect(link.className).toBe("my-link");
         });
+
+        it("should not intercept clicks when target attribute is set", () => {
+            render(
+                <RouterContext.Provider
+                    value={{
+                        path: "/",
+                        params: {},
+                        searchParams: new URLSearchParams(),
+                        push: vi.fn(),
+                        replace: vi.fn(),
+                        on: vi.fn(() => () => {}),
+                        status: 200,
+                        isNavigating: false,
+                        isPending: false,
+                    }}
+                >
+                    <Link href="/about" target="_blank">
+                        Opens in new tab
+                    </Link>
+                </RouterContext.Provider>
+            );
+
+            const link = screen.getByText("Opens in new tab");
+            fireEvent.click(link);
+
+            expect(window.history.pushState).not.toHaveBeenCalled();
+            expect(link.getAttribute("target")).toBe("_blank");
+        });
+
+        it("should not intercept clicks when download attribute is set", () => {
+            render(
+                <RouterContext.Provider
+                    value={{
+                        path: "/",
+                        params: {},
+                        searchParams: new URLSearchParams(),
+                        push: vi.fn(),
+                        replace: vi.fn(),
+                        on: vi.fn(() => () => {}),
+                        status: 200,
+                        isNavigating: false,
+                        isPending: false,
+                    }}
+                >
+                    <Link href="/file.pdf" download>
+                        Download file
+                    </Link>
+                </RouterContext.Provider>
+            );
+
+            const link = screen.getByText("Download file");
+            fireEvent.click(link);
+
+            expect(window.history.pushState).not.toHaveBeenCalled();
+        });
+
+        it("should respect user onClick that calls preventDefault", () => {
+            const userOnClick = vi.fn((e: React.MouseEvent) => {
+                e.preventDefault();
+            });
+
+            render(
+                <RouterContext.Provider
+                    value={{
+                        path: "/",
+                        params: {},
+                        searchParams: new URLSearchParams(),
+                        push: vi.fn(),
+                        replace: vi.fn(),
+                        on: vi.fn(() => () => {}),
+                        status: 200,
+                        isNavigating: false,
+                        isPending: false,
+                    }}
+                >
+                    <Link href="/about" onClick={userOnClick}>
+                        Controlled Link
+                    </Link>
+                </RouterContext.Provider>
+            );
+
+            const link = screen.getByText("Controlled Link");
+            fireEvent.click(link);
+
+            expect(userOnClick).toHaveBeenCalled();
+            expect(window.history.pushState).not.toHaveBeenCalled();
+        });
+
+        it("should call user onClick and still navigate when not prevented", () => {
+            const userOnClick = vi.fn();
+
+            render(
+                <RouterContext.Provider
+                    value={{
+                        path: "/",
+                        params: {},
+                        searchParams: new URLSearchParams(),
+                        push: vi.fn(),
+                        replace: vi.fn(),
+                        on: vi.fn(() => () => {}),
+                        status: 200,
+                        isNavigating: false,
+                        isPending: false,
+                    }}
+                >
+                    <Link href="/about" onClick={userOnClick}>
+                        Link with handler
+                    </Link>
+                </RouterContext.Provider>
+            );
+
+            const link = screen.getByText("Link with handler");
+            fireEvent.click(link);
+
+            expect(userOnClick).toHaveBeenCalled();
+            expect(window.history.pushState).toHaveBeenCalled();
+        });
+
+        it("should scroll to top instantly on navigation", () => {
+            render(
+                <RouterContext.Provider
+                    value={{
+                        path: "/",
+                        params: {},
+                        searchParams: new URLSearchParams(),
+                        push: vi.fn(),
+                        replace: vi.fn(),
+                        on: vi.fn(() => () => {}),
+                        status: 200,
+                        isNavigating: false,
+                        isPending: false,
+                    }}
+                >
+                    <Link href="/about">Scroll Link</Link>
+                </RouterContext.Provider>
+            );
+
+            const link = screen.getByText("Scroll Link");
+            fireEvent.click(link);
+
+            // Scroll should happen synchronously (not deferred via requestAnimationFrame)
+            expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "instant" });
+        });
+
+        it("should not scroll to top when scrollToTop is false", () => {
+            render(
+                <RouterContext.Provider
+                    value={{
+                        path: "/",
+                        params: {},
+                        searchParams: new URLSearchParams(),
+                        push: vi.fn(),
+                        replace: vi.fn(),
+                        on: vi.fn(() => () => {}),
+                        status: 200,
+                        isNavigating: false,
+                        isPending: false,
+                    }}
+                >
+                    <Link href="/about" scrollToTop={false}>
+                        No Scroll Link
+                    </Link>
+                </RouterContext.Provider>
+            );
+
+            const link = screen.getByText("No Scroll Link");
+            fireEvent.click(link);
+
+            expect(window.scrollTo).not.toHaveBeenCalled();
+        });
+
+        it("should not leak replace prop as HTML attribute", () => {
+            render(
+                <RouterContext.Provider
+                    value={{
+                        path: "/",
+                        params: {},
+                        searchParams: new URLSearchParams(),
+                        push: vi.fn(),
+                        replace: vi.fn(),
+                        on: vi.fn(() => () => {}),
+                        status: 200,
+                        isNavigating: false,
+                        isPending: false,
+                    }}
+                >
+                    <Link href="/about" replace data-testid="replace-link">
+                        Replace Link
+                    </Link>
+                </RouterContext.Provider>
+            );
+
+            const link = screen.getByTestId("replace-link");
+            expect(link.getAttribute("replace")).toBeNull();
+        });
     });
 
     describe("Redirect", () => {

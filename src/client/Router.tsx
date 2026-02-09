@@ -300,17 +300,19 @@ function navigate(href: string, options: NavigateOptions = {}) {
         window.history.pushState(null, "", href);
     }
 
-    // Update location and clear navigating state after navigation
-    // Use requestAnimationFrame to allow the new page to start rendering
-    requestAnimationFrame(() => {
-        updateLocation(false);
-        // Scroll to top if enabled
-        if (scrollToTop) {
-            window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
-        }
-        // Emit navigation event after navigation completes
-        routerEventEmitter.emit("navigation", { from, to });
-    });
+    // Scroll to top immediately after pushState, before React re-renders.
+    // Using instant scroll avoids race conditions where smooth scrolling
+    // gets interrupted by React DOM updates, especially on Safari mobile.
+    if (scrollToTop) {
+        window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    }
+
+    // Update location state synchronously so there is no stale-state window
+    // between pushState and the next render.
+    updateLocation(false);
+
+    // Emit navigation event after state is consistent
+    routerEventEmitter.emit("navigation", { from, to });
 }
 
 export type LinkProps = React.PropsWithChildren<
@@ -357,15 +359,32 @@ if (typeof window !== "undefined" && import.meta.env?.DEV) {
  * Client-side navigation link.
  *
  * Intercepts left-clicks and uses the router's navigation helpers for SPA
- * navigation. Keeps normal anchor behaviour when modifier keys are used
- * or when the link is external.
+ * navigation. Keeps normal anchor behaviour when modifier keys are used,
+ * when the link is external, or when `target` / `download` attributes
+ * are present.
  *
  * Automatically prefetches page chunks on hover for faster navigation.
  */
 export function Link(props: LinkProps) {
-    const { prefetch = true, scrollToTop = true } = props;
+    const {
+        children,
+        href,
+        className,
+        prefetch: prefetchProp = true,
+        scrollToTop = true,
+        replace: replaceProp,
+        target,
+        download,
+        onClick: userOnClick,
+        onMouseEnter: userOnMouseEnter,
+        onFocus: userOnFocus,
+        ...restProps
+    } = props;
 
     const onClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+        // Let user's onClick run first so they can call e.preventDefault()
+        userOnClick?.(e);
+
         if (
             e.defaultPrevented ||
             e.button !== 0 || // only left click
@@ -373,37 +392,36 @@ export function Link(props: LinkProps) {
             e.ctrlKey ||
             e.shiftKey ||
             e.altKey ||
-            isExternalUrl(props.href) // let browser handle external links
+            target || // let browser handle target="_blank" etc.
+            download != null || // let browser handle downloads
+            isExternalUrl(href) // let browser handle external links
         ) {
             return;
         }
         e.preventDefault();
-        navigate(props.href, { replace: props.replace, scrollToTop });
-        props.onClick?.(e);
+        navigate(href, { replace: replaceProp, scrollToTop });
     };
 
     const onMouseEnter = async (e: React.MouseEvent<HTMLAnchorElement>) => {
         // Prefetch the route on hover if enabled and not external (lazy-load prefetch logic)
-        if (prefetch && !isExternalUrl(props.href) && globalRoutes.length > 0) {
+        if (prefetchProp && !isExternalUrl(href) && globalRoutes.length > 0) {
             const { prefetchRoute } = await import("./prefetch.js");
-            prefetchRoute(props.href, globalRoutes);
+            prefetchRoute(href, globalRoutes);
         }
-        props.onMouseEnter?.(e);
+        userOnMouseEnter?.(e);
     };
 
     const onFocus = async (e: React.FocusEvent<HTMLAnchorElement>) => {
         // Also prefetch on focus (keyboard navigation)
-        if (prefetch && !isExternalUrl(props.href) && globalRoutes.length > 0) {
+        if (prefetchProp && !isExternalUrl(href) && globalRoutes.length > 0) {
             const { prefetchRoute } = await import("./prefetch.js");
-            prefetchRoute(props.href, globalRoutes);
+            prefetchRoute(href, globalRoutes);
         }
-        props.onFocus?.(e);
+        userOnFocus?.(e);
     };
 
-    const { children, href, className, prefetch: _prefetch, scrollToTop: _scrollToTop, ...safeProps } = props;
-
     return (
-        <a href={href} onClick={onClick} onMouseEnter={onMouseEnter} onFocus={onFocus} className={className} {...safeProps}>
+        <a {...restProps} href={href} target={target} download={download} onClick={onClick} onMouseEnter={onMouseEnter} onFocus={onFocus} className={className}>
             {children}
         </a>
     );
