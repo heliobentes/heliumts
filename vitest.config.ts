@@ -5,6 +5,9 @@ export default defineConfig({
         globals: true,
         environment: "jsdom",
         include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
+        typecheck: {
+            tsconfig: "./tsconfig.test.json",
+        },
         coverage: {
             provider: "v8",
             reporter: ["text", "json", "html"],

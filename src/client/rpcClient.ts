@@ -143,6 +143,7 @@ async function sendBatchHttp(batch: PendingRequest[]) {
         body: encoded as unknown as BodyInit,
     });
 
+    handleBlockedResponse(response.status, "rpc-http");
     if (!response.ok) {
         throw new Error(`HTTP RPC failed: ${response.status}`);
     }
@@ -197,6 +198,94 @@ let connectionPromise: Promise<WebSocket> | null = null;
 
 const pending = new Map<string | number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
 const pendingTimeouts = new Map<string | number, ReturnType<typeof setTimeout>>();
+
+// ── Block detection (rate-limited reload) ──────────────────────────────────
+
+type BlockedSource = "refresh-token" | "rpc-http" | "rpc-websocket";
+
+const BLOCKED_HTTP_STATUSES = new Set([401, 403, 429]);
+const BLOCKED_WS_CLOSE_CODES = new Set([1008, 1011, 1013]);
+const BLOCKED_RETRY_THRESHOLD = 3;
+const BLOCKED_RETRY_WINDOW_MS = 1_000;
+const BLOCKED_RELOAD_COOLDOWN_MS = 120_000;
+const BLOCKED_RELOAD_KEY = "helium:blocked-reload-ts";
+
+const blockedAttempts = new Map<BlockedSource, { count: number; lastTs: number }>();
+let lastBlockedReloadAt = 0;
+
+function shouldAutoReloadOnBlock(now: number): boolean {
+    if (typeof window === "undefined") {
+        return false;
+    }
+    try {
+        const stored = window.sessionStorage.getItem(BLOCKED_RELOAD_KEY);
+        const storedTs = stored ? Number(stored) : 0;
+        if (storedTs && now - storedTs < BLOCKED_RELOAD_COOLDOWN_MS) {
+            return false;
+        }
+        window.sessionStorage.setItem(BLOCKED_RELOAD_KEY, String(now));
+        return true;
+    } catch {
+        if (now - lastBlockedReloadAt < BLOCKED_RELOAD_COOLDOWN_MS) {
+            return false;
+        }
+        lastBlockedReloadAt = now;
+        return true;
+    }
+}
+
+function shouldTriggerBlockedAction(source: BlockedSource, now: number): boolean {
+    const state = blockedAttempts.get(source);
+    if (!state || now - state.lastTs > BLOCKED_RETRY_WINDOW_MS) {
+        blockedAttempts.set(source, { count: 1, lastTs: now });
+        return false;
+    }
+    const nextCount = state.count + 1;
+    blockedAttempts.set(source, { count: nextCount, lastTs: now });
+    return nextCount > BLOCKED_RETRY_THRESHOLD;
+}
+
+function dispatchBlockedEvent(detail: { source: BlockedSource; status?: number; code?: number }): void {
+    if (typeof window === "undefined") {
+        return;
+    }
+    window.dispatchEvent(
+        new CustomEvent("helium:blocked", {
+            detail,
+        })
+    );
+}
+
+function handleBlockedResponse(status: number, source: BlockedSource): void {
+    if (!BLOCKED_HTTP_STATUSES.has(status)) {
+        return;
+    }
+    const now = Date.now();
+    if (!shouldTriggerBlockedAction(source, now)) {
+        return;
+    }
+
+    dispatchBlockedEvent({ status, source });
+
+    if (shouldAutoReloadOnBlock(now) && typeof window.location?.reload === "function") {
+        window.location.reload();
+    }
+}
+
+function handleBlockedSocketClose(code: number): void {
+    if (!BLOCKED_WS_CLOSE_CODES.has(code)) {
+        return;
+    }
+    const now = Date.now();
+    if (!shouldTriggerBlockedAction("rpc-websocket", now)) {
+        return;
+    }
+
+    dispatchBlockedEvent({ code, source: "rpc-websocket" });
+    if (shouldAutoReloadOnBlock(now) && typeof window.location?.reload === "function") {
+        window.location.reload();
+    }
+}
 
 // ── Connection resilience constants ──────────────────────────────────────────
 
@@ -331,6 +420,7 @@ async function fetchFreshToken(): Promise<string | undefined> {
                 "X-Requested-With": "HeliumRPC",
             },
         });
+        handleBlockedResponse(response.status, "refresh-token");
         if (!response.ok) {
             console.warn("Failed to fetch fresh token:", response.status);
             return undefined;
@@ -373,7 +463,9 @@ async function createSocket(): Promise<WebSocket> {
                         const MAX_DECOMPRESSED_SIZE = 10 * 1024 * 1024; // 10 MB
                         while (true) {
                             const { value, done } = await reader.read();
-                            if (done) break;
+                            if (done) {
+                                break;
+                            }
                             totalSize += value.length;
                             if (totalSize > MAX_DECOMPRESSED_SIZE) {
                                 reader.cancel();
@@ -424,7 +516,8 @@ async function createSocket(): Promise<WebSocket> {
         // The close handler takes care of rejecting pending promises.
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+        handleBlockedSocketClose(event.code);
         if (socket === ws) {
             socket = null;
             connectionPromise = null;
