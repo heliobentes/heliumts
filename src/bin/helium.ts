@@ -91,7 +91,7 @@ cli.command("build", "Build for production").action(async () => {
     log("info", "Building server...");
     // Generate server entry
     const serverExports = scanServerExports(root);
-    const manifestCode = generateServerManifest(serverExports.methods, serverExports.httpHandlers, serverExports.middleware);
+    const manifestCode = generateServerManifest(serverExports.methods, serverExports.httpHandlers, serverExports.middleware, serverExports.workers);
 
     // Create the main server module that will be imported after env is loaded
     const serverModuleCode = `
@@ -110,7 +110,8 @@ export async function start() {
                 registry.setMiddleware(middlewareHandler);
                 httpRouter.setMiddleware(middlewareHandler);
             }
-        }
+        },
+        workers
     });
 }
 `;
