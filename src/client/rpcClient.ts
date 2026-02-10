@@ -8,6 +8,15 @@ export type RpcResult<T> = {
     stats: RpcStats;
 };
 
+function toArrayBuffer(data: Uint8Array<ArrayBufferLike>): ArrayBuffer {
+    if (data.buffer instanceof ArrayBuffer && data.byteOffset === 0 && data.byteLength === data.buffer.byteLength) {
+        return data.buffer;
+    }
+    const buffer = new ArrayBuffer(data.byteLength);
+    new Uint8Array(buffer).set(data);
+    return buffer;
+}
+
 /**
  * Transport mode for RPC calls.
  * - "http": Uses HTTP POST requests (faster on mobile/high-latency networks, benefits from HTTP/2)
@@ -180,7 +189,7 @@ async function sendBatchWebSocket(batch: PendingRequest[]) {
     try {
         // Always use msgpack encoding
         const encoded = msgpackEncode(requests);
-        ws.send(encoded);
+        ws.send(toArrayBuffer(encoded));
     } catch (err) {
         batch.forEach((item) => {
             removePending(item.req.id);
@@ -618,7 +627,7 @@ async function rpcCallWebSocket<TResult, TArgs>(methodId: string, args?: TArgs):
             trackPending(id, (v: unknown) => resolve(v as RpcResult<TResult>), reject);
             try {
                 const encoded = msgpackEncode(req);
-                socket!.send(encoded);
+                socket!.send(toArrayBuffer(encoded));
             } catch (err) {
                 removePending(id);
                 reject(err);
@@ -636,7 +645,7 @@ async function rpcCallWebSocket<TResult, TArgs>(methodId: string, args?: TArgs):
         try {
             // Always use msgpack encoding
             const encoded = msgpackEncode(req);
-            ws.send(encoded);
+            ws.send(toArrayBuffer(encoded));
         } catch (err) {
             removePending(id);
             reject(err);

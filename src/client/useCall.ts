@@ -2,8 +2,8 @@ import { useCallback, useRef, useState } from "react";
 
 import type { RpcStats } from "../runtime/protocol.js";
 import { invalidateByMethod } from "./cache.js";
-import { RpcError } from "./RpcError.js";
 import { rpcCall } from "./rpcClient.js";
+import { RpcError } from "./RpcError.js";
 import type { MethodStub } from "./types.js";
 
 /**
@@ -12,10 +12,12 @@ import type { MethodStub } from "./types.js";
  * - invalidate: array of MethodStubs whose cache entries will be invalidated
  *   when this call completes successfully (useful to refresh related reads).
  * - onSuccess: optional callback that receives the result on success.
+ * - onError: optional callback that receives the error message on failure.
  */
 type UseCallOptions = {
     invalidate?: MethodStub[];
     onSuccess?: (result: unknown) => void;
+    onError?: (error: string) => void;
 };
 
 /**
@@ -56,6 +58,7 @@ export function useCall<TArgs, TResult>(method: MethodStub<TArgs, TResult>, opti
             const rpcError = err instanceof RpcError ? err : new RpcError(err instanceof Error ? err.message : "Unknown error");
             setError(rpcError.message);
             setStats(rpcError.stats);
+            optionsRef.current.onError?.(rpcError.message);
             throw rpcError;
         } finally {
             setCalling(false);
