@@ -23,6 +23,10 @@ export interface HttpRpcResult {
     response: RpcResponse | RpcResponse[];
 }
 
+export class PublicError extends Error {
+    public readonly public = true;
+}
+
 export class RpcRegistry {
     private methods = new Map<string, HeliumMethodDef<any, any>>();
     private middleware: HeliumMiddleware | null = null;
@@ -303,11 +307,45 @@ export class RpcRegistry {
  * In development, returns the actual error message for debugging.
  */
 function sanitizeErrorMessage(err: unknown): string {
+    const message = getErrorMessage(err);
+    const isPublic = isPublicError(err);
+
     if (process.env.NODE_ENV === "production") {
+        if (isPublic && message) {
+            return message;
+        }
         return "Server error";
     }
+
+    if (message) {
+        return message;
+    }
+
+    return "Server error";
+}
+
+function isPublicError(err: unknown): boolean {
+    if (err instanceof PublicError) {
+        return true;
+    }
+
+    if (!err || typeof err !== "object") {
+        return false;
+    }
+
+    const publicFlag = (err as { public?: unknown }).public;
+    return publicFlag === true;
+}
+
+function getErrorMessage(err: unknown): string | null {
     if (err instanceof Error) {
         return err.message;
     }
-    return "Server error";
+
+    if (err && typeof err === "object") {
+        const message = (err as { message?: unknown }).message;
+        return typeof message === "string" ? message : null;
+    }
+
+    return null;
 }

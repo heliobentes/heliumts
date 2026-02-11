@@ -10,6 +10,7 @@ export * from "./middleware.js";
 export type { HTTPRouter } from "./httpRouter.js";
 export { startProdServer } from "./prodServer.js";
 export type { RpcRegistry } from "./rpcRegistry.js";
+export { PublicError } from "./rpcRegistry.js";
 
 // Internal utilities needed by generated server code (from helium build)
 // Note: These are exported for framework-generated code only, not for direct user consumption

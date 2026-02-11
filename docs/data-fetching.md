@@ -2,6 +2,25 @@
 
 HeliumTS provides two React hooks for data fetching and mutations: `useFetch` and `useCall`. Both hooks communicate with the server over WebSocket RPC, providing real-time, type-safe data operations.
 
+## Public errors in production
+
+In production, server errors are redacted to a generic "Server error" message by default.
+If you want to expose a safe message to clients, throw a `PublicError` or an error-like
+object with `{ public: true }` from your RPC method.
+
+```ts
+import { defineMethod, PublicError } from "heliumts/server";
+
+export const createTask = defineMethod(async (args) => {
+    if (!args.name?.trim()) {
+        throw new PublicError("Task name is required");
+        // Or: throw { public: true, message: "Task name is required" };
+    }
+
+    return createTaskInDb(args);
+});
+```
+
 ## useFetch
 
 The `useFetch` hook automatically fetches data from a server method and caches the result. It's designed for **reading/querying data**.
