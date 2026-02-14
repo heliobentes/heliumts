@@ -56,7 +56,7 @@ const config: HeliumConfig = {
 
 **Auto HTTP on Mobile:**
 
-When `autoHttpOnMobile` is enabled and `transport` is set to `"auto"`, the client will automatically use HTTP transport on:
+When `autoHttpOnMobile` is enabled, the client will automatically use HTTP transport on mobile devices regardless of `transport` mode. For non-mobile devices, additional HTTP fallback applies when `transport` is `"auto"` on:
 - Any mobile device (including when connected to Wi-Fi)
 - Cellular connections (4G/LTE, 5G) on non-mobile devices
 - Slow connections (2G, 3G) on non-mobile devices

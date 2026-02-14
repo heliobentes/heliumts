@@ -79,9 +79,18 @@ function isMobileDevice(): boolean {
 
 // Detect if we should prefer HTTP transport (mobile/slow networks)
 function shouldUseHttpTransport(): boolean {
+    if (isTemporaryHttpFallbackActive()) {
+        return true;
+    }
+
     if (configuredTransport === "http") {
         return true;
     }
+
+    if (configuredAutoHttpOnMobile && isMobileDevice()) {
+        return true;
+    }
+
     if (configuredTransport === "websocket") {
         return false;
     }
@@ -89,11 +98,6 @@ function shouldUseHttpTransport(): boolean {
     // Auto mode: check if mobile HTTP optimization is enabled
     if (!configuredAutoHttpOnMobile) {
         return false;
-    }
-
-    // autoHttpOnMobile must always prefer HTTP on mobile devices
-    if (isMobileDevice()) {
-        return true;
     }
 
     // For non-mobile devices, prefer HTTP on slow/cellular connections
@@ -328,7 +332,10 @@ function handleBlockedSocketClose(code: number): void {
 const STALE_THRESHOLD_MS = 15_000;
 
 /** Max time (ms) to wait for a WebSocket connection to open. */
-const SOCKET_CONNECT_TIMEOUT_MS = 5_000;
+const SOCKET_CONNECT_TIMEOUT_MS = 10_000;
+
+/** Duration (ms) to temporarily force HTTP after repeated WebSocket failures. */
+const WS_FAILURE_HTTP_COOLDOWN_MS = 60_000;
 
 /** Max time (ms) to wait for a response before timing out a request. */
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -344,6 +351,15 @@ const RETRY_MAX_DELAY_MS = 5_000;
 
 /** Timestamp when the page was last hidden (for visibility-change detection). */
 let lastHiddenTimestamp: number | null = null;
+let forceHttpUntilTimestamp = 0;
+
+function isTemporaryHttpFallbackActive(now = Date.now()): boolean {
+    return now < forceHttpUntilTimestamp;
+}
+
+function activateTemporaryHttpFallback(now = Date.now()): void {
+    forceHttpUntilTimestamp = now + WS_FAILURE_HTTP_COOLDOWN_MS;
+}
 
 // ── Pending-request helpers ──────────────────────────────────────────────────
 
@@ -628,11 +644,6 @@ function waitForSocketOpen(ws: WebSocket): Promise<WebSocket> {
             if (socket === ws) {
                 socket = null;
             }
-            try {
-                ws.close();
-            } catch {
-                // ignore close errors
-            }
             reject(new Error("WebSocket connection timed out"));
         }, SOCKET_CONNECT_TIMEOUT_MS);
 
@@ -719,16 +730,20 @@ export async function rpcCall<TResult = unknown, TArgs = unknown>(methodId: stri
     return rpcCallWithRetry<TResult, TArgs>(methodId, args);
 }
 
+async function rpcCallViaHttpBatch<TResult, TArgs>(methodId: string, args: TArgs | undefined): Promise<RpcResult<TResult>> {
+    const id = nextId();
+    const req: RpcRequest = { id, method: methodId, args };
+
+    return new Promise<RpcResult<TResult>>((resolve, reject) => {
+        pendingBatch.push({ req, resolve: resolve as (value: RpcResult<TResult>) => void, reject });
+        scheduleBatch();
+    });
+}
+
 async function rpcCallWithRetry<TResult, TArgs>(methodId: string, args: TArgs | undefined, attempt = 0): Promise<RpcResult<TResult>> {
     try {
         if (shouldUseHttpTransport()) {
-            const id = nextId();
-            const req: RpcRequest = { id, method: methodId, args };
-
-            return await new Promise<RpcResult<TResult>>((resolve, reject) => {
-                pendingBatch.push({ req, resolve: resolve as (value: RpcResult<TResult>) => void, reject });
-                scheduleBatch();
-            });
+            return await rpcCallViaHttpBatch<TResult, TArgs>(methodId, args);
         }
 
         return await rpcCallWebSocket<TResult, TArgs>(methodId, args);
@@ -742,6 +757,12 @@ async function rpcCallWithRetry<TResult, TArgs>(methodId: string, args: TArgs | 
             await new Promise<void>((r) => setTimeout(r, baseDelay + jitter));
             return rpcCallWithRetry<TResult, TArgs>(methodId, args, attempt + 1);
         }
+
+        if (isRetriableError(err) && configuredTransport !== "http") {
+            activateTemporaryHttpFallback();
+            return rpcCallViaHttpBatch<TResult, TArgs>(methodId, args);
+        }
+
         throw err;
     }
 }
