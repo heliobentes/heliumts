@@ -49,15 +49,17 @@ const config: HeliumConfig = {
   - ✅ No connection state to maintain
   - ⚠️ Slightly higher per-request overhead on fast networks
 
-- **`"auto"`**: Automatically selects based on network conditions
-  - Uses HTTP on cellular/slow networks when `autoHttpOnMobile` is `true`
-  - Uses WebSocket on fast networks (WiFi, wired)
+- **`"auto"`**: Automatically selects based on device/network conditions
+    - Uses HTTP on all mobile devices when `autoHttpOnMobile` is `true`
+    - Uses HTTP on cellular/slow links for non-mobile devices
+    - Uses WebSocket on fast desktop networks (WiFi, wired)
 
 **Auto HTTP on Mobile:**
 
 When `autoHttpOnMobile` is enabled and `transport` is set to `"auto"`, the client will automatically use HTTP transport on:
-- Cellular connections (4G/LTE, 5G)
-- Slow connections (2G, 3G)
+- Any mobile device (including when connected to Wi-Fi)
+- Cellular connections (4G/LTE, 5G) on non-mobile devices
+- Slow connections (2G, 3G) on non-mobile devices
 
 This improves performance on mobile networks where HTTP/2 multiplexing is more efficient than WebSocket due to carrier network optimizations.
 

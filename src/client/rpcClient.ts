@@ -47,6 +47,36 @@ export function isAutoHttpOnMobileEnabled(): boolean {
     return configuredAutoHttpOnMobile;
 }
 
+interface NetworkInformation {
+    type?: string;
+    effectiveType?: string;
+}
+
+interface NavigatorWithConnection extends Navigator {
+    connection?: NetworkInformation;
+    userAgentData?: {
+        mobile?: boolean;
+    };
+}
+
+function isMobileDevice(): boolean {
+    if (typeof navigator === "undefined") {
+        return false;
+    }
+
+    const nav = navigator as NavigatorWithConnection;
+    if (typeof nav.userAgentData?.mobile === "boolean") {
+        return nav.userAgentData.mobile;
+    }
+
+    const userAgent = navigator.userAgent || "";
+    if (/Android|iPhone|iPad|iPod|IEMobile|Opera Mini|Mobi/i.test(userAgent)) {
+        return true;
+    }
+
+    return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+}
+
 // Detect if we should prefer HTTP transport (mobile/slow networks)
 function shouldUseHttpTransport(): boolean {
     if (configuredTransport === "http") {
@@ -61,7 +91,12 @@ function shouldUseHttpTransport(): boolean {
         return false;
     }
 
-    // Prefer HTTP on mobile/slow connections
+    // autoHttpOnMobile must always prefer HTTP on mobile devices
+    if (isMobileDevice()) {
+        return true;
+    }
+
+    // For non-mobile devices, prefer HTTP on slow/cellular connections
     if (typeof navigator !== "undefined") {
         const conn = (navigator as NavigatorWithConnection).connection;
         if (conn) {
@@ -74,15 +109,6 @@ function shouldUseHttpTransport(): boolean {
     }
 
     return false;
-}
-
-interface NetworkInformation {
-    type?: string;
-    effectiveType?: string;
-}
-
-interface NavigatorWithConnection extends Navigator {
-    connection?: NetworkInformation;
 }
 
 // ============================================================================
@@ -301,6 +327,9 @@ function handleBlockedSocketClose(code: number): void {
 /** How long (ms) the page must be hidden before we consider the WebSocket stale. */
 const STALE_THRESHOLD_MS = 15_000;
 
+/** Max time (ms) to wait for a WebSocket connection to open. */
+const SOCKET_CONNECT_TIMEOUT_MS = 5_000;
+
 /** Max time (ms) to wait for a response before timing out a request. */
 const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -388,6 +417,28 @@ function forceReconnect(): void {
 
     // Reject all in-flight requests – callers with retry logic will resend
     rejectAllPending(new Error("Connection reset"));
+}
+
+function reconnectIfLikelyStale(force = false): void {
+    if (!socket) {
+        lastHiddenTimestamp = null;
+        return;
+    }
+
+    if (force) {
+        forceReconnect();
+        lastHiddenTimestamp = null;
+        return;
+    }
+
+    if (lastHiddenTimestamp !== null) {
+        const hiddenDuration = Date.now() - lastHiddenTimestamp;
+        if (hiddenDuration > STALE_THRESHOLD_MS) {
+            forceReconnect();
+        }
+    }
+
+    lastHiddenTimestamp = null;
 }
 
 /** Determine whether an error warrants an automatic retry. */
@@ -538,6 +589,59 @@ async function createSocket(): Promise<WebSocket> {
     return ws;
 }
 
+function waitForSocketOpen(ws: WebSocket): Promise<WebSocket> {
+    if (ws.readyState === WebSocket.OPEN) {
+        return Promise.resolve(ws);
+    }
+
+    return new Promise<WebSocket>((resolve, reject) => {
+        const cleanup = () => {
+            ws.removeEventListener("open", handleOpen);
+            ws.removeEventListener("error", handleError);
+            ws.removeEventListener("close", handleClose);
+            clearTimeout(timeout);
+        };
+
+        const handleOpen = () => {
+            cleanup();
+            resolve(ws);
+        };
+
+        const handleError = () => {
+            cleanup();
+            if (socket === ws) {
+                socket = null;
+            }
+            reject(new Error("WebSocket connection failed"));
+        };
+
+        const handleClose = () => {
+            cleanup();
+            if (socket === ws) {
+                socket = null;
+            }
+            reject(new Error("WebSocket closed before opening"));
+        };
+
+        const timeout = setTimeout(() => {
+            cleanup();
+            if (socket === ws) {
+                socket = null;
+            }
+            try {
+                ws.close();
+            } catch {
+                // ignore close errors
+            }
+            reject(new Error("WebSocket connection timed out"));
+        }, SOCKET_CONNECT_TIMEOUT_MS);
+
+        ws.addEventListener("open", handleOpen);
+        ws.addEventListener("error", handleError);
+        ws.addEventListener("close", handleClose);
+    });
+}
+
 async function ensureSocketReady(): Promise<WebSocket> {
     // If we have an open socket, return it immediately
     if (socket && socket.readyState === WebSocket.OPEN) {
@@ -549,73 +653,23 @@ async function ensureSocketReady(): Promise<WebSocket> {
         return connectionPromise;
     }
 
-    // If we have a socket that's connecting, wait for it
-    if (socket && socket.readyState === WebSocket.CONNECTING) {
-        connectionPromise = new Promise((resolve, reject) => {
-            const cleanup = () => {
-                socket!.removeEventListener("open", handleOpen);
-                socket!.removeEventListener("error", handleError);
-                socket!.removeEventListener("close", handleClose);
-            };
-            const handleOpen = () => {
-                cleanup();
-                connectionPromise = null;
-                resolve(socket!);
-            };
-            const handleError = () => {
-                cleanup();
-                socket = null;
-                connectionPromise = null;
-                reject(new Error("WebSocket connection failed"));
-            };
-            const handleClose = () => {
-                cleanup();
-                socket = null;
-                connectionPromise = null;
-                reject(new Error("WebSocket closed before opening"));
-            };
+    const pendingConnectPromise = (async () => {
+        if (!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
+            socket = await createSocket();
+        }
 
-            socket!.addEventListener("open", handleOpen);
-            socket!.addEventListener("error", handleError);
-            socket!.addEventListener("close", handleClose);
-        });
-        return connectionPromise;
-    }
-
-    // Create a new socket and connection promise
-    connectionPromise = (async () => {
-        socket = await createSocket();
-        return new Promise<WebSocket>((resolve, reject) => {
-            const cleanup = () => {
-                socket!.removeEventListener("open", handleOpen);
-                socket!.removeEventListener("error", handleError);
-                socket!.removeEventListener("close", handleClose);
-            };
-            const handleOpen = () => {
-                cleanup();
-                connectionPromise = null;
-                resolve(socket!);
-            };
-            const handleError = () => {
-                cleanup();
-                socket = null;
-                connectionPromise = null;
-                reject(new Error("WebSocket connection failed"));
-            };
-            const handleClose = () => {
-                cleanup();
-                socket = null;
-                connectionPromise = null;
-                reject(new Error("WebSocket closed before opening"));
-            };
-
-            socket!.addEventListener("open", handleOpen);
-            socket!.addEventListener("error", handleError);
-            socket!.addEventListener("close", handleClose);
-        });
+        return waitForSocketOpen(socket);
     })();
 
-    return connectionPromise;
+    connectionPromise = pendingConnectPromise;
+
+    try {
+        return await pendingConnectPromise;
+    } finally {
+        if (connectionPromise === pendingConnectPromise) {
+            connectionPromise = null;
+        }
+    }
 }
 
 async function rpcCallWebSocket<TResult, TArgs>(methodId: string, args?: TArgs): Promise<RpcResult<TResult>> {
@@ -735,14 +789,29 @@ if (typeof document !== "undefined") {
         if (document.hidden) {
             lastHiddenTimestamp = Date.now();
         } else {
-            // Page became visible again
-            if (lastHiddenTimestamp !== null) {
-                const hiddenDuration = Date.now() - lastHiddenTimestamp;
-                if (hiddenDuration > STALE_THRESHOLD_MS && socket) {
-                    forceReconnect();
-                }
-                lastHiddenTimestamp = null;
-            }
+            reconnectIfLikelyStale(false);
         }
+    });
+
+    document.addEventListener("pagehide", () => {
+        lastHiddenTimestamp = Date.now();
+    });
+}
+
+if (typeof window !== "undefined") {
+    window.addEventListener("pageshow", (event) => {
+        if ((event as PageTransitionEvent).persisted) {
+            reconnectIfLikelyStale(true);
+            return;
+        }
+        reconnectIfLikelyStale(false);
+    });
+
+    window.addEventListener("focus", () => {
+        reconnectIfLikelyStale(false);
+    });
+
+    window.addEventListener("online", () => {
+        reconnectIfLikelyStale(true);
     });
 }
