@@ -119,6 +119,8 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
     const enabledRef = useRef(enabled);
     const showLoaderOnRefocusRef = useRef(showLoaderOnRefocus);
     const showLoaderOnInvalidateRef = useRef(showLoaderOnInvalidate);
+    const queuedRefetchRef = useRef(false);
+    const queuedRefetchShowLoaderRef = useRef(false);
 
     // Update refs on each render
     methodIdRef.current = method.__id;
@@ -136,6 +138,11 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
     const [isLoading, setLoading] = useState(!has(key) && enabled);
     const [error, setError] = useState<string | null>(null);
     const [stats, setStats] = useState<RpcStats | null>(null);
+
+    const queueRefetch = useCallback((showLoader: boolean) => {
+        queuedRefetchRef.current = true;
+        queuedRefetchShowLoaderRef.current = queuedRefetchShowLoaderRef.current || showLoader;
+    }, []);
 
     // Core fetch function using refs (stable reference)
     // Uses global deduplication to prevent multiple fetches for the same key
@@ -172,6 +179,12 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
                 if (isMountedRef.current && showLoader) {
                     setLoading(false);
                 }
+                if (queuedRefetchRef.current && isMountedRef.current && enabledRef.current && !isPending(keyRef.current)) {
+                    const nextShowLoader = queuedRefetchShowLoaderRef.current;
+                    queuedRefetchRef.current = false;
+                    queuedRefetchShowLoaderRef.current = false;
+                    void doFetch(nextShowLoader);
+                }
             }
         }
 
@@ -204,6 +217,12 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
         } finally {
             if (isMountedRef.current && showLoader) {
                 setLoading(false);
+            }
+            if (queuedRefetchRef.current && isMountedRef.current && enabledRef.current && !isPending(keyRef.current)) {
+                const nextShowLoader = queuedRefetchShowLoaderRef.current;
+                queuedRefetchRef.current = false;
+                queuedRefetchShowLoaderRef.current = false;
+                void doFetch(nextShowLoader);
             }
         }
     }, []); // No dependencies - uses refs
@@ -277,9 +296,18 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
 
         // Create a stable callback for this hook instance
         const focusCallback: FocusCallback = (showLoader: boolean) => {
-            if (enabledRef.current && isMountedRef.current && !isPending(keyRef.current)) {
-                doFetch(showLoaderOnRefocusRef.current || showLoader);
+            if (!enabledRef.current || !isMountedRef.current) {
+                return;
             }
+
+            const shouldShowLoader = showLoaderOnRefocusRef.current || showLoader;
+
+            if (isPending(keyRef.current)) {
+                queueRefetch(shouldShowLoader);
+                return;
+            }
+
+            void doFetch(shouldShowLoader);
         };
 
         // Register this callback
@@ -289,18 +317,25 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
         return () => {
             callbacks.delete(focusCallback);
         };
-    }, [refetchOnWindowFocus, doFetch]);
+    }, [refetchOnWindowFocus, doFetch, queueRefetch]);
 
     // Subscribe to cache invalidations (from useCall or manual invalidation)
     useEffect(() => {
         const unsubscribe = subscribeInvalidations((methodId) => {
-            if (methodId === methodIdRef.current && enabledRef.current && isMountedRef.current && !isPending(keyRef.current)) {
-                doFetch(showLoaderOnInvalidateRef.current);
+            if (methodId !== methodIdRef.current || !enabledRef.current || !isMountedRef.current) {
+                return;
             }
+
+            if (isPending(keyRef.current)) {
+                queueRefetch(showLoaderOnInvalidateRef.current);
+                return;
+            }
+
+            void doFetch(showLoaderOnInvalidateRef.current);
         });
 
         return unsubscribe;
-    }, [doFetch]);
+    }, [doFetch, queueRefetch]);
 
     // TTL-based auto-refetch
     useEffect(() => {
