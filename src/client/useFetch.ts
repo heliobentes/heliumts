@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { RpcStats } from "../runtime/protocol.js";
-import { cacheKey, get, getPendingFetch, has, isPending, set, setPendingFetch, subscribeInvalidations } from "./cache.js";
+import { cacheKey, clearPendingFetch, get, getPendingFetch, has, isPending, set, setPendingFetch, subscribeInvalidations } from "./cache.js";
 import { rpcCall } from "./rpcClient.js";
 import { RpcError } from "./RpcError.js";
 import type { MethodStub } from "./types.js";
@@ -151,6 +151,22 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
             return undefined;
         }
 
+        const replayQueuedRefetch = () => {
+            if (!queuedRefetchRef.current || !isMountedRef.current || !enabledRef.current) {
+                return;
+            }
+            const nextShowLoader = queuedRefetchShowLoaderRef.current;
+            queuedRefetchRef.current = false;
+            queuedRefetchShowLoaderRef.current = false;
+            clearPendingFetch(keyRef.current);
+            queueMicrotask(() => {
+                if (!isMountedRef.current || !enabledRef.current) {
+                    return;
+                }
+                void doFetch(nextShowLoader);
+            });
+        };
+
         const currentKey = keyRef.current;
 
         // Check if there's already a pending fetch for this key (global deduplication)
@@ -179,12 +195,7 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
                 if (isMountedRef.current && showLoader) {
                     setLoading(false);
                 }
-                if (queuedRefetchRef.current && isMountedRef.current && enabledRef.current && !isPending(keyRef.current)) {
-                    const nextShowLoader = queuedRefetchShowLoaderRef.current;
-                    queuedRefetchRef.current = false;
-                    queuedRefetchShowLoaderRef.current = false;
-                    void doFetch(nextShowLoader);
-                }
+                replayQueuedRefetch();
             }
         }
 
@@ -218,12 +229,7 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
             if (isMountedRef.current && showLoader) {
                 setLoading(false);
             }
-            if (queuedRefetchRef.current && isMountedRef.current && enabledRef.current && !isPending(keyRef.current)) {
-                const nextShowLoader = queuedRefetchShowLoaderRef.current;
-                queuedRefetchRef.current = false;
-                queuedRefetchShowLoaderRef.current = false;
-                void doFetch(nextShowLoader);
-            }
+            replayQueuedRefetch();
         }
     }, []); // No dependencies - uses refs
 
@@ -304,6 +310,7 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
 
             if (isPending(keyRef.current)) {
                 queueRefetch(shouldShowLoader);
+                void doFetch(shouldShowLoader);
                 return;
             }
 
@@ -328,6 +335,7 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
 
             if (isPending(keyRef.current)) {
                 queueRefetch(showLoaderOnInvalidateRef.current);
+                void doFetch(showLoaderOnInvalidateRef.current);
                 return;
             }
 
@@ -362,10 +370,7 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
             }, ttl);
         };
 
-        // Only schedule if data is already cached
-        if (has(key)) {
-            scheduleRefetch();
-        }
+        scheduleRefetch();
 
         return () => {
             isActive = false;

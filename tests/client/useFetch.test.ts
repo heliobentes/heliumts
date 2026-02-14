@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { get, getPendingFetch, has, isPending, set, setPendingFetch, subscribeInvalidations } from "../../src/client/cache";
+import { clearPendingFetch, get, getPendingFetch, has, isPending, set, setPendingFetch, subscribeInvalidations } from "../../src/client/cache";
 import { rpcCall } from "../../src/client/rpcClient";
 import { RpcError } from "../../src/client/RpcError";
 import { useFetch } from "../../src/client/useFetch";
@@ -34,6 +34,7 @@ describe("useFetch", () => {
     const mockIsPending = isPending as ReturnType<typeof vi.fn>;
     const mockSet = set as ReturnType<typeof vi.fn>;
     const mockSetPendingFetch = setPendingFetch as ReturnType<typeof vi.fn>;
+    const mockClearPendingFetch = clearPendingFetch as ReturnType<typeof vi.fn>;
     const mockSubscribe = subscribeInvalidations as ReturnType<typeof vi.fn>;
 
     beforeEach(() => {
@@ -189,6 +190,34 @@ describe("useFetch", () => {
 
         // set should be called with TTL
         expect(mockSet).toHaveBeenCalledWith(expect.any(String), mockData, 5000);
+    });
+
+    it("should trigger TTL refetch even when cache was empty initially", async () => {
+        vi.useFakeTimers();
+        try {
+            mockRpcCall.mockResolvedValue({
+                data: { result: "data" },
+                stats: {},
+            });
+
+            renderHook(() => useFetch(mockMethod, undefined, { ttl: 1000 }));
+
+            await act(async () => {
+                await Promise.resolve();
+            });
+
+            expect(mockRpcCall).toHaveBeenCalledTimes(1);
+
+            mockRpcCall.mockClear();
+
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(1000);
+            });
+
+            expect(mockRpcCall).toHaveBeenCalledTimes(1);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("should return stats from response", async () => {
@@ -378,19 +407,28 @@ describe("useFetch", () => {
         });
 
         let pending = false;
+        let currentPendingPromise: Promise<unknown> | undefined;
         mockSetPendingFetch.mockImplementation((_key: string, promise: Promise<unknown>) => {
             pending = true;
+            currentPendingPromise = promise;
             promise.finally(() => {
-                pending = false;
+                queueMicrotask(() => {
+                    pending = false;
+                    currentPendingPromise = undefined;
+                });
             });
             return promise;
         });
+        mockClearPendingFetch.mockImplementation(() => {
+            pending = false;
+            currentPendingPromise = undefined;
+        });
         mockIsPending.mockImplementation(() => pending);
-        mockGetPendingFetch.mockImplementation(() => (pending ? firstFetchPromise : undefined));
+        mockGetPendingFetch.mockImplementation(() => (pending ? currentPendingPromise : undefined));
 
         mockRpcCall
             .mockImplementationOnce(() => firstFetchPromise)
-            .mockResolvedValueOnce({ data: { result: "replayed" }, stats: {} });
+            .mockResolvedValue({ data: { result: "replayed" }, stats: {} });
 
         const { result } = renderHook(() => useFetch(mockMethod));
 
@@ -406,6 +444,78 @@ describe("useFetch", () => {
 
         await act(async () => {
             resolveFirstFetch?.({ data: { result: "initial" }, stats: {} });
+            await Promise.resolve();
+            await Promise.resolve();
+        });
+
+        await waitFor(() => {
+            expect(mockRpcCall.mock.calls.length).toBeGreaterThanOrEqual(2);
+        });
+
+        await waitFor(() => {
+            expect(result.current.data).toEqual({ result: "replayed" });
+        });
+    });
+
+    it("should refresh all subscribers sharing the same key after invalidation", async () => {
+        const invalidationCallbacks: Array<(methodId: string) => void> = [];
+        mockSubscribe.mockImplementation((callback) => {
+            invalidationCallbacks.push(callback);
+            return () => {
+                const index = invalidationCallbacks.indexOf(callback);
+                if (index >= 0) {
+                    invalidationCallbacks.splice(index, 1);
+                }
+            };
+        });
+
+        let resolveFirstFetch: ((value: { data: { result: string }; stats: Record<string, never> }) => void) | null = null;
+        const firstFetchPromise = new Promise<{ data: { result: string }; stats: Record<string, never> }>((resolve) => {
+            resolveFirstFetch = resolve;
+        });
+
+        let pending = false;
+        let currentPendingPromise: Promise<unknown> | undefined;
+        mockSetPendingFetch.mockImplementation((_key: string, promise: Promise<unknown>) => {
+            pending = true;
+            currentPendingPromise = promise;
+            promise.finally(() => {
+                queueMicrotask(() => {
+                    pending = false;
+                    currentPendingPromise = undefined;
+                });
+            });
+            return promise;
+        });
+        mockClearPendingFetch.mockImplementation(() => {
+            pending = false;
+            currentPendingPromise = undefined;
+        });
+        mockIsPending.mockImplementation(() => pending);
+        mockGetPendingFetch.mockImplementation(() => (pending ? currentPendingPromise : undefined));
+
+        mockRpcCall
+            .mockImplementationOnce(() => firstFetchPromise)
+            .mockResolvedValueOnce({ data: { result: "replayed" }, stats: {} });
+
+        const { result } = renderHook(() => {
+            const header = useFetch(mockMethod);
+            const layout = useFetch(mockMethod);
+            return { header, layout };
+        });
+
+        await waitFor(() => {
+            expect(mockRpcCall).toHaveBeenCalledTimes(1);
+        });
+
+        act(() => {
+            invalidationCallbacks.forEach((callback) => callback("testMethod"));
+        });
+
+        await act(async () => {
+            resolveFirstFetch?.({ data: { result: "initial" }, stats: {} });
+            await Promise.resolve();
+            await Promise.resolve();
         });
 
         await waitFor(() => {
@@ -413,7 +523,83 @@ describe("useFetch", () => {
         });
 
         await waitFor(() => {
-            expect(result.current.data).toEqual({ result: "replayed" });
+            expect(result.current.header.data).toEqual({ result: "replayed" });
+            expect(result.current.layout.data).toEqual({ result: "replayed" });
+        });
+    });
+
+    it("should refresh more than two subscribers sharing the same key", async () => {
+        const invalidationCallbacks: Array<(methodId: string) => void> = [];
+        mockSubscribe.mockImplementation((callback) => {
+            invalidationCallbacks.push(callback);
+            return () => {
+                const index = invalidationCallbacks.indexOf(callback);
+                if (index >= 0) {
+                    invalidationCallbacks.splice(index, 1);
+                }
+            };
+        });
+
+        let resolveFirstFetch: ((value: { data: { result: string }; stats: Record<string, never> }) => void) | null = null;
+        const firstFetchPromise = new Promise<{ data: { result: string }; stats: Record<string, never> }>((resolve) => {
+            resolveFirstFetch = resolve;
+        });
+
+        let pending = false;
+        let currentPendingPromise: Promise<unknown> | undefined;
+        mockSetPendingFetch.mockImplementation((_key: string, promise: Promise<unknown>) => {
+            pending = true;
+            currentPendingPromise = promise;
+            promise.finally(() => {
+                queueMicrotask(() => {
+                    pending = false;
+                    currentPendingPromise = undefined;
+                });
+            });
+            return promise;
+        });
+        mockClearPendingFetch.mockImplementation(() => {
+            pending = false;
+            currentPendingPromise = undefined;
+        });
+        mockIsPending.mockImplementation(() => pending);
+        mockGetPendingFetch.mockImplementation(() => (pending ? currentPendingPromise : undefined));
+
+        mockRpcCall
+            .mockImplementationOnce(() => firstFetchPromise)
+            .mockResolvedValue({ data: { result: "replayed-many" }, stats: {} });
+
+        const { result } = renderHook(() => {
+            const one = useFetch(mockMethod);
+            const two = useFetch(mockMethod);
+            const three = useFetch(mockMethod);
+            const four = useFetch(mockMethod);
+            return { one, two, three, four };
+        });
+
+        await waitFor(() => {
+            expect(mockRpcCall).toHaveBeenCalledTimes(1);
+        });
+
+        act(() => {
+            invalidationCallbacks.forEach((callback) => callback("testMethod"));
+        });
+
+        await act(async () => {
+            resolveFirstFetch?.({ data: { result: "initial" }, stats: {} });
+            await Promise.resolve();
+            await Promise.resolve();
+        });
+
+        await waitFor(() => {
+            expect(mockRpcCall.mock.calls.length).toBeGreaterThanOrEqual(2);
+        });
+
+        await waitFor(() => {
+            expect(result.current.one.data).toEqual({ result: "replayed-many" });
+            expect(result.current.two.data).toEqual({ result: "replayed-many" });
+            expect(result.current.three.data).toEqual({ result: "replayed-many" });
+            expect(result.current.four.data).toEqual({ result: "replayed-many" });
         });
     });
 });
