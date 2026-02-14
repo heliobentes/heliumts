@@ -39,6 +39,19 @@ export function cacheKey(methodId: string, args: unknown): string {
     return JSON.stringify([methodId, args ?? null]);
 }
 
+function methodIdFromKey(key: string): string | undefined {
+    try {
+        const parsed = JSON.parse(key);
+        if (!Array.isArray(parsed) || parsed.length < 1) {
+            return undefined;
+        }
+        const [methodId] = parsed;
+        return typeof methodId === "string" ? methodId : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 function isExpired(entry: CacheEntry): boolean {
     if (!entry.ttl) {
         return false;
@@ -85,11 +98,19 @@ export function has(key: string): boolean {
 export function invalidateByMethod(methodId: string) {
     let invalidated = false;
     for (const key of store.keys()) {
-        if (key.startsWith(`["${methodId}"`)) {
+        if (methodIdFromKey(key) === methodId) {
             store.delete(key);
             invalidated = true;
         }
     }
+
+    for (const key of pendingFetches.keys()) {
+        if (methodIdFromKey(key) === methodId) {
+            pendingFetches.delete(key);
+            invalidated = true;
+        }
+    }
+
     if (invalidated || listeners.size) {
         for (const listener of listeners) {
             listener(methodId);

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { cacheKey, get, has, invalidateAll, invalidateByMethod, set, subscribeInvalidations } from "../../src/client/cache";
+import { cacheKey, get, has, invalidateAll, invalidateByMethod, isPending, set, setPendingFetch, subscribeInvalidations } from "../../src/client/cache";
 
 describe("cache", () => {
     beforeEach(() => {
@@ -143,6 +143,36 @@ describe("cache", () => {
             expect(listener).toHaveBeenCalledWith("testMethod");
 
             unsubscribe();
+        });
+
+        it("should clear pending fetches for invalidated method", async () => {
+            const key = cacheKey("getUser", { id: 1 });
+            let resolvePromise: (() => void) | undefined;
+            const promise = new Promise<void>((resolve) => {
+                resolvePromise = resolve;
+            });
+
+            setPendingFetch(key, promise);
+            expect(isPending(key)).toBe(true);
+
+            invalidateByMethod("getUser");
+
+            expect(isPending(key)).toBe(false);
+
+            resolvePromise?.();
+            await promise;
+        });
+
+        it("should invalidate keys with escaped method IDs", () => {
+            const methodId = 'method"with\\chars';
+            const key = cacheKey(methodId, { id: 1 });
+
+            set(key, "value");
+            expect(has(key)).toBe(true);
+
+            invalidateByMethod(methodId);
+
+            expect(has(key)).toBe(false);
         });
     });
 
