@@ -4,6 +4,17 @@
 
 Helium's configuration file allows you to customize server settings, RPC behavior, security, and proxy configuration. The configuration file should be placed at the project root as `helium.config.ts`, `helium.config.js`, or `helium.config.mjs`.
 
+### Built-in Client Stale Recovery
+
+Helium includes a default client-side stale recovery mechanism (zero config). This behavior is always enabled when you use `heliumts/client`:
+
+- Tracks when a tab/app is backgrounded
+- On long suspend/resume cycles, triggers a safe hard reload to recover stale runtime state
+- On known chunk-load failures (for example after deploys), triggers a guarded hard reload
+- Applies a short reload cooldown to avoid reload loops
+
+No `helium.config` option is required for this protection.
+
 ## Basic Configuration
 
 Create a `helium.config.ts` file in your project root:
