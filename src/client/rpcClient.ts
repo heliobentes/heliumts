@@ -165,22 +165,30 @@ async function sendBatchHttp(batch: PendingRequest[]) {
     const requests = batch.map((b) => b.req);
     const encoded = msgpackEncode(requests);
 
-    // Fetch a fresh token for HTTP RPC authentication
-    const token = await fetchFreshToken();
+    const sendWithToken = async (token: string | undefined) => {
+        const headers: Record<string, string> = {
+            "Content-Type": "application/msgpack",
+            Accept: "application/msgpack",
+        };
+        if (token) {
+            headers["X-Helium-Token"] = token;
+        }
 
-    const headers: Record<string, string> = {
-        "Content-Type": "application/msgpack",
-        Accept: "application/msgpack",
+        return fetch("/__helium__/rpc", {
+            method: "POST",
+            headers,
+            body: encoded as unknown as BodyInit,
+        });
     };
-    if (token) {
-        headers["X-Helium-Token"] = token;
-    }
 
-    const response = await fetch("/__helium__/rpc", {
-        method: "POST",
-        headers,
-        body: encoded as unknown as BodyInit,
-    });
+    let response = await sendWithToken(await fetchFreshToken());
+
+    if (response.status === 401) {
+        const refreshedToken = await fetchFreshToken(true);
+        if (refreshedToken) {
+            response = await sendWithToken(refreshedToken);
+        }
+    }
 
     handleBlockedResponse(response.status, "rpc-http");
     if (!response.ok) {
@@ -488,7 +496,26 @@ function nextId() {
     return msgId++;
 }
 
-async function fetchFreshToken(): Promise<string | undefined> {
+let cachedAuthToken: string | undefined;
+
+function hasCachedToken(): boolean {
+    return Boolean(cachedAuthToken);
+}
+
+function setCachedToken(token: string | undefined): void {
+    if (!token) {
+        cachedAuthToken = undefined;
+        return;
+    }
+
+    cachedAuthToken = token;
+}
+
+async function fetchFreshToken(forceRefresh = false): Promise<string | undefined> {
+    if (!forceRefresh && hasCachedToken()) {
+        return cachedAuthToken;
+    }
+
     try {
         const response = await fetch("/__helium__/refresh-token", {
             method: "POST",
@@ -499,18 +526,22 @@ async function fetchFreshToken(): Promise<string | undefined> {
         handleBlockedResponse(response.status, "refresh-token");
         if (!response.ok) {
             console.warn("Failed to fetch fresh token:", response.status);
+            setCachedToken(undefined);
             return undefined;
         }
         const data = await response.json();
-        return data.token;
+        const token = data.token as string | undefined;
+        setCachedToken(token);
+        return token;
     } catch (error) {
         console.warn("Error fetching fresh token:", error);
+        setCachedToken(undefined);
         return undefined;
     }
 }
 
 async function createSocket(): Promise<WebSocket> {
-    // Fetch a fresh token before creating the WebSocket connection
+    // Fetch a token before creating the WebSocket connection
     const token = await fetchFreshToken();
 
     // Use the same protocol, hostname and port as the current page
@@ -523,7 +554,6 @@ async function createSocket(): Promise<WebSocket> {
 
     ws.onmessage = async (event) => {
         let data = new Uint8Array(event.data as ArrayBuffer);
-
         // Check for Gzip header (0x1f 0x8b) to detect compressed messages
         if (data.length > 2 && data[0] === 0x1f && data[1] === 0x8b) {
             try {
@@ -628,6 +658,7 @@ function waitForSocketOpen(ws: WebSocket): Promise<WebSocket> {
             if (socket === ws) {
                 socket = null;
             }
+            setCachedToken(undefined);
             reject(new Error("WebSocket connection failed"));
         };
 
@@ -636,6 +667,7 @@ function waitForSocketOpen(ws: WebSocket): Promise<WebSocket> {
             if (socket === ws) {
                 socket = null;
             }
+            setCachedToken(undefined);
             reject(new Error("WebSocket closed before opening"));
         };
 
@@ -644,6 +676,7 @@ function waitForSocketOpen(ws: WebSocket): Promise<WebSocket> {
             if (socket === ws) {
                 socket = null;
             }
+            setCachedToken(undefined);
             reject(new Error("WebSocket connection timed out"));
         }, SOCKET_CONNECT_TIMEOUT_MS);
 
