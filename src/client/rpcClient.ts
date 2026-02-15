@@ -28,10 +28,15 @@ export type RpcTransport = "http" | "websocket" | "auto";
 // Build-time configuration injected by Vite plugin from helium.config.js
 declare const __HELIUM_RPC_TRANSPORT__: RpcTransport;
 declare const __HELIUM_RPC_AUTO_HTTP_ON_MOBILE__: boolean;
+declare const __HELIUM_RPC_TOKEN_VALIDITY_MS__: number;
 
 // Read build-time config with fallback defaults
 const configuredTransport: RpcTransport = typeof __HELIUM_RPC_TRANSPORT__ !== "undefined" ? __HELIUM_RPC_TRANSPORT__ : "websocket";
 const configuredAutoHttpOnMobile: boolean = typeof __HELIUM_RPC_AUTO_HTTP_ON_MOBILE__ !== "undefined" ? __HELIUM_RPC_AUTO_HTTP_ON_MOBILE__ : false;
+const configuredTokenValidityMs: number =
+    typeof __HELIUM_RPC_TOKEN_VALIDITY_MS__ !== "undefined" && Number.isFinite(__HELIUM_RPC_TOKEN_VALIDITY_MS__) && __HELIUM_RPC_TOKEN_VALIDITY_MS__ > 0
+        ? __HELIUM_RPC_TOKEN_VALIDITY_MS__
+        : 30_000;
 
 /**
  * Get the configured RPC transport mode (from helium.config.js).
@@ -64,14 +69,26 @@ function isMobileDevice(): boolean {
         return false;
     }
 
+    const MOBILE_BREAKPOINT_MAX_WIDTH = 1024; // 1024px or less is a common breakpoint for mobile devices
+
     const nav = navigator as NavigatorWithConnection;
-    if (typeof nav.userAgentData?.mobile === "boolean") {
-        return nav.userAgentData.mobile;
+    if (nav.userAgentData?.mobile === true) {
+        return true;
     }
 
     const userAgent = navigator.userAgent || "";
     if (/Android|iPhone|iPad|iPod|IEMobile|Opera Mini|Mobi/i.test(userAgent)) {
         return true;
+    }
+
+    if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+        if (window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT_MAX_WIDTH}px)`).matches) {
+            return true;
+        }
+
+        if (window.matchMedia("(pointer: coarse)").matches || window.matchMedia("(any-pointer: coarse)").matches) {
+            return true;
+        }
     }
 
     return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
@@ -487,6 +504,7 @@ if (import.meta.hot) {
             socket = null;
             connectionPromise = null;
         }
+        clearTokenRefreshTimer();
         rejectAllPending(new Error("Module reloaded"));
     });
 }
@@ -497,6 +515,59 @@ function nextId() {
 }
 
 let cachedAuthToken: string | undefined;
+let tokenRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+const TOKEN_REFRESH_MIN_DELAY_MS = 5_000;
+const TOKEN_REFRESH_RETRY_DELAY_MS = 5_000;
+const TOKEN_REFRESH_SAFETY_WINDOW_MS = Math.min(5_000, Math.max(1_000, Math.floor(configuredTokenValidityMs * 0.2)));
+
+function clearTokenRefreshTimer(): void {
+    if (!tokenRefreshTimer) {
+        return;
+    }
+    clearTimeout(tokenRefreshTimer);
+    tokenRefreshTimer = null;
+}
+
+function parseTokenIssuedAt(token: string): number | null {
+    const [timestampPart] = token.split(".");
+    if (!timestampPart) {
+        return null;
+    }
+    const issuedAt = Number.parseInt(timestampPart, 10);
+    if (!Number.isFinite(issuedAt) || issuedAt <= 0) {
+        return null;
+    }
+    return issuedAt;
+}
+
+function scheduleTokenRefreshFromToken(token: string): void {
+    if (typeof window === "undefined") {
+        return;
+    }
+
+    const issuedAt = parseTokenIssuedAt(token);
+    if (!issuedAt) {
+        clearTokenRefreshTimer();
+        return;
+    }
+
+    const expiresAt = issuedAt + configuredTokenValidityMs;
+    const refreshAt = expiresAt - TOKEN_REFRESH_SAFETY_WINDOW_MS;
+    const delay = Math.max(TOKEN_REFRESH_MIN_DELAY_MS, refreshAt - Date.now());
+
+    clearTokenRefreshTimer();
+    tokenRefreshTimer = setTimeout(() => {
+        void fetchFreshToken(true).then((nextToken) => {
+            if (!nextToken) {
+                clearTokenRefreshTimer();
+                tokenRefreshTimer = setTimeout(() => {
+                    void fetchFreshToken(true);
+                }, TOKEN_REFRESH_RETRY_DELAY_MS);
+            }
+        });
+    }, delay);
+}
 
 function hasCachedToken(): boolean {
     return Boolean(cachedAuthToken);
@@ -505,10 +576,12 @@ function hasCachedToken(): boolean {
 function setCachedToken(token: string | undefined): void {
     if (!token) {
         cachedAuthToken = undefined;
+        clearTokenRefreshTimer();
         return;
     }
 
     cachedAuthToken = token;
+    scheduleTokenRefreshFromToken(token);
 }
 
 async function fetchFreshToken(forceRefresh = false): Promise<string | undefined> {

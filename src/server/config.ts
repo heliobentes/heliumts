@@ -354,6 +354,7 @@ export function getRpcConfig(config: HeliumConfig = {}) {
 export interface RpcClientTransportConfig {
     transport: "http" | "websocket" | "auto";
     autoHttpOnMobile: boolean;
+    tokenValidityMs: number;
 }
 
 /**
@@ -366,6 +367,7 @@ export function getRpcClientConfig(config: HeliumConfig = {}): RpcClientTranspor
     return {
         transport: config.rpc?.transport ?? "websocket",
         autoHttpOnMobile: config.rpc?.autoHttpOnMobile ?? false,
+        tokenValidityMs: getRpcSecurityConfig(config).tokenValidityMs,
     };
 }
 

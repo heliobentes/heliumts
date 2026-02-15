@@ -176,10 +176,12 @@ describe("heliumPlugin", () => {
             const rpcDefines = {
                 __HELIUM_RPC_TRANSPORT__: JSON.stringify("websocket"),
                 __HELIUM_RPC_AUTO_HTTP_ON_MOBILE__: JSON.stringify(false),
+                __HELIUM_RPC_TOKEN_VALIDITY_MS__: JSON.stringify(30000),
             };
 
             expect(rpcDefines.__HELIUM_RPC_TRANSPORT__).toBe('"websocket"');
             expect(rpcDefines.__HELIUM_RPC_AUTO_HTTP_ON_MOBILE__).toBe("false");
+            expect(rpcDefines.__HELIUM_RPC_TOKEN_VALIDITY_MS__).toBe("30000");
         });
     });
 

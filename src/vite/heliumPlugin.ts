@@ -124,6 +124,7 @@ export default function helium(): Plugin {
                     ...envDefines,
                     __HELIUM_RPC_TRANSPORT__: JSON.stringify(rpcClientConfig.transport),
                     __HELIUM_RPC_AUTO_HTTP_ON_MOBILE__: JSON.stringify(rpcClientConfig.autoHttpOnMobile),
+                    __HELIUM_RPC_TOKEN_VALIDITY_MS__: JSON.stringify(rpcClientConfig.tokenValidityMs),
                 },
             };
         },

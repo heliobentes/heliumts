@@ -158,6 +158,7 @@ describe("config", () => {
             expect(result).toEqual({
                 transport: "websocket",
                 autoHttpOnMobile: false,
+                tokenValidityMs: 30000,
             });
         });
 
@@ -174,6 +175,7 @@ describe("config", () => {
             expect(result).toEqual({
                 transport: "http",
                 autoHttpOnMobile: true,
+                tokenValidityMs: 30000,
             });
         });
 
@@ -187,6 +189,7 @@ describe("config", () => {
             const result = getRpcClientConfig(config);
 
             expect(result.transport).toBe("auto");
+            expect(result.tokenValidityMs).toBe(30000);
         });
     });
 
