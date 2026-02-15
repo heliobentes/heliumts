@@ -100,11 +100,11 @@ function shouldUseHttpTransport(): boolean {
         return true;
     }
 
-    if (configuredTransport === "http") {
+    if (isMobileDevice()) {
         return true;
     }
 
-    if (configuredAutoHttpOnMobile && isMobileDevice()) {
+    if (configuredTransport === "http") {
         return true;
     }
 

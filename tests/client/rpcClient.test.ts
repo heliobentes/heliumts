@@ -37,6 +37,54 @@ describe("rpcClient", () => {
             expect(() => preconnect()).not.toThrow();
         });
 
+        it("should not attempt WebSocket on mobile viewport", () => {
+            const originalMatchMedia = window.matchMedia;
+            const originalWebSocket = globalThis.WebSocket;
+
+            const webSocketSpy = vi.fn();
+
+            const mockedWebSocket = vi
+                .fn()
+                .mockImplementation(() => {
+                    webSocketSpy();
+                    throw new Error("WebSocket should not be created on mobile viewport");
+                }) as unknown as typeof WebSocket;
+
+            window.matchMedia = vi.fn().mockImplementation((query: string) => {
+                if (query.includes("max-width")) {
+                    return {
+                        matches: true,
+                        media: query,
+                        onchange: null,
+                        addListener: vi.fn(),
+                        removeListener: vi.fn(),
+                        addEventListener: vi.fn(),
+                        removeEventListener: vi.fn(),
+                        dispatchEvent: vi.fn(),
+                    };
+                }
+
+                return {
+                    matches: false,
+                    media: query,
+                    onchange: null,
+                    addListener: vi.fn(),
+                    removeListener: vi.fn(),
+                    addEventListener: vi.fn(),
+                    removeEventListener: vi.fn(),
+                    dispatchEvent: vi.fn(),
+                };
+            });
+
+            globalThis.WebSocket = mockedWebSocket;
+
+            expect(() => preconnect()).not.toThrow();
+            expect(webSocketSpy).not.toHaveBeenCalled();
+
+            window.matchMedia = originalMatchMedia;
+            globalThis.WebSocket = originalWebSocket;
+        });
+
         it("should be a no-op on server side", () => {
             const originalWindow = globalThis.window;
             // @ts-ignore - simulating server environment
