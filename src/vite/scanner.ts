@@ -24,9 +24,15 @@ export interface WorkerExport {
     filePath: string;
 }
 
+export interface SEOMetadataExport {
+    name: string;
+    filePath: string;
+}
+
 export interface ServerExports {
     methods: MethodExport[];
     httpHandlers: HTTPHandlerExport[];
+    seoMetadata: SEOMetadataExport[];
     middleware?: MiddlewareExport;
     workers: WorkerExport[];
 }
@@ -39,11 +45,12 @@ export function scanServerMethods(root: string): MethodExport[] {
 export function scanServerExports(root: string): ServerExports {
     const serverDir = path.resolve(root, SERVER_DIR);
     if (!fs.existsSync(serverDir)) {
-        return { methods: [], httpHandlers: [], workers: [] };
+        return { methods: [], httpHandlers: [], seoMetadata: [], workers: [] };
     }
 
     const methods: MethodExport[] = [];
     const httpHandlers: HTTPHandlerExport[] = [];
+    const seoMetadata: SEOMetadataExport[] = [];
     const workers: WorkerExport[] = [];
     let middleware: MiddlewareExport | undefined;
 
@@ -121,6 +128,15 @@ export function scanServerExports(root: string): ServerExports {
                     });
                 }
 
+                // Find: export const seoName = defineSEOMetadata(...)
+                const seoRegex = /export\s+const\s+(\w+)\s*=\s*defineSEOMetadata/g;
+                while ((match = seoRegex.exec(content)) !== null) {
+                    seoMetadata.push({
+                        name: match[1],
+                        filePath: fullPath,
+                    });
+                }
+
                 // Find: export const workerName = defineWorker(...)
                 const workerRegex = /export\s+const\s+(\w+)\s*=\s*defineWorker/g;
                 while ((match = workerRegex.exec(content)) !== null) {
@@ -134,7 +150,7 @@ export function scanServerExports(root: string): ServerExports {
     }
 
     walk(serverDir);
-    return { methods, httpHandlers, middleware, workers };
+    return { methods, httpHandlers, seoMetadata, middleware, workers };
 }
 
 /**
@@ -166,6 +182,48 @@ function pathFromFile(file: string, root: string): string {
 export interface RouteCollision {
     pattern: string;
     files: string[];
+}
+
+export function scanPageRoutePatterns(root: string): string[] {
+    const pagesDir = path.join(root, "src", "pages");
+    if (!fs.existsSync(pagesDir)) {
+        return [];
+    }
+
+    const patterns = new Set<string>();
+
+    function walkPages(dir: string) {
+        const items = fs.readdirSync(dir);
+
+        for (const item of items) {
+            const fullPath = path.join(dir, item);
+            const stat = fs.statSync(fullPath);
+
+            if (stat.isDirectory()) {
+                walkPages(fullPath);
+                continue;
+            }
+
+            if (!/\.(tsx|jsx|ts|js)$/.test(item)) {
+                continue;
+            }
+
+            if (item.includes("_layout.")) {
+                continue;
+            }
+
+            const pattern = pathFromFile(fullPath, root);
+            if (pattern === "__404__") {
+                continue;
+            }
+
+            patterns.add(pattern);
+        }
+    }
+
+    walkPages(pagesDir);
+
+    return [...patterns];
 }
 
 /**

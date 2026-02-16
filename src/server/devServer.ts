@@ -16,8 +16,10 @@ import type { HeliumContext } from "./context.js";
 import type { HeliumWorkerDef } from "./defineWorker.js";
 import { startWorker, stopAllWorkers } from "./defineWorker.js";
 import { HTTPRouter } from "./httpRouter.js";
+import { injectSocialMetaIntoHtml } from "./meta.js";
 import { RateLimiter } from "./rateLimiter.js";
 import { RpcRegistry } from "./rpcRegistry.js";
+import { SEOMetadataRouter } from "./seoMetadataRouter.js";
 import { initializeSecurity, verifyConnectionToken } from "./security.js";
 import { prepareForMsgpack } from "./serializer.js";
 
@@ -25,7 +27,7 @@ const gzipAsync = promisify(gzip);
 const deflateAsync = promisify(deflate);
 const brotliCompressAsync = promisify(brotliCompress);
 
-type LoadHandlersFn = (registry: RpcRegistry, httpRouter: HTTPRouter) => void;
+type LoadHandlersFn = (registry: RpcRegistry, httpRouter: HTTPRouter, seoRouter: SEOMetadataRouter) => void;
 type HttpServer = http.Server | https.Server | http2.Http2Server | http2.Http2SecureServer;
 
 interface WorkerEntry {
@@ -35,6 +37,7 @@ interface WorkerEntry {
 
 let currentRegistry: RpcRegistry | null = null;
 let currentHttpRouter: HTTPRouter | null = null;
+let currentSEORouter: SEOMetadataRouter | null = null;
 let wss: WebSocketServer | null = null;
 let rateLimiter: RateLimiter | null = null;
 let currentWorkers: WorkerEntry[] = [];
@@ -60,12 +63,14 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
 
     const registry = new RpcRegistry();
     const httpRouter = new HTTPRouter();
+    const seoRouter = new SEOMetadataRouter();
     httpRouter.setTrustProxyDepth(trustProxyDepth);
-    loadHandlers(registry, httpRouter);
+    loadHandlers(registry, httpRouter, seoRouter);
     registry.setRateLimiter(rateLimiter);
     registry.setMaxBatchSize(rpcConfig.maxBatchSize);
     currentRegistry = registry;
     currentHttpRouter = httpRouter;
+    currentSEORouter = seoRouter;
 
     // Start workers if they changed
     const workersChanged = workers.length !== currentWorkers.length || workers.some((w, i) => w.name !== currentWorkers[i]?.name || w.worker !== currentWorkers[i]?.worker);
@@ -374,9 +379,116 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
             }
         }
 
+        let devResolvedMetadata: Awaited<ReturnType<SEOMetadataRouter["resolve"]>> = null;
+        if (currentSEORouter) {
+            const ip = extractClientIP(req, trustProxyDepth);
+            const httpCtx: HeliumContext = {
+                req: {
+                    ip,
+                    headers: req.headers,
+                    url: req.url,
+                    method: req.method,
+                    raw: req,
+                },
+            };
+
+            devResolvedMetadata = await currentSEORouter.resolve(req, httpCtx);
+        }
+
+        if (devResolvedMetadata) {
+            const originalWriteHead = res.writeHead.bind(res);
+            const originalWrite = res.write.bind(res);
+            const originalEnd = res.end.bind(res);
+            const bufferedChunks: Buffer[] = [];
+            let capturedContentType = "";
+
+            res.writeHead = (statusCode: number, statusMessageOrHeaders?: any, headers?: any) => {
+                const providedHeaders =
+                    typeof statusMessageOrHeaders === "string"
+                        ? headers
+                        : statusMessageOrHeaders;
+
+                if (providedHeaders) {
+                    if (Array.isArray(providedHeaders)) {
+                        for (let i = 0; i < providedHeaders.length; i += 2) {
+                            if (String(providedHeaders[i]).toLowerCase() === "content-type") {
+                                capturedContentType = String(providedHeaders[i + 1] || "").toLowerCase();
+                                break;
+                            }
+                        }
+                    } else if (typeof providedHeaders === "object") {
+                        const maybeContentType = providedHeaders["Content-Type"] ?? providedHeaders["content-type"];
+                        if (maybeContentType) {
+                            capturedContentType = String(maybeContentType).toLowerCase();
+                        }
+                    }
+                }
+
+                return originalWriteHead(statusCode, statusMessageOrHeaders, headers);
+            };
+
+            res.write = (chunk: any, encoding?: BufferEncoding | (() => void), callback?: () => void) => {
+                if (chunk !== undefined && chunk !== null) {
+                    bufferedChunks.push(toBuffer(chunk, typeof encoding === "string" ? encoding : undefined));
+                }
+
+                if (typeof encoding === "function") {
+                    encoding();
+                } else if (typeof callback === "function") {
+                    callback();
+                }
+
+                return true;
+            };
+
+            res.end = (chunk?: any, encoding?: BufferEncoding | (() => void), callback?: () => void) => {
+                if (chunk !== undefined && chunk !== null) {
+                    bufferedChunks.push(toBuffer(chunk, typeof encoding === "string" ? encoding : undefined));
+                }
+
+                if (typeof encoding === "function") {
+                    encoding();
+                } else if (typeof callback === "function") {
+                    callback();
+                }
+
+                const bodyBuffer = Buffer.concat(bufferedChunks);
+                const bodyText = bodyBuffer.toString("utf-8");
+                const contentType = capturedContentType || String(res.getHeader("content-type") || "").toLowerCase();
+                const looksLikeHtml = /^\s*<!doctype\s+html|^\s*<html[\s>]/i.test(bodyText);
+
+                res.writeHead = originalWriteHead;
+                res.write = originalWrite;
+                res.end = originalEnd;
+
+                if (contentType.includes("text/html") || looksLikeHtml) {
+                    const injectedHtml = injectSocialMetaIntoHtml(bodyText, devResolvedMetadata);
+                    return originalEnd(Buffer.from(injectedHtml, "utf-8"));
+                }
+
+                return originalEnd(bodyBuffer);
+            };
+        }
+
         // If no handler matched, pass to original Vite handlers
         for (const listener of originalListeners) {
             (listener as any)(req, res);
         }
     });
+}
+
+function toBuffer(chunk: unknown, encoding?: BufferEncoding): Buffer {
+    if (Buffer.isBuffer(chunk)) {
+        return chunk;
+    }
+
+    if (chunk instanceof Uint8Array) {
+        return Buffer.from(chunk);
+    }
+
+    if (typeof chunk === "string") {
+        return Buffer.from(chunk, encoding);
+    }
+
+    return Buffer.from(String(chunk), encoding);
 }

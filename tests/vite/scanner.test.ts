@@ -1,7 +1,7 @@
 import fs from "fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { checkRouteCollisions, scanPageRoutes, scanServerExports, scanServerMethods } from "../../src/vite/scanner";
+import { checkRouteCollisions, scanPageRoutePatterns, scanPageRoutes, scanServerExports, scanServerMethods } from "../../src/vite/scanner";
 
 describe("scanner", () => {
     let existsSyncSpy: ReturnType<typeof vi.spyOn>;
@@ -30,7 +30,7 @@ describe("scanner", () => {
 
             const result = scanServerExports("/test/project");
 
-            expect(result).toEqual({ methods: [], httpHandlers: [], workers: [] });
+            expect(result).toEqual({ methods: [], httpHandlers: [], seoMetadata: [], workers: [] });
         });
 
         it("should find methods defined with defineMethod", () => {
@@ -90,6 +90,24 @@ describe("scanner", () => {
 
             expect(result.workers).toHaveLength(1);
             expect(result.workers[0].name).toBe("queueProcessor");
+        });
+
+        it("should find SEO metadata handlers defined with defineSEOMetadata", () => {
+            existsSyncSpy.mockReturnValue(true);
+            readdirSyncSpy.mockReturnValue(["seo.ts"] as unknown as fs.Dirent[]);
+            statSyncSpy.mockReturnValue({ isDirectory: () => false } as fs.Stats);
+            readFileSyncSpy.mockReturnValue(`
+                import { defineSEOMetadata } from 'heliumts/server';
+
+                export const albumMetadata = defineSEOMetadata('/:username/:albumId', async (req) => {
+                    return { title: 'album' };
+                });
+            `);
+
+            const result = scanServerExports("/test/project");
+
+            expect(result.seoMetadata).toHaveLength(1);
+            expect(result.seoMetadata[0].name).toBe("albumMetadata");
         });
 
         it("should find middleware in _middleware.ts", () => {
@@ -311,6 +329,41 @@ describe("scanner", () => {
 
             // Only .tsx files should be counted, .css should be skipped
             expect(result.totalRoutes).toBe(2);
+        });
+    });
+
+    describe("scanPageRoutePatterns", () => {
+        it("should return empty array when pages directory does not exist", () => {
+            existsSyncSpy.mockReturnValue(false);
+            expect(scanPageRoutePatterns("/test/project")).toEqual([]);
+        });
+
+        it("should collect and dedupe page route patterns", () => {
+            existsSyncSpy.mockReturnValue(true);
+
+            readdirSyncSpy.mockImplementation((dir: fs.PathLike) => {
+                const dirStr = dir.toString();
+                if (dirStr.endsWith("/pages")) {
+                    return ["index.tsx", "[username]", "404.tsx", "_layout.tsx"] as unknown as fs.Dirent[];
+                }
+                if (dirStr.endsWith("/[username]")) {
+                    return ["[albumId].tsx"] as unknown as fs.Dirent[];
+                }
+                return [] as unknown as fs.Dirent[];
+            });
+
+            statSyncSpy.mockImplementation((p: fs.PathLike) => {
+                const pStr = p.toString();
+                return {
+                    isDirectory: () => pStr.endsWith("/[username]"),
+                } as fs.Stats;
+            });
+
+            const patterns = scanPageRoutePatterns("/test/project");
+
+            expect(patterns).toContain("/");
+            expect(patterns).toContain("/:username/:albumId");
+            expect(patterns).not.toContain("__404__");
         });
     });
 

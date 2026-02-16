@@ -1,22 +1,32 @@
 import path from "path";
 
-import { HTTPHandlerExport, MethodExport, MiddlewareExport, WorkerExport } from "./scanner.js";
+import { HTTPHandlerExport, MethodExport, MiddlewareExport, SEOMetadataExport, WorkerExport } from "./scanner.js";
 
-export function generateServerManifest(methods: MethodExport[], httpHandlers: HTTPHandlerExport[], middleware?: MiddlewareExport, workers: WorkerExport[] = []): string {
+export function generateServerManifest(
+    methods: MethodExport[],
+    httpHandlers: HTTPHandlerExport[],
+    seoMetadata: SEOMetadataExport[] = [],
+    pageRoutePatterns: string[] = [],
+    middleware?: MiddlewareExport,
+    workers: WorkerExport[] = []
+): string {
     const methodImports = methods.map((m, i) => `import { ${m.name} as method_${i} } from '${m.filePath}';`).join("\n");
     const httpImports = httpHandlers.map((h, i) => `import { ${h.name} as http_${i} } from '${h.filePath}';`).join("\n");
+    const seoImports = seoMetadata.map((s, i) => `import { ${s.name} as seo_${i} } from '${s.filePath}';`).join("\n");
     const workerImports = workers.map((w, i) => `import { ${w.name} as worker_${i} } from '${w.filePath}';`).join("\n");
     const middlewareImport = middleware ? `import ${middleware.name === "default" ? "middleware" : `{ ${middleware.name} as middleware }`} from '${middleware.filePath}';` : "";
 
     const methodRegistrations = methods.map((m, i) => `  registry.register('${m.name}', method_${i});`).join("\n");
 
     const httpExports = httpHandlers.map((h, i) => `  { name: '${h.name}', handler: http_${i} },`).join("\n");
+    const seoExports = seoMetadata.map((s, i) => `  { name: '${s.name}', handler: seo_${i} },`).join("\n");
 
     const workerExports = workers.map((w, i) => `  { name: '${w.name}', worker: worker_${i} },`).join("\n");
 
     return `
 ${methodImports}
 ${httpImports}
+${seoImports}
 ${workerImports}
 ${middlewareImport}
 
@@ -27,6 +37,12 @@ ${methodRegistrations}
 export const httpHandlers = [
 ${httpExports}
 ];
+
+export const seoMetadataHandlers = [
+${seoExports}
+];
+
+export const pageRoutePatterns = ${JSON.stringify(pageRoutePatterns)};
 
 export const workers = [
 ${workerExports}

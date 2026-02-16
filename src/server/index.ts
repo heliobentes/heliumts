@@ -3,7 +3,9 @@ export * from "./config.js";
 export * from "./context.js";
 export * from "./defineHTTPRequest.js";
 export * from "./defineMethod.js";
+export * from "./defineSEOMetadata.js";
 export * from "./defineWorker.js";
+export * from "./meta.js";
 export * from "./middleware.js";
 
 // Production server API

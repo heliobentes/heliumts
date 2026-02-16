@@ -7,7 +7,7 @@ import path from "path";
 import { build as viteBuild } from "vite";
 
 import { log } from "../utils/logger.js";
-import { scanServerExports } from "../vite/scanner.js";
+import { scanPageRoutePatterns, scanServerExports } from "../vite/scanner.js";
 import { generateStaticPages } from "../vite/ssg.js";
 import { generateServerManifest } from "../vite/virtualServerModule.js";
 
@@ -91,7 +91,15 @@ cli.command("build", "Build for production").action(async () => {
     log("info", "Building server...");
     // Generate server entry
     const serverExports = scanServerExports(root);
-    const manifestCode = generateServerManifest(serverExports.methods, serverExports.httpHandlers, serverExports.middleware, serverExports.workers);
+    const pageRoutePatterns = scanPageRoutePatterns(root);
+    const manifestCode = generateServerManifest(
+        serverExports.methods,
+        serverExports.httpHandlers,
+        serverExports.seoMetadata,
+        pageRoutePatterns,
+        serverExports.middleware,
+        serverExports.workers
+    );
 
     // Create the main server module that will be imported after env is loaded
     const serverModuleCode = `
@@ -103,9 +111,11 @@ export async function start() {
 
     startProdServer({
         config,
-        registerHandlers: (registry, httpRouter) => {
+        registerHandlers: (registry, httpRouter, seoRouter) => {
             registerAll(registry);
             httpRouter.registerRoutes(httpHandlers);
+            seoRouter.registerRoutes(seoMetadataHandlers);
+            seoRouter.setPageRoutePatterns(pageRoutePatterns);
             if (middlewareHandler) {
                 registry.setMiddleware(middlewareHandler);
                 httpRouter.setMiddleware(middlewareHandler);

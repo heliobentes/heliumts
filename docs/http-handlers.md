@@ -76,6 +76,51 @@ export const authHandler = defineHTTPRequest("ALL", "/api/auth/**", async (req, 
 });
 ```
 
+## Dynamic Social Meta Tags (No SSR)
+
+If your app is frontend-only and you still need per-slug social previews (`og:*`, `twitter:*`),
+use `defineSEOMetadata` instead of creating a broad HTTP endpoint.
+
+`defineSEOMetadata` only runs for requests that already match a **normal page route**,
+so it won't capture asset/module URLs.
+
+```typescript
+import { defineSEOMetadata } from "heliumts/server";
+
+async function getPostMeta(slug: string) {
+    // Replace with CMS/DB lookup
+    if (slug === "hello-world") {
+        return {
+            title: "Hello World",
+            description: "First post description",
+            image: "https://example.com/images/hello-world.jpg",
+            canonicalUrl: "https://example.com/posts/hello-world",
+            type: "article" as const,
+        };
+    }
+
+    return null;
+}
+
+// Runs only after a page route matches (for example /src/pages/posts/[slug].tsx)
+export const postSEO = defineSEOMetadata("/posts/:slug", async (req) => {
+    const slug = String(req.params.slug);
+    const meta = await getPostMeta(slug);
+
+    if (!meta) {
+        return {
+            title: "Post not found",
+            description: "This post does not exist",
+            robots: "noindex, nofollow",
+        };
+    }
+
+    return meta;
+});
+```
+
+This keeps your app as SPA (no full SSR), while link crawlers receive page-specific metadata.
+
 ## Request Object
 
 The `HTTPRequest` object provides access to request data:

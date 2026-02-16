@@ -15,7 +15,7 @@ import {
     VIRTUAL_ENTRY_MODULE_ID,
     VIRTUAL_SERVER_MANIFEST_ID,
 } from "./paths.js";
-import { checkRouteCollisions, scanServerExports } from "./scanner.js";
+import { checkRouteCollisions, scanPageRoutePatterns, scanServerExports } from "./scanner.js";
 import { generateClientModule, generateEntryModule, generateServerManifest, generateTypeDefinitions } from "./virtualServerModule.js";
 
 export default function helium(): Plugin {
@@ -160,8 +160,9 @@ export default function helium(): Plugin {
                 return generateClientModule(methods);
             }
             if (id === RESOLVED_VIRTUAL_SERVER_MANIFEST_ID) {
-                const { methods, httpHandlers, middleware, workers } = scanServerExports(root);
-                return generateServerManifest(methods, httpHandlers, middleware, workers);
+                const { methods, httpHandlers, seoMetadata, middleware, workers } = scanServerExports(root);
+                const pageRoutePatterns = scanPageRoutePatterns(root);
+                return generateServerManifest(methods, httpHandlers, seoMetadata, pageRoutePatterns, middleware, workers);
             }
             if (id === RESOLVED_VIRTUAL_ENTRY_MODULE_ID + ".tsx") {
                 return generateEntryModule();
@@ -303,6 +304,8 @@ export default function helium(): Plugin {
                     const mod = await server.ssrLoadModule(VIRTUAL_SERVER_MANIFEST_ID);
                     const registerAll = mod.registerAll;
                     const httpHandlers = mod.httpHandlers || [];
+                    const seoMetadataHandlers = mod.seoMetadataHandlers || [];
+                    const pageRoutePatterns = mod.pageRoutePatterns || [];
                     const middlewareHandler = mod.middlewareHandler || null;
                     const workers = mod.workers || [];
 
@@ -310,9 +313,11 @@ export default function helium(): Plugin {
                     if (server.httpServer) {
                         attachToDevServer(
                             server.httpServer,
-                            (registry, httpRouter) => {
+                            (registry, httpRouter, seoRouter) => {
                                 registerAll(registry);
                                 httpRouter.registerRoutes(httpHandlers);
+                                seoRouter.registerRoutes(seoMetadataHandlers);
+                                seoRouter.setPageRoutePatterns(pageRoutePatterns);
                                 if (middlewareHandler) {
                                     registry.setMiddleware(middlewareHandler);
                                     httpRouter.setMiddleware(middlewareHandler);
@@ -416,15 +421,19 @@ export default function helium(): Plugin {
                     const mod = await server.ssrLoadModule(VIRTUAL_SERVER_MANIFEST_ID);
                     const registerAll = mod.registerAll;
                     const httpHandlers = mod.httpHandlers || [];
+                    const seoMetadataHandlers = mod.seoMetadataHandlers || [];
+                    const pageRoutePatterns = mod.pageRoutePatterns || [];
                     const middlewareHandler = mod.middlewareHandler || null;
                     const workers = mod.workers || [];
 
                     if (server.httpServer) {
                         attachToDevServer(
                             server.httpServer,
-                            (registry, httpRouter) => {
+                            (registry, httpRouter, seoRouter) => {
                                 registerAll(registry);
                                 httpRouter.registerRoutes(httpHandlers);
+                                seoRouter.registerRoutes(seoMetadataHandlers);
+                                seoRouter.setPageRoutePatterns(pageRoutePatterns);
                                 if (middlewareHandler) {
                                     registry.setMiddleware(middlewareHandler);
                                     httpRouter.setMiddleware(middlewareHandler);

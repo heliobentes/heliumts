@@ -23,9 +23,20 @@ describe("server index exports", () => {
         expect(serverModule.defineMethod).toBeDefined();
     });
 
+    it("should export defineSEOMetadata", async () => {
+        const serverModule = await import("../../src/server/index");
+        expect(serverModule.defineSEOMetadata).toBeDefined();
+    });
+
     it("should export defineWorker", async () => {
         const serverModule = await import("../../src/server/index");
         expect(serverModule.defineWorker).toBeDefined();
+    });
+
+    it("should export social meta helpers", async () => {
+        const serverModule = await import("../../src/server/index");
+        expect(serverModule.injectSocialMetaIntoHtml).toBeDefined();
+        expect(serverModule.buildSocialMetaTags).toBeDefined();
     });
 
     it("should export middleware", async () => {

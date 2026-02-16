@@ -15,9 +15,11 @@ import type { HeliumContext } from "./context.js";
 import type { HeliumWorkerDef } from "./defineWorker.js";
 import { startWorker, stopAllWorkers } from "./defineWorker.js";
 import { HTTPRouter } from "./httpRouter.js";
+import { injectSocialMetaIntoHtml } from "./meta.js";
 import { RateLimiter } from "./rateLimiter.js";
 import { RpcRegistry } from "./rpcRegistry.js";
 import { generateConnectionToken, initializeSecurity, verifyConnectionToken } from "./security.js";
+import { SEOMetadataRouter } from "./seoMetadataRouter.js";
 import { prepareForMsgpack } from "./serializer.js";
 
 const gzipAsync = promisify(gzip);
@@ -33,7 +35,7 @@ interface ProdServerOptions {
     port?: number;
     distDir?: string;
     staticDir?: string;
-    registerHandlers: (registry: RpcRegistry, httpRouter: HTTPRouter) => void;
+    registerHandlers: (registry: RpcRegistry, httpRouter: HTTPRouter, seoRouter: SEOMetadataRouter) => void;
     config?: HeliumConfig;
     workers?: WorkerEntry[];
 }
@@ -67,8 +69,9 @@ export function startProdServer(options: ProdServerOptions) {
 
     const registry = new RpcRegistry();
     const httpRouter = new HTTPRouter();
+    const seoRouter = new SEOMetadataRouter();
     httpRouter.setTrustProxyDepth(trustProxyDepth);
-    registerHandlers(registry, httpRouter);
+    registerHandlers(registry, httpRouter, seoRouter);
     registry.setRateLimiter(rateLimiter);
     registry.setMaxBatchSize(rpcConfig.maxBatchSize);
 
@@ -283,11 +286,31 @@ export function startProdServer(options: ProdServerOptions) {
 
         try {
             const content = fs.readFileSync(filePath);
+            let responseBody = content;
+
+            if (!is404 && contentType === "text/html") {
+                const ip = extractClientIP(req, trustProxyDepth);
+                const httpCtx: HeliumContext = {
+                    req: {
+                        ip,
+                        headers: req.headers,
+                        url: req.url,
+                        method: req.method,
+                        raw: req,
+                    },
+                };
+
+                const metadata = await seoRouter.resolve(req, httpCtx);
+                if (metadata) {
+                    const html = content.toString("utf-8");
+                    responseBody = Buffer.from(injectSocialMetaIntoHtml(html, metadata), "utf-8");
+                }
+            }
 
             // Set status code to 404 if serving the 404 page
             const statusCode = is404 ? 404 : 200;
             res.writeHead(statusCode, { "Content-Type": contentType });
-            res.end(content);
+            res.end(responseBody);
         } catch (error) {
             log("error", "Error serving file:", error);
             res.writeHead(500, { "Content-Type": "text/plain" });
