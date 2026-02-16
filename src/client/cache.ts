@@ -1,3 +1,5 @@
+import { isDevEnvironment } from "./env.js";
+
 interface CacheEntry {
     value: unknown;
     timestamp: number;
@@ -9,7 +11,7 @@ let store: Map<string, CacheEntry>;
 let listeners: Set<(methodId: string) => void>;
 let pendingFetches: Map<string, Promise<unknown>>;
 
-if (typeof window !== "undefined" && import.meta.env?.DEV) {
+if (typeof window !== "undefined" && isDevEnvironment()) {
     const globalWindow = window as typeof window & {
         __heliumCacheStore?: Map<string, CacheEntry>;
         __heliumCacheListeners?: Set<(methodId: string) => void>;

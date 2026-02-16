@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import React, { useMemo, useSyncExternalStore, useTransition } from "react";
 
+import { isDevEnvironment } from "./env.js";
 import type { RouteEntry } from "./routerManifest.js";
 import { buildRoutes } from "./routerManifest.js";
 
@@ -52,7 +53,7 @@ class RouterEventEmitter {
 // Use a singleton that survives HMR by attaching to window in dev mode
 let routerEventEmitter: RouterEventEmitter;
 
-if (typeof window !== "undefined" && import.meta.env?.DEV) {
+if (typeof window !== "undefined" && isDevEnvironment()) {
     // In dev mode, reuse the same emitter instance across HMR
     const globalWindow = window as typeof window & { __heliumRouterEmitter?: RouterEventEmitter };
     if (!globalWindow.__heliumRouterEmitter) {
@@ -93,7 +94,7 @@ function matchRoute(path: string, routes: RouteEntry[]) {
 let currentLocation: RouterState;
 let locationListeners: Set<() => void>;
 
-if (typeof window !== "undefined" && import.meta.env?.DEV) {
+if (typeof window !== "undefined" && isDevEnvironment()) {
     const globalWindow = window as typeof window & {
         __heliumCurrentLocation?: RouterState;
         __heliumLocationListeners?: Set<() => void>;
@@ -116,7 +117,7 @@ if (typeof window !== "undefined" && import.meta.env?.DEV) {
 
 // Helper to re-extract params from path using stored routes during HMR
 function extractParamsFromPath(path: string): Record<string, string | string[]> {
-    if (typeof window !== "undefined" && import.meta.env?.DEV) {
+    if (typeof window !== "undefined" && isDevEnvironment()) {
         const globalWindow = window as typeof window & { __heliumGlobalRoutes?: RouteEntry[] };
         const routes = globalWindow.__heliumGlobalRoutes;
         if (routes && routes.length > 0) {
@@ -146,7 +147,7 @@ function updateLocation(isNavigating = false) {
     const newLocation = { ...getLocation(), isNavigating };
     currentLocation = newLocation;
     // Update the global reference in dev mode
-    if (typeof window !== "undefined" && import.meta.env?.DEV) {
+    if (typeof window !== "undefined" && isDevEnvironment()) {
         (window as typeof window & { __heliumCurrentLocation?: RouterState }).__heliumCurrentLocation = newLocation;
     }
     locationListeners.forEach((listener) => listener());
@@ -203,7 +204,7 @@ export function useRouter() {
         // During HMR in development, context might be temporarily unavailable
         // Provide a temporary fallback to prevent white screen of death
         // Re-extract params from current path using stored routes
-        if (typeof window !== "undefined" && import.meta.env?.DEV) {
+        if (typeof window !== "undefined" && isDevEnvironment()) {
             const currentPath = window.location.pathname;
             return {
                 path: currentPath,
@@ -345,7 +346,7 @@ function isExternalUrl(href: string): boolean {
 // Preserve across HMR in dev mode
 let globalRoutes: RouteEntry[];
 
-if (typeof window !== "undefined" && import.meta.env?.DEV) {
+if (typeof window !== "undefined" && isDevEnvironment()) {
     const globalWindow = window as typeof window & { __heliumGlobalRoutes?: RouteEntry[] };
     if (!globalWindow.__heliumGlobalRoutes) {
         globalWindow.__heliumGlobalRoutes = [];
@@ -451,7 +452,7 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
         const result = buildRoutes();
         // Store routes globally for Link prefetching
         // In dev mode, also update the global reference to survive HMR
-        if (import.meta.env?.DEV) {
+        if (isDevEnvironment()) {
             const globalWindow = window as typeof window & { __heliumGlobalRoutes?: RouteEntry[] };
             globalWindow.__heliumGlobalRoutes = result.routes;
             // Update the module-level reference as well
@@ -470,10 +471,10 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
     const match = useMemo(() => matchRoute(state.path, routes), [state.path, routes]);
 
     // Use matched params, or fall back to re-extracting from path using global routes during HMR
-    const currentParams = match?.params ?? (import.meta.env?.DEV ? extractParamsFromPath(state.path) : {});
+    const currentParams = match?.params ?? (isDevEnvironment() ? extractParamsFromPath(state.path) : {});
 
     // In dev mode, always read fresh searchParams from URL to handle HMR edge cases
-    const currentSearchParams = import.meta.env?.DEV ? new URLSearchParams(window.location.search) : state.searchParams;
+    const currentSearchParams = isDevEnvironment() ? new URLSearchParams(window.location.search) : state.searchParams;
 
     const routerValue: RouterContext = {
         path: state.path,
