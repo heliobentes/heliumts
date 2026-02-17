@@ -2,12 +2,12 @@ import { encode as msgpackEncode } from "@msgpack/msgpack";
 import fs from "fs";
 import http from "http";
 import path from "path";
-import { parse as parseUrl } from "url";
 import { promisify } from "util";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
 import { brotliCompress, deflate, gzip } from "zlib";
 
+import { SEO_METADATA_RPC_METHOD } from "../runtime/internalMethods.js";
 import { extractClientIP } from "../utils/ipExtractor.js";
 import { log } from "../utils/logger.js";
 import type { HeliumConfig } from "./config.js";
@@ -16,7 +16,7 @@ import type { HeliumContext } from "./context.js";
 import type { HeliumWorkerDef } from "./defineWorker.js";
 import { startWorker, stopAllWorkers } from "./defineWorker.js";
 import { HTTPRouter } from "./httpRouter.js";
-import { injectSocialMetaIntoHtml } from "./meta.js";
+import { injectSocialMetaIntoHtml, loadDefaultSocialMetaFromHtmlFile } from "./meta.js";
 import { RateLimiter } from "./rateLimiter.js";
 import { RpcRegistry } from "./rpcRegistry.js";
 import { generateConnectionToken, initializeSecurity, verifyConnectionToken } from "./security.js";
@@ -78,8 +78,27 @@ export function startProdServer(options: ProdServerOptions) {
 
     // Security: max body size for HTTP requests (1 MB default)
     const maxBodySize = rpcConfig.maxBodySize ?? 1_048_576;
-    // Security: max batch size for RPC requests
-    const maxBatchSize = rpcConfig.maxBatchSize ?? 20;
+    let cachedDefaultMeta: Awaited<ReturnType<typeof loadDefaultSocialMetaFromHtmlFile>> | undefined;
+
+    const getDefaultMeta = async () => {
+        if (cachedDefaultMeta !== undefined) {
+            return cachedDefaultMeta;
+        }
+
+        cachedDefaultMeta = await loadDefaultSocialMetaFromHtmlFile(path.join(staticDir, "index.html"));
+        return cachedDefaultMeta;
+    };
+
+    registry.register(SEO_METADATA_RPC_METHOD, {
+        __kind: "method",
+        __id: SEO_METADATA_RPC_METHOD,
+        handler: async (args: { path?: string } | undefined, ctx: HeliumContext) => {
+            const requestedPath = typeof args?.path === "string" ? args.path : "/";
+            const targetPath = requestedPath.startsWith("/") ? requestedPath : `/${requestedPath}`;
+            const metadata = await seoRouter.resolve(ctx.req.raw, ctx, targetPath);
+            return metadata ?? (await getDefaultMeta());
+        },
+    });
 
     // Create HTTP server
     const server = http.createServer(async (req, res) => {
@@ -186,40 +205,6 @@ export function startProdServer(options: ProdServerOptions) {
                     res.end(JSON.stringify({ ok: false, error: "Internal server error" }));
                 }
             });
-            return;
-        }
-
-        if (req.method === "GET" && req.url?.startsWith("/__helium__/seo-metadata")) {
-            const parsed = parseUrl(req.url, true);
-            const requestedPath = typeof parsed.query.path === "string" ? parsed.query.path : "/";
-            const targetPath = requestedPath.startsWith("/") ? requestedPath : `/${requestedPath}`;
-
-            const ip = extractClientIP(req, trustProxyDepth);
-            const httpCtx: HeliumContext = {
-                req: {
-                    ip,
-                    headers: req.headers,
-                    url: req.url,
-                    method: req.method,
-                    raw: req,
-                },
-            };
-
-            try {
-                const metadata = await seoRouter.resolve(req, httpCtx, targetPath);
-                res.writeHead(200, {
-                    "Content-Type": "application/json",
-                    "Cache-Control": "no-store",
-                });
-                res.end(JSON.stringify({ meta: metadata }));
-            } catch (error) {
-                log("error", "SEO metadata endpoint error:", error);
-                res.writeHead(500, {
-                    "Content-Type": "application/json",
-                    "Cache-Control": "no-store",
-                });
-                res.end(JSON.stringify({ meta: null }));
-            }
             return;
         }
 

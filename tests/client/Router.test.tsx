@@ -46,6 +46,16 @@ vi.mock("../../src/client/prefetch", () => ({
     prefetchRoute: vi.fn(),
 }));
 
+vi.mock("../../src/client/rpcClient", () => ({
+    rpcCall: vi.fn(async () => ({
+        data: null,
+        stats: {
+            remainingRequests: Infinity,
+            resetInSeconds: 0,
+        },
+    })),
+}));
+
 describe("Router", () => {
     beforeEach(() => {
         // Reset window.location

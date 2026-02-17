@@ -1,7 +1,9 @@
 import type { ComponentType } from "react";
 import React, { useMemo, useSyncExternalStore, useTransition } from "react";
 
+import { SEO_METADATA_RPC_METHOD } from "../runtime/internalMethods.js";
 import { isDevEnvironment } from "./env.js";
+import { rpcCall } from "./rpcClient.js";
 import type { RouteEntry } from "./routerManifest.js";
 import { buildRoutes } from "./routerManifest.js";
 
@@ -503,19 +505,17 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
 
         const syncMetadata = async () => {
             try {
-                const response = await fetch(`/__helium__/seo-metadata?path=${encodeURIComponent(targetPath)}`, {
-                    method: "GET",
-                    credentials: "same-origin",
-                    cache: "no-store",
-                    signal: controller.signal,
-                });
-
-                if (!response.ok) {
+                if (controller.signal.aborted) {
                     return;
                 }
 
-                const payload = (await response.json()) as { meta?: ClientSocialMeta | null };
-                applyRouteMetadata(payload.meta ?? null);
+                const result = await rpcCall<ClientSocialMeta | null, { path: string }>(SEO_METADATA_RPC_METHOD, { path: targetPath });
+
+                if (controller.signal.aborted) {
+                    return;
+                }
+
+                applyRouteMetadata(result.data ?? null);
             } catch (error) {
                 if ((error as { name?: string })?.name === "AbortError") {
                     return;
@@ -575,8 +575,7 @@ function applyRouteMetadata(meta: ClientSocialMeta | null) {
         return;
     }
 
-    const managedNodes = document.head.querySelectorAll('[data-helium-seo="true"]');
-    managedNodes.forEach((node) => node.remove());
+    removeExistingSeoTags();
 
     if (!meta) {
         return;
@@ -630,5 +629,36 @@ function applyRouteMetadata(meta: ClientSocialMeta | null) {
         }
         node.setAttribute("data-helium-seo", "true");
         document.head.appendChild(node);
+    }
+}
+
+function removeExistingSeoTags() {
+    const headNodes = Array.from(document.head.querySelectorAll("meta, link"));
+
+    for (const node of headNodes) {
+        if (node.getAttribute("data-helium-seo") === "true") {
+            node.remove();
+            continue;
+        }
+
+        if (node.tagName.toLowerCase() === "link") {
+            const rel = (node.getAttribute("rel") || "").toLowerCase();
+            if (rel === "canonical") {
+                node.remove();
+            }
+            continue;
+        }
+
+        const name = (node.getAttribute("name") || "").toLowerCase();
+        const property = (node.getAttribute("property") || "").toLowerCase();
+
+        if (name === "description" || name === "robots" || name.startsWith("twitter:")) {
+            node.remove();
+            continue;
+        }
+
+        if (property.startsWith("og:")) {
+            node.remove();
+        }
     }
 }

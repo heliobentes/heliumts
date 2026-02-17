@@ -2,12 +2,12 @@ import { encode as msgpackEncode } from "@msgpack/msgpack";
 import type http from "http";
 import type http2 from "http2";
 import type https from "https";
-import { parse as parseUrl } from "url";
 import { promisify } from "util";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
 import { brotliCompress, deflate, gzip } from "zlib";
 
+import { SEO_METADATA_RPC_METHOD } from "../runtime/internalMethods.js";
 import { injectEnvToProcess, loadEnvFiles } from "../utils/envLoader.js";
 import { extractClientIP } from "../utils/ipExtractor.js";
 import { log } from "../utils/logger.js";
@@ -17,11 +17,11 @@ import type { HeliumContext } from "./context.js";
 import type { HeliumWorkerDef } from "./defineWorker.js";
 import { startWorker, stopAllWorkers } from "./defineWorker.js";
 import { HTTPRouter } from "./httpRouter.js";
-import { injectSocialMetaIntoHtml } from "./meta.js";
+import { injectSocialMetaIntoHtml, loadDefaultSocialMetaFromHtmlFile } from "./meta.js";
 import { RateLimiter } from "./rateLimiter.js";
 import { RpcRegistry } from "./rpcRegistry.js";
-import { SEOMetadataRouter } from "./seoMetadataRouter.js";
 import { initializeSecurity, verifyConnectionToken } from "./security.js";
+import { SEOMetadataRouter } from "./seoMetadataRouter.js";
 import { prepareForMsgpack } from "./serializer.js";
 
 const gzipAsync = promisify(gzip);
@@ -42,6 +42,7 @@ let currentSEORouter: SEOMetadataRouter | null = null;
 let wss: WebSocketServer | null = null;
 let rateLimiter: RateLimiter | null = null;
 let currentWorkers: WorkerEntry[] = [];
+let cachedDefaultMeta: Awaited<ReturnType<typeof loadDefaultSocialMetaFromHtmlFile>> | undefined;
 
 /**
  * Attaches HeliumTS HTTP handlers and WebSocket RPC server to an existing HTTP server.
@@ -72,6 +73,27 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
     currentRegistry = registry;
     currentHttpRouter = httpRouter;
     currentSEORouter = seoRouter;
+    cachedDefaultMeta = undefined;
+
+    const getDefaultMeta = async () => {
+        if (cachedDefaultMeta !== undefined) {
+            return cachedDefaultMeta;
+        }
+
+        cachedDefaultMeta = await loadDefaultSocialMetaFromHtmlFile(`${process.cwd()}/index.html`);
+        return cachedDefaultMeta;
+    };
+
+    registry.register(SEO_METADATA_RPC_METHOD, {
+        __kind: "method",
+        __id: SEO_METADATA_RPC_METHOD,
+        handler: async (args: { path?: string } | undefined, ctx: HeliumContext) => {
+            const requestedPath = typeof args?.path === "string" ? args.path : "/";
+            const targetPath = requestedPath.startsWith("/") ? requestedPath : `/${requestedPath}`;
+            const metadata = await seoRouter.resolve(ctx.req.raw, ctx, targetPath);
+            return metadata ?? (await getDefaultMeta());
+        },
+    });
     currentSEORouter = seoRouter;
 
     // Start workers if they changed
@@ -373,47 +395,6 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
             return;
         }
 
-        if (req.method === "GET" && req.url?.startsWith("/__helium__/seo-metadata")) {
-            const parsed = parseUrl(req.url, true);
-            const requestedPath = typeof parsed.query.path === "string" ? parsed.query.path : "/";
-            const targetPath = requestedPath.startsWith("/") ? requestedPath : `/${requestedPath}`;
-
-            if (!currentSEORouter) {
-                res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-                res.end(JSON.stringify({ meta: null }));
-                return;
-            }
-
-            const ip = extractClientIP(req, trustProxyDepth);
-            const httpCtx: HeliumContext = {
-                req: {
-                    ip,
-                    headers: req.headers,
-                    url: req.url,
-                    method: req.method,
-                    raw: req,
-                },
-            };
-
-            try {
-                const metadata = await currentSEORouter.resolve(req, httpCtx, targetPath);
-                res.writeHead(200, {
-                    "Content-Type": "application/json",
-                    "Cache-Control": "no-store",
-                });
-                res.end(JSON.stringify({ meta: metadata }));
-            } catch (error) {
-                log("error", "SEO metadata endpoint error:", error);
-                res.writeHead(500, {
-                    "Content-Type": "application/json",
-                    "Cache-Control": "no-store",
-                });
-                res.end(JSON.stringify({ meta: null }));
-            }
-
-            return;
-        }
-
         // Try HTTP handlers first
         if (currentHttpRouter) {
             const handled = await currentHttpRouter.handleRequest(req, res);
@@ -446,10 +427,7 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
             let capturedContentType = "";
 
             res.writeHead = (statusCode: number, statusMessageOrHeaders?: any, headers?: any) => {
-                const providedHeaders =
-                    typeof statusMessageOrHeaders === "string"
-                        ? headers
-                        : statusMessageOrHeaders;
+                const providedHeaders = typeof statusMessageOrHeaders === "string" ? headers : statusMessageOrHeaders;
 
                 if (providedHeaders) {
                     if (Array.isArray(providedHeaders)) {

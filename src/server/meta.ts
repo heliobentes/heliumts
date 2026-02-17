@@ -1,3 +1,5 @@
+import fs from "fs/promises";
+
 export interface SocialMeta {
     title: string;
     description?: string;
@@ -94,4 +96,70 @@ export function injectSocialMetaIntoHtml(html: string, meta: SocialMeta): string
     const replacementHead = `<head>\n${generated}${cleanedInnerHead ? `\n${cleanedInnerHead}` : ""}\n</head>`;
 
     return html.replace(fullHead, replacementHead);
+}
+
+export function extractSocialMetaFromHtml(html: string): SocialMeta | null {
+    const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const title = titleMatch?.[1] ? decodeHtmlEntities(titleMatch[1].trim()) : "";
+
+    if (!title) {
+        return null;
+    }
+
+    const description = extractMetaContent(html, "name", "description");
+    const image = extractMetaContent(html, "property", "og:image");
+    const canonicalUrl = extractCanonicalHref(html);
+    const siteName = extractMetaContent(html, "property", "og:site_name");
+    const type = extractMetaContent(html, "property", "og:type");
+    const robots = extractMetaContent(html, "name", "robots");
+    const twitterCard = extractMetaContent(html, "name", "twitter:card") as SocialMeta["twitterCard"] | undefined;
+    const twitterSite = extractMetaContent(html, "name", "twitter:site");
+    const twitterCreator = extractMetaContent(html, "name", "twitter:creator");
+
+    return {
+        title,
+        description,
+        image,
+        canonicalUrl,
+        siteName,
+        type,
+        robots,
+        twitterCard,
+        twitterSite,
+        twitterCreator,
+    };
+}
+
+export async function loadDefaultSocialMetaFromHtmlFile(filePath: string): Promise<SocialMeta | null> {
+    try {
+        const html = await fs.readFile(filePath, "utf-8");
+        return extractSocialMetaFromHtml(html);
+    } catch {
+        return null;
+    }
+}
+
+function extractMetaContent(html: string, attributeName: "name" | "property", attributeValue: string): string | undefined {
+    const pattern = new RegExp(`<meta\\s+[^>]*${attributeName}=["']${escapeRegex(attributeValue)}["'][^>]*content=["']([^"']*)["'][^>]*>`, "i");
+    const match = html.match(pattern);
+    return match?.[1] ? decodeHtmlEntities(match[1].trim()) : undefined;
+}
+
+function extractCanonicalHref(html: string): string | undefined {
+    const pattern = /<link\s+[^>]*rel=["']canonical["'][^>]*href=["']([^"']*)["'][^>]*>/i;
+    const match = html.match(pattern);
+    return match?.[1] ? decodeHtmlEntities(match[1].trim()) : undefined;
+}
+
+function escapeRegex(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function decodeHtmlEntities(value: string): string {
+    return value
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&amp;/g, "&");
 }
