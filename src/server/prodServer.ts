@@ -2,6 +2,7 @@ import { encode as msgpackEncode } from "@msgpack/msgpack";
 import fs from "fs";
 import http from "http";
 import path from "path";
+import { parse as parseUrl } from "url";
 import { promisify } from "util";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
@@ -185,6 +186,40 @@ export function startProdServer(options: ProdServerOptions) {
                     res.end(JSON.stringify({ ok: false, error: "Internal server error" }));
                 }
             });
+            return;
+        }
+
+        if (req.method === "GET" && req.url?.startsWith("/__helium__/seo-metadata")) {
+            const parsed = parseUrl(req.url, true);
+            const requestedPath = typeof parsed.query.path === "string" ? parsed.query.path : "/";
+            const targetPath = requestedPath.startsWith("/") ? requestedPath : `/${requestedPath}`;
+
+            const ip = extractClientIP(req, trustProxyDepth);
+            const httpCtx: HeliumContext = {
+                req: {
+                    ip,
+                    headers: req.headers,
+                    url: req.url,
+                    method: req.method,
+                    raw: req,
+                },
+            };
+
+            try {
+                const metadata = await seoRouter.resolve(req, httpCtx, targetPath);
+                res.writeHead(200, {
+                    "Content-Type": "application/json",
+                    "Cache-Control": "no-store",
+                });
+                res.end(JSON.stringify({ meta: metadata }));
+            } catch (error) {
+                log("error", "SEO metadata endpoint error:", error);
+                res.writeHead(500, {
+                    "Content-Type": "application/json",
+                    "Cache-Control": "no-store",
+                });
+                res.end(JSON.stringify({ meta: null }));
+            }
             return;
         }
 

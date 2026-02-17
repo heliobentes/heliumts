@@ -2,6 +2,7 @@ import { encode as msgpackEncode } from "@msgpack/msgpack";
 import type http from "http";
 import type http2 from "http2";
 import type https from "https";
+import { parse as parseUrl } from "url";
 import { promisify } from "util";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
@@ -70,6 +71,7 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
     registry.setMaxBatchSize(rpcConfig.maxBatchSize);
     currentRegistry = registry;
     currentHttpRouter = httpRouter;
+    currentSEORouter = seoRouter;
     currentSEORouter = seoRouter;
 
     // Start workers if they changed
@@ -368,6 +370,47 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
                     res.end(JSON.stringify({ ok: false, error: "Internal server error" }));
                 }
             });
+            return;
+        }
+
+        if (req.method === "GET" && req.url?.startsWith("/__helium__/seo-metadata")) {
+            const parsed = parseUrl(req.url, true);
+            const requestedPath = typeof parsed.query.path === "string" ? parsed.query.path : "/";
+            const targetPath = requestedPath.startsWith("/") ? requestedPath : `/${requestedPath}`;
+
+            if (!currentSEORouter) {
+                res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+                res.end(JSON.stringify({ meta: null }));
+                return;
+            }
+
+            const ip = extractClientIP(req, trustProxyDepth);
+            const httpCtx: HeliumContext = {
+                req: {
+                    ip,
+                    headers: req.headers,
+                    url: req.url,
+                    method: req.method,
+                    raw: req,
+                },
+            };
+
+            try {
+                const metadata = await currentSEORouter.resolve(req, httpCtx, targetPath);
+                res.writeHead(200, {
+                    "Content-Type": "application/json",
+                    "Cache-Control": "no-store",
+                });
+                res.end(JSON.stringify({ meta: metadata }));
+            } catch (error) {
+                log("error", "SEO metadata endpoint error:", error);
+                res.writeHead(500, {
+                    "Content-Type": "application/json",
+                    "Cache-Control": "no-store",
+                });
+                res.end(JSON.stringify({ meta: null }));
+            }
+
             return;
         }
 

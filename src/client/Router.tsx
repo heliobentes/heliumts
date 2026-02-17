@@ -497,6 +497,37 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
         isPending,
     };
 
+    React.useEffect(() => {
+        const controller = new AbortController();
+        const targetPath = `${state.path}${window.location.search || ""}`;
+
+        const syncMetadata = async () => {
+            try {
+                const response = await fetch(`/__helium__/seo-metadata?path=${encodeURIComponent(targetPath)}`, {
+                    method: "GET",
+                    credentials: "same-origin",
+                    cache: "no-store",
+                    signal: controller.signal,
+                });
+
+                if (!response.ok) {
+                    return;
+                }
+
+                const payload = (await response.json()) as { meta?: ClientSocialMeta | null };
+                applyRouteMetadata(payload.meta ?? null);
+            } catch (error) {
+                if ((error as { name?: string })?.name === "AbortError") {
+                    return;
+                }
+            }
+        };
+
+        syncMetadata();
+
+        return () => controller.abort();
+    }, [state.path, currentSearchParams.toString()]);
+
     if (!match) {
         const NotFoundComp = NotFound ?? (() => <div>Not found</div>);
         const content = <NotFoundComp />;
@@ -524,4 +555,80 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
     const finalContent = AppShell ? <AppShell Component={WrappedPage} pageProps={{}} /> : <WrappedPage />;
 
     return <RouterContext.Provider value={routerValue}>{finalContent}</RouterContext.Provider>;
+}
+
+type ClientSocialMeta = {
+    title: string;
+    description?: string;
+    image?: string;
+    canonicalUrl?: string;
+    siteName?: string;
+    type?: string;
+    robots?: string;
+    twitterCard?: "summary" | "summary_large_image" | "app" | "player";
+    twitterSite?: string;
+    twitterCreator?: string;
+};
+
+function applyRouteMetadata(meta: ClientSocialMeta | null) {
+    if (typeof document === "undefined") {
+        return;
+    }
+
+    const managedNodes = document.head.querySelectorAll('[data-helium-seo="true"]');
+    managedNodes.forEach((node) => node.remove());
+
+    if (!meta) {
+        return;
+    }
+
+    document.title = meta.title;
+
+    const entries: Array<{ tag: "meta" | "link"; attrs: Record<string, string> }> = [];
+
+    entries.push({ tag: "meta", attrs: { property: "og:title", content: meta.title } });
+    entries.push({ tag: "meta", attrs: { property: "og:type", content: meta.type ?? "website" } });
+    entries.push({ tag: "meta", attrs: { name: "twitter:card", content: meta.twitterCard ?? "summary_large_image" } });
+    entries.push({ tag: "meta", attrs: { name: "twitter:title", content: meta.title } });
+
+    if (meta.description) {
+        entries.push({ tag: "meta", attrs: { name: "description", content: meta.description } });
+        entries.push({ tag: "meta", attrs: { property: "og:description", content: meta.description } });
+        entries.push({ tag: "meta", attrs: { name: "twitter:description", content: meta.description } });
+    }
+
+    if (meta.image) {
+        entries.push({ tag: "meta", attrs: { property: "og:image", content: meta.image } });
+        entries.push({ tag: "meta", attrs: { name: "twitter:image", content: meta.image } });
+    }
+
+    if (meta.canonicalUrl) {
+        entries.push({ tag: "meta", attrs: { property: "og:url", content: meta.canonicalUrl } });
+        entries.push({ tag: "link", attrs: { rel: "canonical", href: meta.canonicalUrl } });
+    }
+
+    if (meta.siteName) {
+        entries.push({ tag: "meta", attrs: { property: "og:site_name", content: meta.siteName } });
+    }
+
+    if (meta.robots) {
+        entries.push({ tag: "meta", attrs: { name: "robots", content: meta.robots } });
+    }
+
+    if (meta.twitterSite) {
+        entries.push({ tag: "meta", attrs: { name: "twitter:site", content: meta.twitterSite } });
+    }
+
+    if (meta.twitterCreator) {
+        entries.push({ tag: "meta", attrs: { name: "twitter:creator", content: meta.twitterCreator } });
+    }
+
+    for (const entry of entries) {
+        const node = document.createElement(entry.tag);
+        for (const [key, value] of Object.entries(entry.attrs)) {
+            node.setAttribute(key, value);
+        }
+        node.setAttribute("data-helium-seo", "true");
+        document.head.appendChild(node);
+    }
 }

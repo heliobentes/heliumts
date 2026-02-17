@@ -42,14 +42,15 @@ export class SEOMetadataRouter {
         return this.pageRouteMatchers.some((matcher) => matcher(pathname) !== null);
     }
 
-    async resolve(req: IncomingMessage, ctx: HeliumContext): Promise<SocialMeta | null> {
+    async resolve(req: IncomingMessage, ctx: HeliumContext, targetPath?: string): Promise<SocialMeta | null> {
         const method = req.method?.toUpperCase() || "GET";
         if (method !== "GET") {
             return null;
         }
 
         const parsedUrl = parseUrl(req.url || "", true);
-        const pathname = normalizePath(parsedUrl.pathname || "/");
+        const targetParsed = targetPath ? parseUrl(targetPath, true) : null;
+        const pathname = normalizePath((targetParsed?.pathname as string | undefined) || parsedUrl.pathname || "/");
         if (!this.hasPageRouteMatch(pathname)) {
             return null;
         }
@@ -60,8 +61,9 @@ export class SEOMetadataRouter {
         }
 
         const query: Record<string, string> = {};
-        if (parsedUrl.query) {
-            for (const [key, value] of Object.entries(parsedUrl.query)) {
+        const querySource = (targetParsed?.query as Record<string, unknown> | undefined) ?? parsedUrl.query;
+        if (querySource) {
+            for (const [key, value] of Object.entries(querySource)) {
                 if (value !== undefined) {
                     query[key] = Array.isArray(value) ? String(value[0]) : String(value);
                 }
