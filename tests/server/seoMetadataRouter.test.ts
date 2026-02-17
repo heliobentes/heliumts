@@ -75,4 +75,41 @@ describe("seoMetadataRouter", () => {
 
         expect(result).toEqual({ title: "john:holiday" });
     });
+
+    it("should resolve metadata for RPC POST when targetPath is provided", async () => {
+        const router = new SEOMetadataRouter();
+        router.setPageRoutePatterns(["/:username/:albumId"]);
+        router.registerRoutes([
+            {
+                name: "albumMeta",
+                handler: defineSEOMetadata("/:username/:slug", async (req) => ({
+                    title: `${String(req.params.username)}:${String(req.params.slug)}`,
+                })),
+            },
+        ]);
+
+        const req = {
+            method: "POST",
+            url: "/__helium__/rpc",
+            headers: {
+                host: "localhost:3000",
+            },
+        } as unknown as IncomingMessage;
+
+        const result = await router.resolve(
+            req,
+            {
+                req: {
+                    ip: "127.0.0.1",
+                    headers: req.headers,
+                    url: req.url,
+                    method: req.method,
+                    raw: req,
+                },
+            },
+            "/john/holiday?ref=1"
+        );
+
+        expect(result).toEqual({ title: "john:holiday" });
+    });
 });

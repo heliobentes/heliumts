@@ -43,7 +43,7 @@ export class SEOMetadataRouter {
     }
 
     async resolve(req: IncomingMessage, ctx: HeliumContext, targetPath?: string): Promise<SocialMeta | null> {
-        const method = req.method?.toUpperCase() || "GET";
+        const method = targetPath ? "GET" : req.method?.toUpperCase() || "GET";
         if (method !== "GET") {
             return null;
         }
