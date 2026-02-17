@@ -8,6 +8,10 @@ export type RpcResult<T> = {
     stats: RpcStats;
 };
 
+export type RpcCallOptions = {
+    forceHttp?: boolean;
+};
+
 function toArrayBuffer(data: Uint8Array<ArrayBufferLike>): ArrayBuffer {
     if (data.buffer instanceof ArrayBuffer && data.byteOffset === 0 && data.byteLength === data.buffer.byteLength) {
         return data.buffer;
@@ -94,17 +98,22 @@ function isMobileDevice(): boolean {
     return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
 }
 
+export function isMobileRpcDevice(): boolean {
+    return isMobileDevice();
+}
+
 // Detect if we should prefer HTTP transport (mobile/slow networks)
 function shouldUseHttpTransport(): boolean {
     if (isTemporaryHttpFallbackActive()) {
         return true;
     }
 
-    if (isMobileDevice()) {
+    if (configuredTransport === "http") {
         return true;
     }
 
-    if (configuredTransport === "http") {
+    const mobileDevice = isMobileDevice();
+    if (mobileDevice && configuredAutoHttpOnMobile) {
         return true;
     }
 
@@ -833,7 +842,11 @@ async function rpcCallWebSocket<TResult, TArgs>(methodId: string, args?: TArgs):
  * forces a fresh connection (with a new token) and retries once.
  */
 export async function rpcCall<TResult = unknown, TArgs = unknown>(methodId: string, args?: TArgs): Promise<RpcResult<TResult>> {
-    return rpcCallWithRetry<TResult, TArgs>(methodId, args);
+    return rpcCallWithRetry<TResult, TArgs>(methodId, args, 0, {});
+}
+
+export async function rpcCallWithOptions<TResult = unknown, TArgs = unknown>(methodId: string, args: TArgs | undefined, options: RpcCallOptions): Promise<RpcResult<TResult>> {
+    return rpcCallWithRetry<TResult, TArgs>(methodId, args, 0, options);
 }
 
 async function rpcCallViaHttpBatch<TResult, TArgs>(methodId: string, args: TArgs | undefined): Promise<RpcResult<TResult>> {
@@ -846,9 +859,9 @@ async function rpcCallViaHttpBatch<TResult, TArgs>(methodId: string, args: TArgs
     });
 }
 
-async function rpcCallWithRetry<TResult, TArgs>(methodId: string, args: TArgs | undefined, attempt = 0): Promise<RpcResult<TResult>> {
+async function rpcCallWithRetry<TResult, TArgs>(methodId: string, args: TArgs | undefined, attempt = 0, options: RpcCallOptions = {}): Promise<RpcResult<TResult>> {
     try {
-        if (shouldUseHttpTransport()) {
+        if (options.forceHttp || shouldUseHttpTransport()) {
             return await rpcCallViaHttpBatch<TResult, TArgs>(methodId, args);
         }
 
@@ -861,10 +874,10 @@ async function rpcCallWithRetry<TResult, TArgs>(methodId: string, args: TArgs | 
             const baseDelay = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
             const jitter = Math.random() * baseDelay * 0.3;
             await new Promise<void>((r) => setTimeout(r, baseDelay + jitter));
-            return rpcCallWithRetry<TResult, TArgs>(methodId, args, attempt + 1);
+            return rpcCallWithRetry<TResult, TArgs>(methodId, args, attempt + 1, options);
         }
 
-        if (isRetriableError(err) && configuredTransport !== "http") {
+        if (isRetriableError(err) && configuredTransport !== "http" && !options.forceHttp) {
             activateTemporaryHttpFallback();
             return rpcCallViaHttpBatch<TResult, TArgs>(methodId, args);
         }

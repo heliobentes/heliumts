@@ -3,9 +3,9 @@ import React, { useMemo, useSyncExternalStore, useTransition } from "react";
 
 import { SEO_METADATA_RPC_METHOD } from "../runtime/internalMethods.js";
 import { isDevEnvironment } from "./env.js";
-import { rpcCall } from "./rpcClient.js";
 import type { RouteEntry } from "./routerManifest.js";
 import { buildRoutes } from "./routerManifest.js";
+import { isAutoHttpOnMobileEnabled, isMobileRpcDevice, rpcCallWithOptions } from "./rpcClient.js";
 
 // Event emitter for router events
 type RouterEvent = "navigation" | "before-navigation";
@@ -509,7 +509,13 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
                     return;
                 }
 
-                const result = await rpcCall<ClientSocialMeta | null, { path: string }>(SEO_METADATA_RPC_METHOD, { path: targetPath });
+                const result = await rpcCallWithOptions<ClientSocialMeta | null, { path: string }>(
+                    SEO_METADATA_RPC_METHOD,
+                    { path: targetPath },
+                    {
+                        forceHttp: isAutoHttpOnMobileEnabled() && isMobileRpcDevice(),
+                    }
+                );
 
                 if (controller.signal.aborted) {
                     return;
