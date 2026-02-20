@@ -30,6 +30,18 @@ type WindowWithInstallFlag = Window & {
     [INSTALL_FLAG]?: boolean;
 };
 
+function resolveStorage(windowObject: Window, override?: StorageLike | null): StorageLike | null {
+    if (override !== undefined) {
+        return override;
+    }
+
+    try {
+        return windowObject.sessionStorage;
+    } catch {
+        return null;
+    }
+}
+
 function readStoredNumber(storage: StorageLike | null, key: string): number | null {
     if (!storage) {
         return null;
@@ -123,13 +135,16 @@ export function installStaleClientRecovery(options: InstallStaleClientRecoveryOp
     trackedWindow[INSTALL_FLAG] = true;
 
     const now = options.now ?? (() => Date.now());
-    const storage = options.storage ?? windowObject.sessionStorage;
+    const storage = resolveStorage(windowObject, options.storage);
     const staleThresholdMs = options.staleThresholdMs ?? STALE_RESUME_THRESHOLD_MS;
     const reloadCooldownMs = options.reloadCooldownMs ?? RELOAD_COOLDOWN_MS;
     const reload = options.reload ?? (() => windowObject.location.reload());
 
     let isReloading = false;
+    let hasPendingReload = false;
     let hiddenAt = readStoredNumber(storage, HIDDEN_AT_STORAGE_KEY);
+
+    const isVisible = () => !documentObject.hidden;
 
     const markHidden = () => {
         hiddenAt = now();
@@ -141,7 +156,12 @@ export function installStaleClientRecovery(options: InstallStaleClientRecoveryOp
         writeStoredNumber(storage, HIDDEN_AT_STORAGE_KEY, null);
     };
 
-    const attemptReload = () => {
+    const executeReload = () => {
+        if (!isVisible()) {
+            hasPendingReload = true;
+            return;
+        }
+
         if (isReloading) {
             return;
         }
@@ -153,8 +173,20 @@ export function installStaleClientRecovery(options: InstallStaleClientRecoveryOp
         }
 
         isReloading = true;
+        hasPendingReload = false;
         writeStoredNumber(storage, LAST_RELOAD_STORAGE_KEY, current);
         reload();
+    };
+
+    const flushPendingReload = () => {
+        if (!hasPendingReload) {
+            return;
+        }
+        executeReload();
+    };
+
+    const attemptReload = () => {
+        executeReload();
     };
 
     const maybeRecoverFromStaleResume = () => {
@@ -177,6 +209,7 @@ export function installStaleClientRecovery(options: InstallStaleClientRecoveryOp
                 markHidden();
                 return;
             }
+            flushPendingReload();
             maybeRecoverFromStaleResume();
         },
         { passive: true }
@@ -194,6 +227,7 @@ export function installStaleClientRecovery(options: InstallStaleClientRecoveryOp
         "pageshow",
         (event) => {
             if ((event as PageTransitionEvent).persisted) {
+                flushPendingReload();
                 maybeRecoverFromStaleResume();
             }
         },

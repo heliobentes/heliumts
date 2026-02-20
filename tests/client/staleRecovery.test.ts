@@ -125,4 +125,51 @@ describe("stale client recovery", () => {
 
         expect(reload).toHaveBeenCalledTimes(1);
     });
+
+    it("does not throw when sessionStorage access fails", () => {
+        const windowWithFailingStorage = Object.create(window) as Window;
+
+        Object.defineProperty(windowWithFailingStorage, "sessionStorage", {
+            configurable: true,
+            get() {
+                throw new Error("sessionStorage unavailable");
+            },
+        });
+
+        expect(() => {
+            installStaleClientRecovery({
+                windowObject: windowWithFailingStorage,
+                documentObject: document,
+                disableDedupe: true,
+            });
+        }).not.toThrow();
+    });
+
+    it("defers reload until the document becomes visible", () => {
+        let currentTime = 200_000;
+        const storage = new MemoryStorage();
+        const reload = vi.fn();
+
+        installStaleClientRecovery({
+            storage,
+            now: () => currentTime,
+            reload,
+            reloadCooldownMs: 30_000,
+            disableDedupe: true,
+        });
+
+        Object.defineProperty(document, "hidden", { configurable: true, value: true });
+        window.dispatchEvent(
+            new PromiseRejectionEvent("unhandledrejection", {
+                promise: Promise.resolve(),
+                reason: new Error("Failed to fetch dynamically imported module"),
+            }),
+        );
+        expect(reload).not.toHaveBeenCalled();
+
+        currentTime = 205_000;
+        Object.defineProperty(document, "hidden", { configurable: true, value: false });
+        document.dispatchEvent(new Event("visibilitychange"));
+        expect(reload).toHaveBeenCalledTimes(1);
+    });
 });
