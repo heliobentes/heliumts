@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import type { IncomingMessage, ServerResponse } from "http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -955,6 +956,50 @@ describe("HTTPRouter Response handling", () => {
         expect(webRequest?.method).toBe("POST");
         expect(webRequest?.url).toBe("https://example.com/api/web?foo=bar");
         expect(webRequest?.headers.get("content-type")).toBe("application/json");
+    });
+
+    it("should honor configured maxBodySize in toWebRequest", async () => {
+        const customRouter = new HTTPRouter({ maxBodySize: 2_500_000 });
+        let webRequest: Request | undefined;
+
+        const mockHandler: HeliumHTTPDef = {
+            __kind: "http",
+            method: "POST",
+            path: "/api/large-body",
+            handler: vi.fn().mockImplementation(async (req) => {
+                webRequest = await req.toWebRequest();
+                return { ok: true };
+            }),
+        };
+
+        customRouter.registerRoutes([{ name: "largeBodyHandler", handler: mockHandler }]);
+
+        const bodyData = "x".repeat(1_200_000);
+        const req = {
+            method: "POST",
+            url: "/api/large-body",
+            headers: {
+                host: "example.com",
+                "content-type": "text/plain",
+            },
+            socket: { remoteAddress: "127.0.0.1" },
+            on: vi.fn((event: string, handler: (data?: Buffer) => void) => {
+                if (event === "data") {
+                    handler(Buffer.from(bodyData));
+                } else if (event === "end") {
+                    handler();
+                }
+            }),
+        } as unknown as IncomingMessage;
+        const res = createMockRes();
+
+        const handled = await customRouter.handleRequest(req, res);
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(webRequest).toBeDefined();
+        const requestPayload = await (webRequest as Request).text();
+        expect(requestPayload).toBe(bodyData);
     });
 
     it("should handle toWebRequest with default protocol and host", async () => {

@@ -12,6 +12,10 @@ export interface HTTPRoute {
     handler: HeliumHTTPDef;
 }
 
+interface HTTPRouterOptions {
+    maxBodySize?: number;
+}
+
 export class HTTPRouter {
     private routes: Array<{
         method: string;
@@ -21,6 +25,11 @@ export class HTTPRouter {
     }> = [];
     private middleware: HeliumMiddleware | null = null;
     private trustProxyDepth: number = 0;
+    private maxBodySize: number;
+
+    constructor(options: HTTPRouterOptions = {}) {
+        this.maxBodySize = options.maxBodySize ?? 1_048_576;
+    }
 
     setTrustProxyDepth(depth: number) {
         this.trustProxyDepth = depth;
@@ -73,7 +82,7 @@ export class HTTPRouter {
                         }
                     }
                 }
-                const httpRequest = await createHTTPRequest(req, query, params);
+                const httpRequest = await createHTTPRequest(req, query, params, this.maxBodySize);
 
                 let result: any;
                 // Build context with request metadata
@@ -167,7 +176,7 @@ function pathToRegex(path: string): { pattern: RegExp; keys: string[] } {
     };
 }
 
-async function createHTTPRequest(req: IncomingMessage, query: Record<string, string | string[]>, params: Record<string, string>): Promise<HTTPRequest> {
+async function createHTTPRequest(req: IncomingMessage, query: Record<string, string | string[]>, params: Record<string, string>, maxBodySize: number): Promise<HTTPRequest> {
     const headers: Record<string, string | string[] | undefined> = {};
     for (const [key, value] of Object.entries(req.headers)) {
         headers[key.toLowerCase()] = value;
@@ -184,7 +193,7 @@ async function createHTTPRequest(req: IncomingMessage, query: Record<string, str
     let bodyBuffer: Buffer | null = null;
     const getBody = async (): Promise<Buffer> => {
         if (bodyBuffer === null) {
-            bodyBuffer = await readBody(req);
+            bodyBuffer = await readBody(req, maxBodySize);
         }
         return bodyBuffer;
     };
@@ -237,11 +246,12 @@ async function createHTTPRequest(req: IncomingMessage, query: Record<string, str
             }
 
             const body = req.method !== "GET" && req.method !== "HEAD" ? await getBody() : undefined;
+            const requestBody = body ? Uint8Array.from(body).buffer : undefined;
 
             return new Request(url, {
                 method: req.method,
                 headers: webHeaders,
-                body: body as any,
+                body: requestBody,
             });
         },
     };

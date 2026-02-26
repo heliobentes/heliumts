@@ -69,7 +69,7 @@ export function startProdServer(options: ProdServerOptions) {
     const rateLimiter = new RateLimiter(rpcSecurity.maxMessagesPerWindow, rpcSecurity.rateLimitWindowMs, rpcSecurity.maxConnectionsPerIP);
 
     const registry = new RpcRegistry();
-    const httpRouter = new HTTPRouter();
+    const httpRouter = new HTTPRouter({ maxBodySize: rpcConfig.maxBodySize });
     const seoRouter = new SEOMetadataRouter();
     httpRouter.setTrustProxyDepth(trustProxyDepth);
     registerHandlers(registry, httpRouter, seoRouter);

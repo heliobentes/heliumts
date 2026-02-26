@@ -64,7 +64,7 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
     rateLimiter = new RateLimiter(rpcSecurity.maxMessagesPerWindow, rpcSecurity.rateLimitWindowMs, rpcSecurity.maxConnectionsPerIP);
 
     const registry = new RpcRegistry();
-    const httpRouter = new HTTPRouter();
+    const httpRouter = new HTTPRouter({ maxBodySize: rpcConfig.maxBodySize });
     const seoRouter = new SEOMetadataRouter();
     httpRouter.setTrustProxyDepth(trustProxyDepth);
     loadHandlers(registry, httpRouter, seoRouter);
