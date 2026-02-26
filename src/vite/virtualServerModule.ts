@@ -58,48 +58,34 @@ export function generateClientModule(methods: MethodExport[]): string {
     return exports;
 }
 
-/**
- * Generate a deterministic suffix from a string.
- * Uses only file path and method name (NOT index) so that adding/removing
- * other methods does not change existing aliases.
- */
-function stableAlias(filePath: string, name: string): string {
-    const input = `${filePath}:${name}`;
-    let hash = 0;
-    for (let i = 0; i < input.length; i++) {
-        const char = input.charCodeAt(i);
-        hash = (hash << 5) - hash + char;
-        hash = hash & hash; // Convert to 32bit integer
-    }
-    return `${name}_${Math.abs(hash).toString(36)}`;
-}
-
 export function generateTypeDefinitions(methods: MethodExport[], root: string): string {
     // Sort methods by name for a stable output regardless of file-system walk order
     const sorted = [...methods].sort((a, b) => a.name.localeCompare(b.name));
 
-    const methodsWithAlias = sorted.map((m) => ({
-        ...m,
-        alias: stableAlias(m.filePath, m.name),
-    }));
-
-    const imports = methodsWithAlias
-        .map((m) => {
+    const methodsWithRelativePath = sorted.map((m) => {
             let relPath = path.relative(path.join(root, "src"), m.filePath);
             if (!relPath.startsWith(".")) {
                 relPath = "../" + relPath;
             }
             // Normalize to posix separators for import paths
             relPath = relPath.replace(/\\/g, "/").replace(/\.ts$/, "");
-            return `import type { ${m.name} as ${m.alias} } from '${relPath}';`;
+            return {
+                ...m,
+                relPath,
+            };
+        });
+
+    const imports = methodsWithRelativePath
+        .map((m, index) => {
+            return `import type { ${m.name} as __helium_method_${index} } from '${m.relPath}';`;
         })
         .join("\n");
 
-    const methodExports = methodsWithAlias
-        .map((m) => {
+    const methodExports = methodsWithRelativePath
+        .map((m, index) => {
             return `    export const ${m.name}: import('heliumts/client').MethodStub<
-        Parameters<typeof ${m.alias}['handler']>[0],
-        Awaited<ReturnType<typeof ${m.alias}['handler']>>
+        Parameters<typeof __helium_method_${index}['handler']>[0],
+        Awaited<ReturnType<typeof __helium_method_${index}['handler']>>
     >;`;
         })
         .join("\n");
@@ -121,7 +107,7 @@ export {};
 `;
     }
 
-    const methodSignature = methodsWithAlias.map((m) => m.name).join(", ");
+    const methodSignature = methodsWithRelativePath.map((m) => m.name).join(", ");
 
     return `/* eslint-disable */
 /**

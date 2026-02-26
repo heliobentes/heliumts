@@ -98,14 +98,15 @@ describe("virtualServerModule", () => {
     });
 
     describe("generateTypeDefinitions", () => {
-        it("should generate type imports and exports", () => {
+        it("should generate type imports and typeof handler references", () => {
             const methods: MethodExport[] = [{ name: "getUser", filePath: "/test/project/src/server/users.ts" }];
 
             const result = generateTypeDefinitions(methods, "/test/project");
 
-            expect(result).toContain("import type { getUser as");
             expect(result).toContain("declare module 'heliumts/server'");
             expect(result).toContain("export const getUser: import('heliumts/client').MethodStub<");
+            expect(result).toContain("import type { getUser as __helium_method_0 } from '../server/users';");
+            expect(result).toContain("Parameters<typeof __helium_method_0['handler']>[0]");
         });
 
         it("should include auto-generated header comment", () => {
