@@ -1,12 +1,14 @@
 import path from "path";
 
-import { HTTPHandlerExport, MethodExport, MiddlewareExport, SEOMetadataExport, WorkerExport } from "./scanner.js";
+import { HTTPHandlerExport, MethodExport, MiddlewareExport, SEOMetadataExport, SSRPageExport, WorkerExport } from "./scanner.js";
 
 export function generateServerManifest(
     methods: MethodExport[],
     httpHandlers: HTTPHandlerExport[],
     seoMetadata: SEOMetadataExport[] = [],
     pageRoutePatterns: string[] = [],
+    ssrPages: SSRPageExport[] = [],
+    appShellFilePath: string | null = null,
     middleware?: MiddlewareExport,
     workers: WorkerExport[] = []
 ): string {
@@ -22,6 +24,51 @@ export function generateServerManifest(
     const seoExports = seoMetadata.map((s, i) => `  { name: '${s.name}', handler: seo_${i} },`).join("\n");
 
     const workerExports = workers.map((w, i) => `  { name: '${w.name}', worker: worker_${i} },`).join("\n");
+
+    const ssrPageExports = ssrPages
+        .map((s, i) => {
+            const loadLayoutsBody = s.layoutFilePaths
+                .map(
+                    (layoutPath, layoutIndex) => `        {
+            const mod_${layoutIndex} = await import('${layoutPath}');
+            if (mod_${layoutIndex}.default) {
+                layouts.push(mod_${layoutIndex}.default);
+            }
+        }`
+                )
+                .join("\n");
+
+            const sidecarCheck = s.serverFilePath
+                ? `        {
+            const sidecar = await import('${s.serverFilePath}');
+            if (typeof sidecar.getServerSideProps === 'function') {
+                return sidecar.getServerSideProps(req, ctx);
+            }
+        }
+`
+                : "";
+
+            return `  {
+    pathPattern: '${s.pathPattern}',
+    loadComponent: async () => {
+        const page = await import('${s.pageFilePath}');
+        return page.default;
+    },
+    loadLayouts: async () => {
+        const layouts = [];
+${loadLayoutsBody}
+        return layouts;
+    },
+    getServerSideProps: async (req, ctx) => {
+${sidecarCheck}        const page = await import('${s.pageFilePath}');
+        if (typeof page.getServerSideProps === 'function') {
+            return page.getServerSideProps(req, ctx);
+        }
+        return null;
+    }
+  },`;
+        })
+        .join("\n");
 
     return `
 ${methodImports}
@@ -44,6 +91,19 @@ ${seoExports}
 
 export const pageRoutePatterns = ${JSON.stringify(pageRoutePatterns)};
 
+export const ssrPages = [
+${ssrPageExports}
+];
+
+export const appShell = ${
+        appShellFilePath
+            ? `async () => {
+    const mod = await import('${appShellFilePath}');
+    return mod.default ?? mod.App ?? mod.app ?? null;
+}`
+            : "null"
+    };
+
 export const workers = [
 ${workerExports}
 ];
@@ -63,17 +123,17 @@ export function generateTypeDefinitions(methods: MethodExport[], root: string): 
     const sorted = [...methods].sort((a, b) => a.name.localeCompare(b.name));
 
     const methodsWithRelativePath = sorted.map((m) => {
-            let relPath = path.relative(path.join(root, "src"), m.filePath);
-            if (!relPath.startsWith(".")) {
-                relPath = "../" + relPath;
-            }
-            // Normalize to posix separators for import paths
-            relPath = relPath.replace(/\\/g, "/").replace(/\.ts$/, "");
-            return {
-                ...m,
-                relPath,
-            };
-        });
+        let relPath = path.relative(path.join(root, "src"), m.filePath);
+        if (!relPath.startsWith(".")) {
+            relPath = "../" + relPath;
+        }
+        // Normalize to posix separators for import paths
+        relPath = relPath.replace(/\\/g, "/").replace(/\.ts$/, "");
+        return {
+            ...m,
+            relPath,
+        };
+    });
 
     const imports = methodsWithRelativePath
         .map((m, index) => {
@@ -128,7 +188,7 @@ ${methodExports}
 export function generateEntryModule(): string {
     return `
 import React from 'react';
-import { createRoot } from 'react-dom/client';
+import { createRoot, hydrateRoot } from 'react-dom/client';
 import { AppRouter } from 'heliumts/client';
 import App from '/src/App';
 
@@ -137,10 +197,16 @@ if (!rootEl) {
     throw new Error('Root element not found. Helium requires a <div id=\"root\"></div> in your HTML.');
 }
 
-createRoot(rootEl).render(
+const app = (
     <React.StrictMode>
         <AppRouter AppShell={App} />
     </React.StrictMode>
 );
+
+if (rootEl.hasChildNodes()) {
+    hydrateRoot(rootEl, app);
+} else {
+    createRoot(rootEl).render(app);
+}
 `;
 }

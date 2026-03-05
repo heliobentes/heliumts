@@ -2,6 +2,8 @@ import { encode as msgpackEncode } from "@msgpack/msgpack";
 import type http from "http";
 import type http2 from "http2";
 import type https from "https";
+import path from "path";
+import type { ComponentType, ReactNode } from "react";
 import { promisify } from "util";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
@@ -23,6 +25,7 @@ import { RpcRegistry } from "./rpcRegistry.js";
 import { initializeSecurity, verifyConnectionToken } from "./security.js";
 import { SEOMetadataRouter } from "./seoMetadataRouter.js";
 import { prepareForMsgpack } from "./serializer.js";
+import { createServerSidePropsRequest, matchSSRPage, renderSSRHTML, SSRPageDef } from "./ssr.js";
 
 const gzipAsync = promisify(gzip);
 const deflateAsync = promisify(deflate);
@@ -36,9 +39,13 @@ interface WorkerEntry {
     worker: HeliumWorkerDef;
 }
 
+type AppShellLoader = (() => Promise<ComponentType<{ Component: ComponentType<Record<string, unknown>>; pageProps: Record<string, unknown>; children?: ReactNode }>>) | null;
+
 let currentRegistry: RpcRegistry | null = null;
 let currentHttpRouter: HTTPRouter | null = null;
 let currentSEORouter: SEOMetadataRouter | null = null;
+let currentSSRPages: SSRPageDef[] = [];
+let currentAppShell: AppShellLoader = null;
 let wss: WebSocketServer | null = null;
 let rateLimiter: RateLimiter | null = null;
 let currentWorkers: WorkerEntry[] = [];
@@ -48,7 +55,14 @@ let cachedDefaultMeta: Awaited<ReturnType<typeof loadDefaultSocialMetaFromHtmlFi
  * Attaches HeliumTS HTTP handlers and WebSocket RPC server to an existing HTTP server.
  * This is used in dev mode to attach to Vite's dev server.
  */
-export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHandlersFn, config: HeliumConfig = {}, workers: WorkerEntry[] = []) {
+export function attachToDevServer(
+    httpServer: HttpServer,
+    loadHandlers: LoadHandlersFn,
+    config: HeliumConfig = {},
+    workers: WorkerEntry[] = [],
+    ssrPages: SSRPageDef[] = [],
+    appShell: AppShellLoader = null
+) {
     // Load environment variables for server-side access
     const envVars = loadEnvFiles();
     injectEnvToProcess(envVars);
@@ -73,6 +87,8 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
     currentRegistry = registry;
     currentHttpRouter = httpRouter;
     currentSEORouter = seoRouter;
+    currentSSRPages = ssrPages;
+    currentAppShell = appShell;
     cachedDefaultMeta = undefined;
 
     const getDefaultMeta = async () => {
@@ -294,6 +310,50 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
     httpServer.removeAllListeners("request");
 
     httpServer.on("request", async (req: any, res: any) => {
+        const reqUrl = new URL(req.url || "/", "http://localhost");
+        const pathname = reqUrl.pathname;
+        const search = reqUrl.search;
+
+        if (pathname === "/__helium__/page-props" && req.method === "GET") {
+            const pathQuery = reqUrl.searchParams.get("path") || "/";
+            const targetUrl = new URL(pathQuery, "http://localhost");
+            const targetPathname = targetUrl.pathname;
+
+            const ssrMatch = matchSSRPage(targetPathname, currentSSRPages);
+            if (!ssrMatch) {
+                res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+                res.end(JSON.stringify({ ssr: false, props: null }));
+                return;
+            }
+
+            const ip = extractClientIP(req, trustProxyDepth);
+            const httpCtx: HeliumContext = {
+                req: {
+                    ip,
+                    headers: req.headers,
+                    url: req.url,
+                    method: req.method,
+                    raw: req,
+                },
+            };
+
+            try {
+                let result: Record<string, unknown> | null = {};
+                if (ssrMatch.page.getServerSideProps) {
+                    const request = createServerSidePropsRequest(req, targetPathname, ssrMatch.params);
+                    result = (await ssrMatch.page.getServerSideProps(request, httpCtx)) ?? {};
+                }
+                res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+                res.end(JSON.stringify({ ssr: true, props: result ?? {} }));
+            } catch (error) {
+                log("error", "Failed to resolve SSR page props:", error);
+                res.writeHead(500, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+                res.end(JSON.stringify({ ssr: true, props: null, error: "Internal server error" }));
+            }
+
+            return;
+        }
+
         // Handle token refresh endpoint
         if (req.url === "/__helium__/refresh-token") {
             // Security: only allow POST to prevent CSRF via <img>/<script> tags
@@ -419,7 +479,19 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
             devResolvedMetadata = await currentSEORouter.resolve(req, httpCtx);
         }
 
-        if (devResolvedMetadata) {
+        const acceptsHtml = String(req.headers["accept"] || "").includes("text/html") || String(req.headers["accept"] || "") === "*/*";
+        const isEligibleHtmlRequest =
+            req.method === "GET" &&
+            acceptsHtml &&
+            path.extname(pathname) === "" &&
+            !pathname.startsWith("/api") &&
+            !pathname.startsWith("/webhooks") &&
+            !pathname.startsWith("/auth") &&
+            !pathname.startsWith("/@") &&
+            !pathname.startsWith("/__helium__");
+        const ssrMatch = isEligibleHtmlRequest ? matchSSRPage(pathname, currentSSRPages) : null;
+
+        if (devResolvedMetadata || ssrMatch) {
             const originalWriteHead = res.writeHead.bind(res);
             const originalWrite = res.write.bind(res);
             const originalEnd = res.end.bind(res);
@@ -473,21 +545,71 @@ export function attachToDevServer(httpServer: HttpServer, loadHandlers: LoadHand
                     callback();
                 }
 
-                const bodyBuffer = Buffer.concat(bufferedChunks);
-                const bodyText = bodyBuffer.toString("utf-8");
-                const contentType = capturedContentType || String(res.getHeader("content-type") || "").toLowerCase();
-                const looksLikeHtml = /^\s*<!doctype\s+html|^\s*<html[\s>]/i.test(bodyText);
+                const finalize = async () => {
+                    const bodyBuffer = Buffer.concat(bufferedChunks);
+                    const bodyText = bodyBuffer.toString("utf-8");
+                    const contentType = capturedContentType || String(res.getHeader("content-type") || "").toLowerCase();
+                    const looksLikeHtml = /^\s*<!doctype\s+html|^\s*<html[\s>]/i.test(bodyText);
 
-                res.writeHead = originalWriteHead;
-                res.write = originalWrite;
-                res.end = originalEnd;
+                    res.writeHead = originalWriteHead;
+                    res.write = originalWrite;
+                    res.end = originalEnd;
 
-                if (contentType.includes("text/html") || looksLikeHtml) {
-                    const injectedHtml = injectSocialMetaIntoHtml(bodyText, devResolvedMetadata);
-                    return originalEnd(Buffer.from(injectedHtml, "utf-8"));
-                }
+                    if (!(contentType.includes("text/html") || looksLikeHtml)) {
+                        originalEnd(bodyBuffer);
+                        return;
+                    }
 
-                return originalEnd(bodyBuffer);
+                    let html = bodyText;
+
+                    if (ssrMatch) {
+                        const ip = extractClientIP(req, trustProxyDepth);
+                        const httpCtx: HeliumContext = {
+                            req: {
+                                ip,
+                                headers: req.headers,
+                                url: req.url,
+                                method: req.method,
+                                raw: req,
+                            },
+                        };
+
+                        try {
+                            const rendered = await renderSSRHTML({
+                                htmlTemplate: html,
+                                pathname,
+                                search,
+                                params: ssrMatch.params,
+                                page: ssrMatch.page,
+                                req,
+                                ctx: httpCtx,
+                                loadAppShell: currentAppShell,
+                            });
+                            html = rendered.html;
+                        } catch (error) {
+                            const message = error instanceof Error ? error.message : String(error);
+                            const isBrowserGlobalError = /\bwindow is not defined\b|\bdocument is not defined\b|\bnavigator is not defined\b/i.test(message);
+
+                            if (isBrowserGlobalError) {
+                                log(
+                                    "warn",
+                                    `SSR disabled for ${pathname} due to browser-only import. Render map/browser-only modules on client only (e.g. dynamic import inside useEffect).`
+                                );
+                            } else {
+                                log("error", `Failed to render SSR page for ${pathname}:`, error);
+                            }
+                        }
+                    }
+
+                    if (devResolvedMetadata) {
+                        html = injectSocialMetaIntoHtml(html, devResolvedMetadata);
+                    }
+
+                    originalEnd(Buffer.from(html, "utf-8"));
+                };
+
+                void finalize();
+                return true;
             };
         }
 

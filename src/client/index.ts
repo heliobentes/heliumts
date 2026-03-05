@@ -18,6 +18,15 @@ export * from "./useFetch.js";
 // RPC error type
 export { RpcError } from "./RpcError.js";
 
+/**
+ * Returns `true` when the current code is executing during server-side rendering.
+ * Use this in layouts or components to skip browser-only logic (e.g. auth guards)
+ * while still rendering providers and structural content for SSR.
+ */
+export function isSSR(): boolean {
+    return typeof window === "undefined";
+}
+
 // RPC transport info (configured via helium.config.js)
 export type { RpcTransport } from "./rpcClient.js";
 export { getRpcTransport, isAutoHttpOnMobileEnabled, preconnect } from "./rpcClient.js";

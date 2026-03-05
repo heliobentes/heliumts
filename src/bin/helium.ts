@@ -7,7 +7,7 @@ import path from "path";
 import { build as viteBuild } from "vite";
 
 import { log } from "../utils/logger.js";
-import { scanPageRoutePatterns, scanServerExports } from "../vite/scanner.js";
+import { scanAppShell, scanPageRoutePatterns, scanServerExports, scanSSRPages } from "../vite/scanner.js";
 import { generateStaticPages } from "../vite/ssg.js";
 import { generateServerManifest } from "../vite/virtualServerModule.js";
 
@@ -92,11 +92,15 @@ cli.command("build", "Build for production").action(async () => {
     // Generate server entry
     const serverExports = scanServerExports(root);
     const pageRoutePatterns = scanPageRoutePatterns(root);
+    const ssrPages = scanSSRPages(root);
+    const appShell = scanAppShell(root);
     const manifestCode = generateServerManifest(
         serverExports.methods,
         serverExports.httpHandlers,
         serverExports.seoMetadata,
         pageRoutePatterns,
+        ssrPages,
+        appShell,
         serverExports.middleware,
         serverExports.workers
     );
@@ -121,6 +125,8 @@ export async function start() {
                 httpRouter.setMiddleware(middlewareHandler);
             }
         },
+        ssrPages,
+        appShell,
         workers
     });
 }
@@ -155,10 +161,126 @@ if (Object.keys(envVars).length > 0) {
     const entryPath = path.join(heliumDir, "server-entry.ts");
     const envLoaderPath = path.join(heliumDir, "env-loader.ts");
     const serverModuleSrcPath = path.join(heliumDir, "server-module.ts");
+    const ssrClientStubPath = path.join(heliumDir, "ssr-client-stub.ts");
+    const ssrTransitionsStubPath = path.join(heliumDir, "ssr-transitions-stub.ts");
+    const ssrPrefetchStubPath = path.join(heliumDir, "ssr-prefetch-stub.ts");
+
+    const ssrClientStubCode = `
+import React from 'react';
+
+export const RouterContext = React.createContext(null);
+
+function getSSRRouterSnapshot() {
+    const snapshot = globalThis.__HELIUM_SSR_ROUTER__ as
+        | { path?: string; params?: Record<string, string | string[]>; search?: string }
+        | undefined;
+
+    if (!snapshot || typeof snapshot !== 'object') {
+        return {
+            path: '/',
+            params: {},
+            search: '',
+        };
+    }
+
+    return {
+        path: typeof snapshot.path === 'string' ? snapshot.path : '/',
+        params: snapshot.params && typeof snapshot.params === 'object' ? snapshot.params : {},
+        search: typeof snapshot.search === 'string' ? snapshot.search : '',
+    };
+}
+
+export function useRouter() {
+    const snapshot = getSSRRouterSnapshot();
+    return {
+        path: snapshot.path,
+        params: snapshot.params,
+        searchParams: new URLSearchParams(snapshot.search),
+        push: () => {},
+        replace: () => {},
+        on: () => () => {},
+        status: 200,
+        isNavigating: false,
+        isPending: false,
+    };
+}
+
+export function Link(props: { href?: string; children?: React.ReactNode } & Record<string, unknown>) {
+    const { href = '#', children, ...rest } = props || {};
+    return React.createElement('a', { href, ...rest }, children);
+}
+
+export function Redirect() {
+    return null;
+}
+
+export function AppRouter() {
+    return null;
+}
+
+export function useCall() {
+    return {
+        call: async () => null,
+        isCalling: false,
+        error: null,
+    };
+}
+
+export function useFetch() {
+    return {
+        data: null,
+        isLoading: false,
+        error: null,
+        refetch: async () => undefined,
+    };
+}
+
+export class RpcError extends Error {}
+
+export function getRpcTransport() {
+    return 'websocket';
+}
+
+export function isAutoHttpOnMobileEnabled() {
+    return false;
+}
+
+export function preconnect() {}
+
+export function isSSR() {
+    return true;
+}
+`;
+
+    const ssrTransitionsStubCode = `
+import React from 'react';
+
+export function useDeferredNavigation() {
+    return {
+        path: '/',
+        deferredPath: '/',
+        isStale: false,
+        isPending: false,
+        isTransitioning: false,
+    };
+}
+
+export function PageTransition({ children }: { children?: React.ReactNode }) {
+    return React.createElement(React.Fragment, null, children);
+}
+`;
+
+    const ssrPrefetchStubCode = `
+export function prefetchRoute() {}
+export function clearPrefetchCache() {}
+`;
 
     fs.writeFileSync(entryPath, entryCode);
     fs.writeFileSync(envLoaderPath, envLoaderCode);
     fs.writeFileSync(serverModuleSrcPath, serverModuleCode);
+    fs.writeFileSync(ssrClientStubPath, ssrClientStubCode);
+    fs.writeFileSync(ssrTransitionsStubPath, ssrTransitionsStubCode);
+    fs.writeFileSync(ssrPrefetchStubPath, ssrPrefetchStubCode);
 
     // Bundle with esbuild
     try {
@@ -168,6 +290,18 @@ if (Object.keys(envVars).length > 0) {
             bundle: true,
             platform: "node",
             format: "esm",
+            jsx: "automatic",
+            jsxImportSource: "react",
+            plugins: [
+                {
+                    name: "helium-ssr-client-alias",
+                    setup(build) {
+                        build.onResolve({ filter: /^heliumts\/client$/ }, () => ({ path: ssrClientStubPath }));
+                        build.onResolve({ filter: /^heliumts\/client\/transitions$/ }, () => ({ path: ssrTransitionsStubPath }));
+                        build.onResolve({ filter: /^heliumts\/client\/prefetch$/ }, () => ({ path: ssrPrefetchStubPath }));
+                    },
+                },
+            ],
             external: [
                 // External common database and heavy dependencies
                 "mongodb",

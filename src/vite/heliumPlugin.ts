@@ -15,12 +15,18 @@ import {
     VIRTUAL_ENTRY_MODULE_ID,
     VIRTUAL_SERVER_MANIFEST_ID,
 } from "./paths.js";
-import { checkRouteCollisions, scanPageRoutePatterns, scanServerExports } from "./scanner.js";
+import { checkRouteCollisions, scanAppShell, scanPageRoutePatterns, scanServerExports, scanSSRPages } from "./scanner.js";
 import { generateClientModule, generateEntryModule, generateServerManifest, generateTypeDefinitions } from "./virtualServerModule.js";
 
 export default function helium(): Plugin {
     let root = process.cwd();
     const serverDir = normalizeToPosix(SERVER_DIR);
+    const VIRTUAL_SSR_CLIENT_MODULE_ID = "heliumts/__ssr_client";
+    const RESOLVED_VIRTUAL_SSR_CLIENT_MODULE_ID = "\0heliumts:ssr-client";
+    const VIRTUAL_SSR_TRANSITIONS_MODULE_ID = "heliumts/__ssr_transitions";
+    const RESOLVED_VIRTUAL_SSR_TRANSITIONS_MODULE_ID = "\0heliumts:ssr-transitions";
+    const VIRTUAL_SSR_PREFETCH_MODULE_ID = "heliumts/__ssr_prefetch";
+    const RESOLVED_VIRTUAL_SSR_PREFETCH_MODULE_ID = "\0heliumts:ssr-prefetch";
 
     return {
         name: "vite-plugin-helium",
@@ -129,7 +135,16 @@ export default function helium(): Plugin {
                 },
             };
         },
-        resolveId(id, importer) {
+        resolveId(id, importer, options) {
+            if (options?.ssr && id === "heliumts/client") {
+                return RESOLVED_VIRTUAL_SSR_CLIENT_MODULE_ID;
+            }
+            if (options?.ssr && id === "heliumts/client/transitions") {
+                return RESOLVED_VIRTUAL_SSR_TRANSITIONS_MODULE_ID;
+            }
+            if (options?.ssr && id === "heliumts/client/prefetch") {
+                return RESOLVED_VIRTUAL_SSR_PREFETCH_MODULE_ID;
+            }
             if (id === VIRTUAL_CLIENT_MODULE_ID) {
                 if (isServerModule(importer, root, serverDir)) {
                     return null;
@@ -155,6 +170,15 @@ export default function helium(): Plugin {
             return null;
         },
         load(id) {
+            if (id === RESOLVED_VIRTUAL_SSR_CLIENT_MODULE_ID) {
+                return generateSSRClientStubModule();
+            }
+            if (id === RESOLVED_VIRTUAL_SSR_TRANSITIONS_MODULE_ID) {
+                return generateSSRTransitionsStubModule();
+            }
+            if (id === RESOLVED_VIRTUAL_SSR_PREFETCH_MODULE_ID) {
+                return generateSSRPrefetchStubModule();
+            }
             if (id === RESOLVED_VIRTUAL_CLIENT_MODULE_ID) {
                 const { methods } = scanServerExports(root);
                 return generateClientModule(methods);
@@ -162,7 +186,9 @@ export default function helium(): Plugin {
             if (id === RESOLVED_VIRTUAL_SERVER_MANIFEST_ID) {
                 const { methods, httpHandlers, seoMetadata, middleware, workers } = scanServerExports(root);
                 const pageRoutePatterns = scanPageRoutePatterns(root);
-                return generateServerManifest(methods, httpHandlers, seoMetadata, pageRoutePatterns, middleware, workers);
+                const ssrPages = scanSSRPages(root);
+                const appShell = scanAppShell(root);
+                return generateServerManifest(methods, httpHandlers, seoMetadata, pageRoutePatterns, ssrPages, appShell, middleware, workers);
             }
             if (id === RESOLVED_VIRTUAL_ENTRY_MODULE_ID + ".tsx") {
                 return generateEntryModule();
@@ -308,6 +334,8 @@ export default function helium(): Plugin {
                     const pageRoutePatterns = mod.pageRoutePatterns || [];
                     const middlewareHandler = mod.middlewareHandler || null;
                     const workers = mod.workers || [];
+                    const ssrPages = mod.ssrPages || [];
+                    const appShell = mod.appShell || null;
 
                     // Update the dev server registry with new methods and HTTP handlers
                     if (server.httpServer) {
@@ -324,7 +352,9 @@ export default function helium(): Plugin {
                                 }
                             },
                             config,
-                            workers
+                            workers,
+                            ssrPages,
+                            appShell
                         );
                     }
                 } catch (e) {
@@ -425,6 +455,8 @@ export default function helium(): Plugin {
                     const pageRoutePatterns = mod.pageRoutePatterns || [];
                     const middlewareHandler = mod.middlewareHandler || null;
                     const workers = mod.workers || [];
+                    const ssrPages = mod.ssrPages || [];
+                    const appShell = mod.appShell || null;
 
                     if (server.httpServer) {
                         attachToDevServer(
@@ -440,7 +472,9 @@ export default function helium(): Plugin {
                                 }
                             },
                             config,
-                            workers
+                            workers,
+                            ssrPages,
+                            appShell
                         );
                     }
                 } catch (e) {
@@ -449,6 +483,119 @@ export default function helium(): Plugin {
             });
         },
     };
+}
+
+function generateSSRClientStubModule(): string {
+    return `
+import React from 'react';
+
+export const RouterContext = React.createContext(null);
+
+function getSSRRouterSnapshot() {
+    const snapshot = globalThis.__HELIUM_SSR_ROUTER__;
+    if (!snapshot || typeof snapshot !== 'object') {
+        return {
+            path: '/',
+            params: {},
+            search: '',
+        };
+    }
+
+    return {
+        path: typeof snapshot.path === 'string' ? snapshot.path : '/',
+        params: snapshot.params && typeof snapshot.params === 'object' ? snapshot.params : {},
+        search: typeof snapshot.search === 'string' ? snapshot.search : '',
+    };
+}
+
+export function useRouter() {
+    const snapshot = getSSRRouterSnapshot();
+    return {
+        path: snapshot.path,
+        params: snapshot.params,
+        searchParams: new URLSearchParams(snapshot.search),
+        push: () => {},
+        replace: () => {},
+        on: () => () => {},
+        status: 200,
+        isNavigating: false,
+        isPending: false,
+    };
+}
+
+export function Link(props) {
+    const { href = '#', children, ...rest } = props || {};
+    return React.createElement('a', { href, ...rest }, children);
+}
+
+export function Redirect() {
+    return null;
+}
+
+export function AppRouter() {
+    return null;
+}
+
+export function useCall() {
+    return {
+        call: async () => null,
+        isCalling: false,
+        error: null,
+    };
+}
+
+export function useFetch() {
+    return {
+        data: null,
+        isLoading: false,
+        error: null,
+        refetch: async () => undefined,
+    };
+}
+
+export class RpcError extends Error {}
+
+export function getRpcTransport() {
+    return 'websocket';
+}
+
+export function isAutoHttpOnMobileEnabled() {
+    return false;
+}
+
+export function preconnect() {}
+
+export function isSSR() {
+    return true;
+}
+`;
+}
+
+function generateSSRTransitionsStubModule(): string {
+    return `
+import React from 'react';
+
+export function useDeferredNavigation() {
+    return {
+        path: '/',
+        deferredPath: '/',
+        isStale: false,
+        isPending: false,
+        isTransitioning: false,
+    };
+}
+
+export function PageTransition({ children }) {
+    return React.createElement(React.Fragment, null, children);
+}
+`;
+}
+
+function generateSSRPrefetchStubModule(): string {
+    return `
+export function prefetchRoute() {}
+export function clearPrefetchCache() {}
+`;
 }
 
 /**

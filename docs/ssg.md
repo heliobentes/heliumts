@@ -4,6 +4,8 @@
 
 HeliumTS supports Static Site Generation (SSG) through pre-rendering pages at build time. SSG allows you to generate static HTML files for pages that don't require server-side rendering or dynamic data, improving performance and reducing server load.
 
+If you need HTML rendered **per-request** (e.g. personalised content, auth-gated pages), use [Server-Side Rendering (SSR)](./ssr.md) instead.
+
 ## Quick Start
 
 To enable SSG for a page, simply add a `"use ssg";` directive at the top of your page component:
@@ -479,4 +481,5 @@ Planned features for future releases:
 
 - [Route Groups](./route-groups.md) - Organize pages with route groups
 - [Routing](./routing.md) - File-based routing system
+- [SSR](./ssr.md) - Server-side rendering with per-request data
 - [Production Deployment](./production-deployment.md) - Deploy your application

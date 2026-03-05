@@ -2,6 +2,7 @@ import { encode as msgpackEncode } from "@msgpack/msgpack";
 import fs from "fs";
 import http from "http";
 import path from "path";
+import type { ComponentType, ReactNode } from "react";
 import { promisify } from "util";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
@@ -22,6 +23,7 @@ import { RpcRegistry } from "./rpcRegistry.js";
 import { generateConnectionToken, initializeSecurity, verifyConnectionToken } from "./security.js";
 import { SEOMetadataRouter } from "./seoMetadataRouter.js";
 import { prepareForMsgpack } from "./serializer.js";
+import { createServerSidePropsRequest, matchSSRPage, renderSSRHTML, SSRPageDef } from "./ssr.js";
 
 const gzipAsync = promisify(gzip);
 const deflateAsync = promisify(deflate);
@@ -39,6 +41,8 @@ interface ProdServerOptions {
     registerHandlers: (registry: RpcRegistry, httpRouter: HTTPRouter, seoRouter: SEOMetadataRouter) => void;
     config?: HeliumConfig;
     workers?: WorkerEntry[];
+    ssrPages?: SSRPageDef[];
+    appShell?: (() => Promise<ComponentType<{ Component: ComponentType<Record<string, unknown>>; pageProps: Record<string, unknown>; children?: ReactNode }>>) | null;
 }
 
 /**
@@ -56,7 +60,16 @@ interface ProdServerOptions {
  * - Client-side navigation between pages still works via React Router
  */
 export function startProdServer(options: ProdServerOptions) {
-    const { port = Number(process.env.PORT || 3000), distDir = "dist", staticDir = path.resolve(process.cwd(), distDir), registerHandlers, config = {}, workers = [] } = options;
+    const {
+        port = Number(process.env.PORT || 3000),
+        distDir = "dist",
+        staticDir = path.resolve(process.cwd(), distDir),
+        registerHandlers,
+        config = {},
+        workers = [],
+        ssrPages = [],
+        appShell = null,
+    } = options;
 
     // Load configuration
     const trustProxyDepth = getTrustProxyDepth(config);
@@ -115,6 +128,49 @@ export function startProdServer(options: ProdServerOptions) {
         handleCorsHeaders(req, res, config);
 
         // Handle token refresh endpoint
+        const requestUrl = new URL(req.url || "/", "http://localhost");
+        const requestPathname = requestUrl.pathname;
+
+        if (requestPathname === "/__helium__/page-props" && req.method === "GET") {
+            const pathQuery = requestUrl.searchParams.get("path") || "/";
+            const targetUrl = new URL(pathQuery, "http://localhost");
+            const targetPathname = targetUrl.pathname;
+            const ssrMatch = matchSSRPage(targetPathname, ssrPages);
+
+            if (!ssrMatch) {
+                res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+                res.end(JSON.stringify({ ssr: false, props: null }));
+                return;
+            }
+
+            const ip = extractClientIP(req, trustProxyDepth);
+            const httpCtx: HeliumContext = {
+                req: {
+                    ip,
+                    headers: req.headers,
+                    url: req.url,
+                    method: req.method,
+                    raw: req,
+                },
+            };
+
+            try {
+                let result: Record<string, unknown> | null = {};
+                if (ssrMatch.page.getServerSideProps) {
+                    const request = createServerSidePropsRequest(req, targetPathname, ssrMatch.params);
+                    result = (await ssrMatch.page.getServerSideProps(request, httpCtx)) ?? {};
+                }
+                res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+                res.end(JSON.stringify({ ssr: true, props: result ?? {} }));
+            } catch (error) {
+                log("error", "Failed to resolve SSR page props:", error);
+                res.writeHead(500, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+                res.end(JSON.stringify({ ssr: true, props: null, error: "Internal server error" }));
+            }
+
+            return;
+        }
+
         if (req.url === "/__helium__/refresh-token") {
             // Security: only allow POST to prevent CSRF via <img>/<script> tags
             if (req.method !== "POST") {
@@ -307,6 +363,8 @@ export function startProdServer(options: ProdServerOptions) {
         try {
             const content = fs.readFileSync(filePath);
             let responseBody = content;
+            const cleanedPathname = (req.url || "/").split("?")[0].replace(/\/$/, "") || "/";
+            const htmlSsrMatch = req.method === "GET" && contentType === "text/html" ? matchSSRPage(cleanedPathname, ssrPages) : null;
 
             if (!is404 && contentType === "text/html") {
                 const ip = extractClientIP(req, trustProxyDepth);
@@ -321,10 +379,41 @@ export function startProdServer(options: ProdServerOptions) {
                 };
 
                 const metadata = await seoRouter.resolve(req, httpCtx);
-                if (metadata) {
-                    const html = content.toString("utf-8");
-                    responseBody = Buffer.from(injectSocialMetaIntoHtml(html, metadata), "utf-8");
+                let html = content.toString("utf-8");
+
+                if (htmlSsrMatch) {
+                    try {
+                        const rendered = await renderSSRHTML({
+                            htmlTemplate: html,
+                            pathname: cleanedPathname,
+                            search: requestUrl.search,
+                            params: htmlSsrMatch.params,
+                            page: htmlSsrMatch.page,
+                            req,
+                            ctx: httpCtx,
+                            loadAppShell: appShell,
+                        });
+                        html = rendered.html;
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        const isBrowserGlobalError = /\bwindow is not defined\b|\bdocument is not defined\b|\bnavigator is not defined\b/i.test(message);
+
+                        if (isBrowserGlobalError) {
+                            log(
+                                "warn",
+                                `SSR disabled for ${cleanedPathname} due to browser-only import. Render map/browser-only modules on client only (e.g. dynamic import inside useEffect).`
+                            );
+                        } else {
+                            log("error", `Failed to render SSR page for ${cleanedPathname}:`, error);
+                        }
+                    }
                 }
+
+                if (metadata) {
+                    html = injectSocialMetaIntoHtml(html, metadata);
+                }
+
+                responseBody = Buffer.from(html, "utf-8");
             }
 
             // Set status code to 404 if serving the 404 page

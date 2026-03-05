@@ -7,6 +7,56 @@ import type { RouteEntry } from "./routerManifest.js";
 import { buildRoutes } from "./routerManifest.js";
 import { isAutoHttpOnMobileEnabled, isMobileRpcDevice, rpcCallWithOptions } from "./rpcClient.js";
 
+type HeliumSSRBootstrap = {
+    path: string;
+    props: Record<string, unknown>;
+};
+
+function getInitialSSRBootstrap(): HeliumSSRBootstrap | null {
+    if (typeof window === "undefined") {
+        return null;
+    }
+
+    const globalWindow = window as typeof window & {
+        __HELIUM_SSR_DATA__?: HeliumSSRBootstrap;
+    };
+
+    const payload = globalWindow.__HELIUM_SSR_DATA__;
+    if (!payload || typeof payload !== "object" || typeof payload.path !== "string" || typeof payload.props !== "object" || payload.props === null) {
+        return null;
+    }
+
+    return payload;
+}
+
+async function fetchSSRPageProps(path: string): Promise<Record<string, unknown> | null> {
+    try {
+        const response = await fetch(`/__helium__/page-props?path=${encodeURIComponent(path)}`, {
+            method: "GET",
+            headers: {
+                Accept: "application/json",
+            },
+        });
+
+        if (!response.ok) {
+            return null;
+        }
+
+        const payload = (await response.json()) as {
+            ssr?: boolean;
+            props?: Record<string, unknown> | null;
+        };
+
+        if (!payload.ssr || !payload.props) {
+            return null;
+        }
+
+        return payload.props;
+    } catch {
+        return null;
+    }
+}
+
 // Event emitter for router events
 type RouterEvent = "navigation" | "before-navigation";
 type EventListener = (event: { from: string; to: string; preventDefault?: () => void }) => void;
@@ -439,6 +489,7 @@ export function Link(props: LinkProps) {
 export type AppShellProps<TPageProps extends Record<string, unknown> = Record<string, unknown>> = {
     Component: ComponentType<TPageProps>;
     pageProps: TPageProps;
+    children?: React.ReactNode;
 };
 
 // Main router component
@@ -469,6 +520,19 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
     // Use useSyncExternalStore to subscribe to location changes
     // This ensures synchronous updates when location changes
     const state = useSyncExternalStore(subscribeToLocation, getLocationSnapshot, getServerSnapshot);
+    const [runtimeSSRProps, setRuntimeSSRProps] = React.useState<Record<string, unknown>>(() => {
+        const payload = getInitialSSRBootstrap();
+        if (!payload) {
+            return {};
+        }
+
+        if (payload.path === window.location.pathname) {
+            return payload.props;
+        }
+
+        return {};
+    });
+    const [hydrationDone, setHydrationDone] = React.useState(false);
 
     const match = useMemo(() => matchRoute(state.path, routes), [state.path, routes]);
 
@@ -498,6 +562,37 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
         isNavigating: state.isNavigating,
         isPending,
     };
+
+    React.useEffect(() => {
+        const targetPath = `${state.path}${window.location.search || ""}`;
+
+        // On first client render, if SSR payload already exists for this path, keep it.
+        if (!hydrationDone) {
+            const bootstrap = getInitialSSRBootstrap();
+            if (bootstrap && bootstrap.path === state.path) {
+                setHydrationDone(true);
+                return;
+            }
+            setHydrationDone(true);
+        }
+
+        let cancelled = false;
+
+        const load = async () => {
+            const props = await fetchSSRPageProps(targetPath);
+            if (cancelled) {
+                return;
+            }
+
+            setRuntimeSSRProps(props ?? {});
+        };
+
+        void load();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [state.path, currentSearchParams.toString(), hydrationDone]);
 
     React.useEffect(() => {
         const controller = new AbortController();
@@ -543,6 +638,7 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
 
     const Page = match.route.Component as ComponentType<{ params: Record<string, string | string[]>; searchParams: URLSearchParams }>;
     const pageProps = {
+        ...runtimeSSRProps,
         params: match.params,
         searchParams: currentSearchParams,
     };
@@ -558,7 +654,13 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
         return content;
     };
 
-    const finalContent = AppShell ? <AppShell Component={WrappedPage} pageProps={{}} /> : <WrappedPage />;
+    const finalContent = AppShell ? (
+        <AppShell Component={WrappedPage} pageProps={pageProps}>
+            <WrappedPage />
+        </AppShell>
+    ) : (
+        <WrappedPage />
+    );
 
     return <RouterContext.Provider value={routerValue}>{finalContent}</RouterContext.Provider>;
 }

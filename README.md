@@ -23,6 +23,7 @@ HeliumTS is a blazing fast 🚀 and opinionated full-stack React + Vite framewor
    - [Middleware](#35-middleware)
    - [Configuration](#36-heliumconfigts)
    - [Static Site Generation (SSG)](#37-static-site-generation-ssg)
+   - [Server-Side Rendering (SSR)](#38-server-side-rendering-ssr)
 4. [CLI Reference](#4-cli-reference)
 5. [More Documentation](#5-more-documentation)
 6. [Contributing](#6-contributing)
@@ -331,7 +332,55 @@ During build, Helium validates SSG pages and generates optimized static HTML fil
 
 See [SSG Documentation](./docs/ssg.md) for detailed information including limitations, hybrid rendering, and best practices.
 
-## 4.CLI Reference
+### 3.8. Server-Side Rendering (SSR)
+
+HeliumTS supports Server-Side Rendering (SSR) for pages that need fully rendered HTML on every request — useful for SEO, social media crawlers, and pages with per-request personalised data.
+
+Add a `"use ssr"` directive at the top of your page file to enable SSR:
+
+**SSR page: (`src/pages/dashboard.tsx`)**
+```tsx
+"use ssr";
+
+export default function DashboardPage({ user }: { user: string }) {
+    return <h1>Welcome, {user}</h1>;
+}
+```
+
+To fetch data on the server for each request, export a `getServerSideProps` function from the same file or a sidecar `page.server.ts` file (recommended):
+
+```ts
+// src/pages/dashboard.server.ts
+import type { GetServerSideProps } from "heliumts/server";
+
+export const getServerSideProps: GetServerSideProps = async (req, ctx) => {
+    const user = await getUser(req.headers);
+    return { user };
+};
+```
+
+Props are injected into the HTML as `window.__HELIUM_SSR_DATA__` and passed to the component. React hydrates the page client-side without a second server round-trip.
+
+**`isSSR()` utility** — use this in layouts to skip client-only guards (e.g. auth redirects) during server rendering while still providing required context providers:
+
+```tsx
+import { isSSR } from "heliumts/client";
+
+export default function AppLayout({ children }: { children: React.ReactNode }) {
+    const { isPending, data } = useSession();
+
+    if (!isSSR()) {
+        if (isPending) return null;
+        if (!data?.session) return null;
+    }
+
+    return <Providers>{children}</Providers>;
+}
+```
+
+See [SSR Documentation](./docs/ssr.md) for detailed information including sidecar files, layout guards, browser-only dependencies, and how hydration works.
+
+## 4. CLI Reference
 
 -   `helium dev`: Starts Vite in development mode.
 -   `helium build`:
@@ -351,6 +400,7 @@ See [SSG Documentation](./docs/ssg.md) for detailed information including limita
 -   [Routing & useRouter](./docs/routing.md) - File-based routing, dynamic routes, navigation, and the useRouter hook
 -   [Configuration](./docs/helium-config.md) - Configure RPC encoding, compression, security, and proxy settings
 -   [Static Site Generation](./docs/ssg.md) - Pre-render pages at build time for better performance
+-   [Server-Side Rendering](./docs/ssr.md) - Render pages on the server per-request for SEO and dynamic data
 -   [Route Groups](./docs/route-groups.md) - Organize routes with shared layouts without affecting URLs
 -   [Background Workers](./docs/workers.md) - Long-running background processes for queues, scheduled tasks, and more
 

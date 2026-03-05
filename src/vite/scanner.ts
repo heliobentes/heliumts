@@ -37,6 +37,40 @@ export interface ServerExports {
     workers: WorkerExport[];
 }
 
+export interface SSRPageExport {
+    pathPattern: string;
+    pageFilePath: string;
+    serverFilePath: string | null;
+    layoutFilePaths: string[];
+}
+
+export function scanAppShell(root: string): string | null {
+    const srcDir = path.join(root, "src");
+    const pagesDir = path.join(srcDir, "pages");
+    const candidates = [
+        path.join(srcDir, "App.tsx"),
+        path.join(srcDir, "App.jsx"),
+        path.join(srcDir, "App.ts"),
+        path.join(srcDir, "App.js"),
+        path.join(srcDir, "app.tsx"),
+        path.join(srcDir, "app.jsx"),
+        path.join(srcDir, "app.ts"),
+        path.join(srcDir, "app.js"),
+        path.join(pagesDir, "_app.tsx"),
+        path.join(pagesDir, "_app.jsx"),
+        path.join(pagesDir, "_app.ts"),
+        path.join(pagesDir, "_app.js"),
+    ];
+
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) {
+            return candidate;
+        }
+    }
+
+    return null;
+}
+
 export function scanServerMethods(root: string): MethodExport[] {
     const exports = scanServerExports(root);
     return exports.methods;
@@ -151,6 +185,109 @@ export function scanServerExports(root: string): ServerExports {
 
     walk(serverDir);
     return { methods, httpHandlers, seoMetadata, middleware, workers };
+}
+
+function hasUseSSRDirective(content: string): boolean {
+    // Directive can be single or double quoted and may omit semicolon.
+    return /^\s*["']use ssr["']\s*;?/m.test(content);
+}
+
+function findSidecarServerFile(pageFilePath: string): string | null {
+    const pageExt = path.extname(pageFilePath);
+    const base = pageFilePath.slice(0, -pageExt.length);
+    const candidates = [".server.ts", ".server.js", ".server.mts", ".server.mjs", ".server.tsx", ".server.jsx"].map((suffix) => `${base}${suffix}`);
+
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) {
+            return candidate;
+        }
+    }
+
+    return null;
+}
+
+function findLayoutPathsForPage(pagePath: string, root: string): string[] {
+    const pagesDir = path.join(root, "src", "pages");
+    const relativePath = path.relative(pagesDir, pagePath);
+    const pathParts = path
+        .dirname(relativePath)
+        .split(path.sep)
+        .filter((p) => p !== ".");
+
+    const layoutPaths: string[] = [];
+    const layoutNames = ["_layout.tsx", "_layout.jsx", "_layout.ts", "_layout.js"];
+
+    for (const layoutName of layoutNames) {
+        const rootLayoutPath = path.join(pagesDir, layoutName);
+        if (fs.existsSync(rootLayoutPath)) {
+            layoutPaths.push(rootLayoutPath);
+            break;
+        }
+    }
+
+    for (let i = 1; i <= pathParts.length; i++) {
+        const dirPath = path.join(pagesDir, ...pathParts.slice(0, i));
+        for (const layoutName of layoutNames) {
+            const layoutPath = path.join(dirPath, layoutName);
+            if (fs.existsSync(layoutPath)) {
+                layoutPaths.push(layoutPath);
+                break;
+            }
+        }
+    }
+
+    return layoutPaths;
+}
+
+export function scanSSRPages(root: string): SSRPageExport[] {
+    const pagesDir = path.join(root, "src", "pages");
+    if (!fs.existsSync(pagesDir)) {
+        return [];
+    }
+
+    const ssrPages: SSRPageExport[] = [];
+
+    function walkPages(dir: string) {
+        const items = fs.readdirSync(dir);
+
+        for (const item of items) {
+            const fullPath = path.join(dir, item);
+            const stat = fs.statSync(fullPath);
+
+            if (stat.isDirectory()) {
+                walkPages(fullPath);
+                continue;
+            }
+
+            if (!/\.(tsx|jsx|ts|js)$/.test(item)) {
+                continue;
+            }
+
+            if (item.includes("_layout.") || item.includes(".server.")) {
+                continue;
+            }
+
+            const content = fs.readFileSync(fullPath, "utf-8");
+            if (!hasUseSSRDirective(content)) {
+                continue;
+            }
+
+            const pathPattern = pathFromFile(fullPath, root);
+            if (pathPattern === "__404__") {
+                continue;
+            }
+
+            ssrPages.push({
+                pathPattern,
+                pageFilePath: fullPath,
+                serverFilePath: findSidecarServerFile(fullPath),
+                layoutFilePaths: findLayoutPathsForPage(fullPath, root),
+            });
+        }
+    }
+
+    walkPages(pagesDir);
+    return ssrPages;
 }
 
 /**

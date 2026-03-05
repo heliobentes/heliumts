@@ -182,6 +182,27 @@ src/pages/
 
 See [Route Groups - Layout Hierarchy](./route-groups.md#layout-hierarchy) for more details.
 
+### Layouts and SSR
+
+When a page uses the `"use ssr"` directive, layouts are rendered on the server too. If a layout has an auth guard that returns `null` (e.g. while a session is loading), the server render will produce empty markup. Use `isSSR()` to skip the guard on the server while still rendering providers:
+
+```tsx
+import { isSSR } from "heliumts/client";
+
+export default function AppLayout({ children }: { children: React.ReactNode }) {
+    const { isPending, data } = useSession();
+
+    if (!isSSR()) {
+        if (isPending) return null;
+        if (!data?.session) return null;
+    }
+
+    return <Providers>{children}</Providers>;
+}
+```
+
+See [SSR — Layouts with SSR](./ssr.md#layouts-with-ssr) for details.
+
 ## Navigation
 
 ### Link Component
@@ -914,5 +935,6 @@ ReactDOM.createRoot(document.getElementById("root")!).render(<AppRouter>{/* Your
 
 - [Route Groups](./route-groups.md) - Detailed guide on route groups and layouts
 - [SSG](./ssg.md) - Static site generation with routing
+- [SSR](./ssr.md) - Server-side rendering per request
 - [Context API](./context-api.md) - Access request context
 - [RPC Methods](./README.md#rpc-remote-procedure-calls) - Fetch data in pages
