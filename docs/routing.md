@@ -504,6 +504,8 @@ useEffect(() => {
 
 Helium provides built-in support for smooth page transitions using React 18+ concurrent features. This prevents UI freezing when navigating to heavy pages.
 
+Transition APIs are available from `heliumts/client/transitions`.
+
 ### useDeferredNavigation Hook
 
 The `useDeferredNavigation` hook integrates `useDeferredValue` and `useTransition` with the router for smoother navigation:
@@ -529,6 +531,20 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 ### PageTransition Component
 
 The `PageTransition` component handles all navigation transition complexity with a simple API:
+
+```tsx
+import { PageTransition } from "heliumts/client/transitions";
+
+export default function AppLayout({ children }: { children: React.ReactNode }) {
+    return (
+        <main>
+            <PageTransition loadingClassName="opacity-60 transition-opacity duration-150" fallback={<div>Loading page...</div>}>
+                {children}
+            </PageTransition>
+        </main>
+    );
+}
+```
 
 ```tsx
 import { PageTransition } from "heliumts/client/transitions";
