@@ -51,5 +51,4 @@ describe("client index exports", () => {
         const clientModule = await import("../../src/client/index");
         expect(clientModule.preconnect).toBeDefined();
     });
-
 });
