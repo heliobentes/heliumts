@@ -169,6 +169,13 @@ export default function helium(): Plugin {
             }
             return null;
         },
+        transform(code, id, options) {
+            // Prevent .server.ts/.server.js sidecar files from being bundled in client code.
+            // These files contain server-only logic (e.g. DB queries) and must never run in the browser.
+            if (!options?.ssr && /\.server\.(ts|js|tsx|jsx|mts|mjs)$/.test(id)) {
+                return { code: "export default null;", map: null };
+            }
+        },
         load(id) {
             if (id === RESOLVED_VIRTUAL_SSR_CLIENT_MODULE_ID) {
                 return generateSSRClientStubModule();

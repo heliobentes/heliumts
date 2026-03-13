@@ -191,8 +191,9 @@ function getLocationSnapshot() {
     return currentLocation;
 }
 
+const SERVER_SNAPSHOT: RouterState = { path: "/", searchParams: new URLSearchParams(), isNavigating: false };
 function getServerSnapshot() {
-    return { path: "/", searchParams: new URLSearchParams(), isNavigating: false };
+    return SERVER_SNAPSHOT;
 }
 
 function updateLocation(isNavigating = false) {

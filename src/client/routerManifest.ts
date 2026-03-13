@@ -160,12 +160,14 @@ export function buildRoutes(): {
     }
 
     // Eagerly load all page components (for initial render and layouts)
-    const eagerPages = import.meta.glob("/src/pages/**/*.{tsx,jsx,ts,js}", {
+    // Exclude .server.* sidecar files — they contain server-only code (e.g. DB access)
+    // and must never be bundled into the client.
+    const eagerPages = import.meta.glob(["/src/pages/**/*.{tsx,jsx,ts,js}", "!**/*.server.*"], {
         eager: true,
     }) as Record<string, { default: ComponentType<unknown> }>;
 
     // Lazy load all page components (for Suspense support)
-    const lazyPages = import.meta.glob("/src/pages/**/*.{tsx,jsx,ts,js}") as Record<string, () => Promise<{ default: ComponentType<unknown> }>>;
+    const lazyPages = import.meta.glob(["/src/pages/**/*.{tsx,jsx,ts,js}", "!**/*.server.*"]) as Record<string, () => Promise<{ default: ComponentType<unknown> }>>;
 
     // Debug mode: set localStorage.setItem('helium_debug_routes', 'true') to enable
     const debugRoutes = typeof localStorage !== "undefined" && localStorage.getItem("helium_debug_routes") === "true";
