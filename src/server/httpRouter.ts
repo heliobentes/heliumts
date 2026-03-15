@@ -131,7 +131,18 @@ export class HTTPRouter {
                         res.setHeader(key, value);
                     });
 
-                    if (result.body) {
+                    if (result.body && typeof result.body.getReader === "function") {
+                        const reader = result.body.getReader();
+                        try {
+                            while (true) {
+                                const { done, value } = await reader.read();
+                                if (done) break;
+                                res.write(value);
+                            }
+                        } finally {
+                            res.end();
+                        }
+                    } else if (result.body) {
                         const arrayBuf = await result.arrayBuffer();
                         res.end(Buffer.from(arrayBuf));
                     } else {

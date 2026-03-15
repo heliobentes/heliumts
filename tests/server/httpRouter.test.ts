@@ -459,6 +459,7 @@ describe("HTTPRouter Response handling", () => {
             writeHead: vi.fn(function (this: ServerResponse & { writtenHead?: unknown }, status: number, headers: Record<string, string>) {
                 this.writtenHead = { status, headers };
             }),
+            write: vi.fn(),
             end: vi.fn(function (this: ServerResponse & { writtenBody?: string }, body?: string) {
                 this.writtenBody = body;
             }),
@@ -674,11 +675,11 @@ describe("HTTPRouter Response handling", () => {
         expect(result).toBe(true);
         expect(res.statusCode).toBe(201);
         expect(res.setHeader).toHaveBeenCalledWith("x-custom-header", "custom-value");
-        // Verify the body is fully written via res.end()
-        const endCall = (res.end as ReturnType<typeof vi.fn>).mock.calls[0];
-        expect(endCall).toBeDefined();
-        expect(Buffer.isBuffer(endCall[0])).toBe(true);
-        expect(endCall[0].toString()).toBe("Hello World");
+        // Verify the body is streamed via res.write() and res.end() is called
+        const writeCalls = (res.write as ReturnType<typeof vi.fn>).mock.calls;
+        const written = Buffer.concat(writeCalls.map((c: unknown[]) => Buffer.from(c[0] as Uint8Array)));
+        expect(written.toString()).toBe("Hello World");
+        expect(res.end).toHaveBeenCalled();
     });
 
     it("should handle binary Response bodies without truncation", async () => {
@@ -711,13 +712,12 @@ describe("HTTPRouter Response handling", () => {
         expect(res.statusCode).toBe(200);
         expect(res.setHeader).toHaveBeenCalledWith("content-type", "image/png");
 
-        const endCall = (res.end as ReturnType<typeof vi.fn>).mock.calls[0];
-        expect(endCall).toBeDefined();
-        const writtenBuffer = endCall[0] as Buffer;
-        expect(Buffer.isBuffer(writtenBuffer)).toBe(true);
-        // Verify the entire payload was written without truncation
+        // Verify the entire payload was streamed via res.write() without truncation
+        const writeCalls = (res.write as ReturnType<typeof vi.fn>).mock.calls;
+        const writtenBuffer = Buffer.concat(writeCalls.map((c: unknown[]) => Buffer.from(c[0] as Uint8Array)));
         expect(writtenBuffer.length).toBe(4096);
         expect(writtenBuffer.equals(Buffer.from(binaryData))).toBe(true);
+        expect(res.end).toHaveBeenCalled();
     });
 
     it("should detect cross-realm Response-like objects via duck-typing", async () => {
