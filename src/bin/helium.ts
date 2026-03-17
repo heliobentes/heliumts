@@ -9,7 +9,7 @@ import { build as viteBuild } from "vite";
 import { log } from "../utils/logger.js";
 import { scanAppShell, scanPageRoutePatterns, scanServerExports, scanSSRPages } from "../vite/scanner.js";
 import { generateStaticPages } from "../vite/ssg.js";
-import { generateServerManifest } from "../vite/virtualServerModule.js";
+import { generateClientModule, generateServerManifest, generateTypeDefinitions } from "../vite/virtualServerModule.js";
 
 const cli = cac("helium");
 const root = process.cwd();
@@ -22,6 +22,22 @@ cli.command("dev", "Start development server").action(async () => {
 });
 
 cli.command("build", "Build for production").action(async () => {
+    // Generate type definitions before building so TypeScript can resolve
+    // server method types even if the dev server was never started.
+    const { methods } = scanServerExports(root);
+    const dts = generateTypeDefinitions(methods, root);
+    const typesDir = path.join(root, "src", "types");
+    const dtsPath = path.join(typesDir, "heliumts-server.d.ts");
+
+    if (!fs.existsSync(typesDir)) {
+        fs.mkdirSync(typesDir, { recursive: true });
+    }
+
+    if (!fs.existsSync(dtsPath) || fs.readFileSync(dtsPath, "utf-8") !== dts) {
+        fs.writeFileSync(dtsPath, dts);
+        log("info", `Generated type definitions for ${methods.length} method(s)`);
+    }
+
     log("info", "--------------------------------");
     log("info", "Building client...");
 
@@ -278,6 +294,14 @@ export function clearPrefetchCache() {}
     fs.writeFileSync(entryPath, entryCode);
     fs.writeFileSync(envLoaderPath, envLoaderCode);
     fs.writeFileSync(serverModuleSrcPath, serverModuleCode);
+    // Generate a client-side stub for heliumts/server that provides method stubs
+    // (e.g. { __id: 'subscribeWaitlist' }) so client components that import
+    // user-defined methods from 'heliumts/server' resolve correctly during
+    // the esbuild server bundle (mirroring the Vite plugin's virtual module).
+    const rpcClientStubPath = path.join(heliumDir, "rpc-client-stub.ts");
+    const rpcClientStubCode = generateClientModule(serverExports.methods);
+    fs.writeFileSync(rpcClientStubPath, rpcClientStubCode);
+
     fs.writeFileSync(ssrClientStubPath, ssrClientStubCode);
     fs.writeFileSync(ssrTransitionsStubPath, ssrTransitionsStubCode);
     fs.writeFileSync(ssrPrefetchStubPath, ssrPrefetchStubCode);
@@ -299,6 +323,19 @@ export function clearPrefetchCache() {}
                         build.onResolve({ filter: /^heliumts\/client$/ }, () => ({ path: ssrClientStubPath }));
                         build.onResolve({ filter: /^heliumts\/client\/transitions$/ }, () => ({ path: ssrTransitionsStubPath }));
                         build.onResolve({ filter: /^heliumts\/client\/prefetch$/ }, () => ({ path: ssrPrefetchStubPath }));
+                        // Intercept heliumts/server imports from client code
+                        // and redirect to the RPC stub module (method stubs).
+                        // Server-side files and generated server-module resolve normally.
+                        const serverDirAbs = path.join(root, "src", "server");
+                        build.onResolve({ filter: /^heliumts\/server$/ }, (args) => {
+                            const importer = args.importer;
+                            // Allow the generated server-module and env-loader to
+                            // import the real heliumts/server framework exports.
+                            if (importer.startsWith(heliumDir) || importer.startsWith(serverDirAbs)) {
+                                return undefined; // let esbuild resolve normally
+                            }
+                            return { path: rpcClientStubPath };
+                        });
                     },
                 },
             ],
