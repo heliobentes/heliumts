@@ -610,20 +610,51 @@ export function startProdServer(options: ProdServerOptions) {
  * Set default security headers on every HTTP response.
  */
 function setSecurityHeaders(res: http.ServerResponse, config: HeliumConfig): void {
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("X-Frame-Options", "DENY");
-    res.setHeader("X-XSS-Protection", "0");
-    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    const headers = getSecurityHeaders(config);
 
-    const csp = config.security?.contentSecurityPolicy;
-    if (csp) {
-        res.setHeader("Content-Security-Policy", csp);
+    for (const [name, value] of Object.entries(headers)) {
+        if (value === null) {
+            res.removeHeader(name);
+            continue;
+        }
+        res.setHeader(name, value);
+    }
+}
+
+/**
+ * Resolve security headers for the current request from config.
+ * Returns a final header map where `null` indicates the header should be removed.
+ *
+ * @internal
+ */
+export function getSecurityHeaders(config: HeliumConfig): Record<string, string | null> {
+    const headers: Record<string, string | null> = {};
+    const securityConfig = config.security;
+
+    if (securityConfig?.defaultHeaders !== false) {
+        headers["X-Content-Type-Options"] = "nosniff";
+        headers["X-Frame-Options"] = "DENY";
+        headers["X-XSS-Protection"] = "0";
+        headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+        headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
+
+        const csp = securityConfig?.contentSecurityPolicy;
+        if (csp) {
+            headers["Content-Security-Policy"] = csp;
+        }
+
+        if (securityConfig?.hsts !== false) {
+            headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";
+        }
     }
 
-    if (config.security?.hsts !== false) {
-        res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    if (securityConfig?.headerOverrides) {
+        for (const [name, value] of Object.entries(securityConfig.headerOverrides)) {
+            headers[name] = value;
+        }
     }
+
+    return headers;
 }
 
 /**

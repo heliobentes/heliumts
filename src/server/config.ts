@@ -71,8 +71,30 @@ export interface HeliumRpcSecurityConfig {
  */
 export interface HeliumSecurityConfig {
     /**
+     * Apply Helium's built-in default security headers.
+     *
+     * When set to `false`, Helium will not set default security headers,
+     * allowing full manual control via `headerOverrides` and your own server logic.
+     *
+     * @default true
+     */
+    defaultHeaders?: boolean;
+
+    /**
+     * Header overrides applied after Helium's default security headers.
+     *
+     * - Set a header value to override (or add) that header.
+     * - Set a header value to `null` to remove that header.
+     *
+     * This is useful for custom framing policies, custom permissions policy,
+     * or disabling a specific default header.
+     */
+    headerOverrides?: Record<string, string | null>;
+
+    /**
      * Content-Security-Policy header value.
      * Set to a CSP string to enable, or omit to skip CSP.
+     * Applied when `defaultHeaders` is enabled.
      *
      * @default undefined (no CSP header)
      */
@@ -81,6 +103,7 @@ export interface HeliumSecurityConfig {
     /**
      * Enable Strict-Transport-Security header.
      * Set to false to disable HSTS.
+     * Applied when `defaultHeaders` is enabled.
      *
      * @default true
      */

@@ -29,6 +29,50 @@ const config: HeliumConfig = {
 export default config;
 ```
 
+## HTTP Security Headers
+
+Control Helium's default security headers and override specific headers when needed:
+
+```typescript
+import type { HeliumConfig } from "heliumts/server";
+
+const config: HeliumConfig = {
+        security: {
+                // Keep Helium defaults (X-Frame-Options, Referrer-Policy, etc.)
+                // Set to false for full manual control
+                defaultHeaders: true,
+
+                // Optional specific overrides applied last
+                headerOverrides: {
+                        "X-Frame-Options": "SAMEORIGIN",
+                        "Permissions-Policy": null, // null removes the header
+                        "X-Custom-Security": "enabled",
+                },
+
+                // Existing explicit options still supported
+                contentSecurityPolicy: "default-src 'self'; frame-ancestors 'self'",
+                hsts: true,
+                corsOrigins: ["https://app.example.com"],
+        },
+};
+
+export default config;
+```
+
+### Security Header Options
+
+- `security.defaultHeaders` (boolean): Apply Helium's built-in security headers
+    - Default: `true`
+    - Set to `false` to skip all default security headers
+
+- `security.headerOverrides` (Record<string, string | null>): Final header overrides
+    - String value: set/override header
+    - `null` value: remove header
+
+- `security.contentSecurityPolicy` (string): Add Content-Security-Policy header (when defaults are enabled)
+- `security.hsts` (boolean): Control Strict-Transport-Security (when defaults are enabled)
+- `security.corsOrigins` (string[]): Configure CORS allowlist
+
 ## Configuration Options
 
 ### RPC Configuration

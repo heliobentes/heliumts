@@ -285,6 +285,15 @@ import type { HeliumConfig } from "heliumts/server";
 
 const config: HeliumConfig = {
     trustProxyDepth: 1,  // Trust 1 proxy level (e.g., Vercel)
+    security: {
+        defaultHeaders: true,
+        headerOverrides: {
+            "X-Frame-Options": "SAMEORIGIN",
+        },
+        contentSecurityPolicy: "default-src 'self'; frame-ancestors 'self'",
+        hsts: true,
+        corsOrigins: ["https://app.example.com"],
+    },
     rpc: {
         encoding: "msgpack",  // or "json"
         compression: {

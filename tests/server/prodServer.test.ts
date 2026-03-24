@@ -2,6 +2,9 @@ import fs from "fs";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { HeliumConfig } from "../../src/server/config";
+import { getSecurityHeaders } from "../../src/server/prodServer";
+
 // Note: prodServer.ts is a highly integrated module that creates HTTP and WebSocket servers.
 // Full integration testing would require complex mocking that can become fragile.
 // Instead, we test the configuration and internal helper logic via the modules it uses.
@@ -243,6 +246,48 @@ describe("prodServer", () => {
             const acceptEncoding = "deflate";
             const priority = acceptEncoding.includes("br") ? "br" : acceptEncoding.includes("gzip") ? "gzip" : "deflate";
             expect(priority).toBe("deflate");
+        });
+    });
+
+    describe("security headers configuration", () => {
+        it("should include default security headers by default", () => {
+            const headers = getSecurityHeaders({});
+
+            expect(headers["X-Content-Type-Options"]).toBe("nosniff");
+            expect(headers["X-Frame-Options"]).toBe("DENY");
+            expect(headers["X-XSS-Protection"]).toBe("0");
+            expect(headers["Referrer-Policy"]).toBe("strict-origin-when-cross-origin");
+            expect(headers["Permissions-Policy"]).toBe("camera=(), microphone=(), geolocation=()");
+            expect(headers["Strict-Transport-Security"]).toBe("max-age=31536000; includeSubDomains");
+        });
+
+        it("should allow full manual control when defaultHeaders is false", () => {
+            const config: HeliumConfig = {
+                security: {
+                    defaultHeaders: false,
+                },
+            };
+
+            const headers = getSecurityHeaders(config);
+            expect(headers).toEqual({});
+        });
+
+        it("should override and remove headers using headerOverrides", () => {
+            const config: HeliumConfig = {
+                security: {
+                    headerOverrides: {
+                        "X-Frame-Options": "SAMEORIGIN",
+                        "Permissions-Policy": null,
+                        "X-Custom-Security": "enabled",
+                    },
+                },
+            };
+
+            const headers = getSecurityHeaders(config);
+
+            expect(headers["X-Frame-Options"]).toBe("SAMEORIGIN");
+            expect(headers["Permissions-Policy"]).toBeNull();
+            expect(headers["X-Custom-Security"]).toBe("enabled");
         });
     });
 });
