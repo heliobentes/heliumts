@@ -102,7 +102,45 @@ The handler receives two arguments:
 | `query`   | `Record<string, string>`                          | URL query parameters        |
 | `params`  | `Record<string, string \| string[]>`              | Dynamic route parameters    |
 
-The function can return `null`, `undefined`, or a plain object. The returned object is merged with the component's props.
+The function can return `null`, `undefined`, a plain object, or a redirect result.
+
+### Redirects from SSR
+
+You can redirect directly from `getServerSideProps`:
+
+```ts
+import type { GetServerSideProps } from "heliumts/server";
+
+export const getServerSideProps: GetServerSideProps = async (req, ctx) => {
+    const accountStatus = await billing.getStatus(ctx.req.headers.authorization);
+
+    if (accountStatus === "overdue") {
+        return {
+            redirect: {
+                destination: "/billing/overdue",
+                statusCode: 307,
+                replace: true,
+            },
+        };
+    }
+
+    return { accountStatus };
+};
+```
+
+Redirect options:
+
+| Field         | Type                          | Description                                            |
+| ------------- | ----------------------------- | ------------------------------------------------------ |
+| `destination` | `string`                      | Target URL/path (required)                             |
+| `statusCode`  | `301 \| 302 \| 303 \| 307 \| 308` | Optional HTTP status for server redirects              |
+| `permanent`   | `boolean`                     | Shortcut for defaulting to `308` when no status is set |
+| `replace`     | `boolean`                     | Client-side navigation history behavior (default `true`) |
+
+Behavior:
+
+- First page load (server-rendered HTML): Helium sends an HTTP redirect with `Location`.
+- Client-side navigation (`/__helium__/page-props`): Helium performs a client redirect using the same destination.
 
 ## Layouts with SSR
 

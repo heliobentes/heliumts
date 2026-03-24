@@ -4,7 +4,7 @@ import React from "react";
 import ReactDOMServer from "react-dom/server";
 
 import type { HeliumContext } from "./context.js";
-import type { GetServerSideProps, ServerSidePropsRequest } from "./defineServerSideProps.js";
+import type { GetServerSideProps, ServerSidePropsRequest, ServerSidePropsResult, ServerSideRedirect, ServerSideRedirectResult } from "./defineServerSideProps.js";
 
 export type { GetServerSideProps, ServerSidePropsRequest };
 
@@ -25,6 +25,16 @@ type SSRRouterSnapshot = {
     params: Record<string, string | string[]>;
     search: string;
 };
+
+export interface SSRRedirectResolved {
+    destination: string;
+    statusCode: 301 | 302 | 303 | 307 | 308;
+    replace: boolean;
+}
+
+export type SSRPropsResolution = { kind: "props"; props: Record<string, unknown> } | { kind: "redirect"; redirect: SSRRedirectResolved };
+
+type RenderSSRHTMLResult = { html: string; pageProps: Record<string, unknown> } | { redirect: SSRRedirectResolved };
 
 type SSRGlobalState = typeof globalThis & {
     __HELIUM_SSR_ROUTER__?: SSRRouterSnapshot;
@@ -123,6 +133,60 @@ function parseQuery(inputUrl: string): Record<string, string> {
     return query;
 }
 
+function isServerSideRedirectResult(value: ServerSidePropsResult): value is ServerSideRedirectResult {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return false;
+    }
+
+    const maybeRedirect = (value as { redirect?: unknown }).redirect;
+    if (!maybeRedirect || typeof maybeRedirect !== "object" || Array.isArray(maybeRedirect)) {
+        return false;
+    }
+
+    const destination = (maybeRedirect as { destination?: unknown }).destination;
+    return typeof destination === "string" && destination.length > 0;
+}
+
+function normalizeRedirect(redirect: ServerSideRedirect): SSRRedirectResolved {
+    const allowedStatusCodes = new Set<301 | 302 | 303 | 307 | 308>([301, 302, 303, 307, 308]);
+    const statusCode = redirect.statusCode && allowedStatusCodes.has(redirect.statusCode) ? redirect.statusCode : redirect.permanent ? 308 : 307;
+
+    return {
+        destination: redirect.destination,
+        statusCode,
+        replace: redirect.replace ?? true,
+    };
+}
+
+export async function resolveServerSideProps(args: {
+    req: IncomingMessage;
+    pathname: string;
+    params: Record<string, string | string[]>;
+    page: SSRPageDef;
+    ctx: HeliumContext;
+}): Promise<SSRPropsResolution> {
+    const { req, pathname, params, page, ctx } = args;
+
+    if (!page.getServerSideProps) {
+        return { kind: "props", props: {} };
+    }
+
+    const request = createServerSidePropsRequest(req, pathname, params);
+    const result = await page.getServerSideProps(request, ctx);
+
+    if (isServerSideRedirectResult(result)) {
+        return {
+            kind: "redirect",
+            redirect: normalizeRedirect(result.redirect),
+        };
+    }
+
+    return {
+        kind: "props",
+        props: result ?? {},
+    };
+}
+
 export function createServerSidePropsRequest(req: IncomingMessage, pathname: string, params: Record<string, string | string[]>): ServerSidePropsRequest {
     const method = req.method || "GET";
     const headers = headersToRecord(req.headers);
@@ -146,15 +210,22 @@ export async function renderSSRHTML(args: {
     req: IncomingMessage;
     ctx: HeliumContext;
     loadAppShell?: (() => Promise<ComponentType<{ Component: ComponentType<Record<string, unknown>>; pageProps: Record<string, unknown>; children?: React.ReactNode }>>) | null;
-}): Promise<{ html: string; pageProps: Record<string, unknown> }> {
+}): Promise<RenderSSRHTMLResult> {
     const { htmlTemplate, pathname, search, params, page, req, ctx, loadAppShell = null } = args;
 
-    let ssrProps: Record<string, unknown> = {};
-    if (page.getServerSideProps) {
-        const request = createServerSidePropsRequest(req, pathname, params);
-        const result = await page.getServerSideProps(request, ctx);
-        ssrProps = result ?? {};
+    const ssrResult = await resolveServerSideProps({
+        req,
+        pathname,
+        params,
+        page,
+        ctx,
+    });
+
+    if (ssrResult.kind === "redirect") {
+        return { redirect: ssrResult.redirect };
     }
+
+    const ssrProps = ssrResult.props;
 
     const PageComponent = await page.loadComponent();
     const layouts = await page.loadLayouts();

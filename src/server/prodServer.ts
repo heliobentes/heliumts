@@ -23,7 +23,7 @@ import { RpcRegistry } from "./rpcRegistry.js";
 import { generateConnectionToken, initializeSecurity, verifyConnectionToken } from "./security.js";
 import { SEOMetadataRouter } from "./seoMetadataRouter.js";
 import { prepareForMsgpack } from "./serializer.js";
-import { createServerSidePropsRequest, matchSSRPage, renderSSRHTML, SSRPageDef } from "./ssr.js";
+import { matchSSRPage, renderSSRHTML, resolveServerSideProps, SSRPageDef } from "./ssr.js";
 
 const gzipAsync = promisify(gzip);
 const deflateAsync = promisify(deflate);
@@ -155,13 +155,22 @@ export function startProdServer(options: ProdServerOptions) {
             };
 
             try {
-                let result: Record<string, unknown> | null = {};
-                if (ssrMatch.page.getServerSideProps) {
-                    const request = createServerSidePropsRequest(req, targetPathname, ssrMatch.params);
-                    result = (await ssrMatch.page.getServerSideProps(request, httpCtx)) ?? {};
+                const ssrResult = await resolveServerSideProps({
+                    req,
+                    pathname: targetPathname,
+                    params: ssrMatch.params,
+                    page: ssrMatch.page,
+                    ctx: httpCtx,
+                });
+
+                if (ssrResult.kind === "redirect") {
+                    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+                    res.end(JSON.stringify({ ssr: true, redirect: ssrResult.redirect }));
+                    return;
                 }
+
                 res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-                res.end(JSON.stringify({ ssr: true, props: result ?? {} }));
+                res.end(JSON.stringify({ ssr: true, props: ssrResult.props }));
             } catch (error) {
                 log("error", "Failed to resolve SSR page props:", error);
                 res.writeHead(500, { "Content-Type": "application/json", "Cache-Control": "no-store" });
@@ -393,6 +402,16 @@ export function startProdServer(options: ProdServerOptions) {
                             ctx: httpCtx,
                             loadAppShell: appShell,
                         });
+
+                        if ("redirect" in rendered) {
+                            res.writeHead(rendered.redirect.statusCode, {
+                                Location: rendered.redirect.destination,
+                                "Cache-Control": "no-store",
+                            });
+                            res.end();
+                            return;
+                        }
+
                         html = rendered.html;
                     } catch (error) {
                         const message = error instanceof Error ? error.message : String(error);

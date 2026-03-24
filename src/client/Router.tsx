@@ -12,6 +12,25 @@ type HeliumSSRBootstrap = {
     props: Record<string, unknown>;
 };
 
+type SSRRedirectPayload = {
+    destination: string;
+    statusCode?: 301 | 302 | 303 | 307 | 308;
+    replace?: boolean;
+};
+
+type SSRPagePropsPayload =
+    | {
+          kind: "props";
+          props: Record<string, unknown>;
+      }
+    | {
+          kind: "redirect";
+          redirect: SSRRedirectPayload;
+      }
+    | {
+          kind: "none";
+      };
+
 function getInitialSSRBootstrap(): HeliumSSRBootstrap | null {
     if (typeof window === "undefined") {
         return null;
@@ -29,7 +48,7 @@ function getInitialSSRBootstrap(): HeliumSSRBootstrap | null {
     return payload;
 }
 
-async function fetchSSRPageProps(path: string): Promise<Record<string, unknown> | null> {
+async function fetchSSRPageProps(path: string): Promise<SSRPagePropsPayload> {
     try {
         const response = await fetch(`/__helium__/page-props?path=${encodeURIComponent(path)}`, {
             method: "GET",
@@ -39,21 +58,36 @@ async function fetchSSRPageProps(path: string): Promise<Record<string, unknown> 
         });
 
         if (!response.ok) {
-            return null;
+            return { kind: "none" };
         }
 
         const payload = (await response.json()) as {
             ssr?: boolean;
             props?: Record<string, unknown> | null;
+            redirect?: SSRRedirectPayload;
         };
 
-        if (!payload.ssr || !payload.props) {
-            return null;
+        if (!payload.ssr) {
+            return { kind: "none" };
         }
 
-        return payload.props;
+        if (payload.redirect && typeof payload.redirect.destination === "string" && payload.redirect.destination.length > 0) {
+            return {
+                kind: "redirect",
+                redirect: payload.redirect,
+            };
+        }
+
+        if (!payload.props) {
+            return { kind: "none" };
+        }
+
+        return {
+            kind: "props",
+            props: payload.props,
+        };
     } catch {
-        return null;
+        return { kind: "none" };
     }
 }
 
@@ -580,12 +614,32 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
         let cancelled = false;
 
         const load = async () => {
-            const props = await fetchSSRPageProps(targetPath);
+            const ssrPayload = await fetchSSRPageProps(targetPath);
             if (cancelled) {
                 return;
             }
 
-            setRuntimeSSRProps(props ?? {});
+            if (ssrPayload.kind === "redirect") {
+                const destination = ssrPayload.redirect.destination;
+
+                if (isExternalUrl(destination)) {
+                    window.location.assign(destination);
+                    return;
+                }
+
+                navigate(destination, {
+                    replace: ssrPayload.redirect.replace ?? true,
+                    scrollToTop: true,
+                });
+                return;
+            }
+
+            if (ssrPayload.kind === "props") {
+                setRuntimeSSRProps(ssrPayload.props);
+                return;
+            }
+
+            setRuntimeSSRProps({});
         };
 
         void load();

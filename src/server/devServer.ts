@@ -25,7 +25,7 @@ import { RpcRegistry } from "./rpcRegistry.js";
 import { initializeSecurity, verifyConnectionToken } from "./security.js";
 import { SEOMetadataRouter } from "./seoMetadataRouter.js";
 import { prepareForMsgpack } from "./serializer.js";
-import { createServerSidePropsRequest, matchSSRPage, renderSSRHTML, SSRPageDef } from "./ssr.js";
+import { matchSSRPage, renderSSRHTML, resolveServerSideProps, SSRPageDef } from "./ssr.js";
 
 const gzipAsync = promisify(gzip);
 const deflateAsync = promisify(deflate);
@@ -338,13 +338,22 @@ export function attachToDevServer(
             };
 
             try {
-                let result: Record<string, unknown> | null = {};
-                if (ssrMatch.page.getServerSideProps) {
-                    const request = createServerSidePropsRequest(req, targetPathname, ssrMatch.params);
-                    result = (await ssrMatch.page.getServerSideProps(request, httpCtx)) ?? {};
+                const ssrResult = await resolveServerSideProps({
+                    req,
+                    pathname: targetPathname,
+                    params: ssrMatch.params,
+                    page: ssrMatch.page,
+                    ctx: httpCtx,
+                });
+
+                if (ssrResult.kind === "redirect") {
+                    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+                    res.end(JSON.stringify({ ssr: true, redirect: ssrResult.redirect }));
+                    return;
                 }
+
                 res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-                res.end(JSON.stringify({ ssr: true, props: result ?? {} }));
+                res.end(JSON.stringify({ ssr: true, props: ssrResult.props }));
             } catch (error) {
                 log("error", "Failed to resolve SSR page props:", error);
                 res.writeHead(500, { "Content-Type": "application/json", "Cache-Control": "no-store" });
@@ -497,6 +506,28 @@ export function attachToDevServer(
             const originalEnd = res.end.bind(res);
             const bufferedChunks: Buffer[] = [];
             let capturedContentType = "";
+            let pendingWriteHead:
+                | {
+                      statusCode: number;
+                      statusMessageOrHeaders?: string | Record<string, string | number | readonly string[]>;
+                      headers?: Record<string, string | number | readonly string[]>;
+                  }
+                | undefined;
+
+            const flushPendingWriteHead = () => {
+                if (!pendingWriteHead) {
+                    return;
+                }
+
+                const { statusCode, statusMessageOrHeaders, headers } = pendingWriteHead;
+
+                if (typeof statusMessageOrHeaders === "string") {
+                    originalWriteHead(statusCode, statusMessageOrHeaders, headers);
+                    return;
+                }
+
+                originalWriteHead(statusCode, statusMessageOrHeaders);
+            };
 
             res.writeHead = (statusCode: number, statusMessageOrHeaders?: any, headers?: any) => {
                 const providedHeaders = typeof statusMessageOrHeaders === "string" ? headers : statusMessageOrHeaders;
@@ -517,7 +548,13 @@ export function attachToDevServer(
                     }
                 }
 
-                return originalWriteHead(statusCode, statusMessageOrHeaders, headers);
+                pendingWriteHead = {
+                    statusCode,
+                    statusMessageOrHeaders,
+                    headers,
+                };
+
+                return res;
             };
 
             res.write = (chunk: any, encoding?: BufferEncoding | (() => void), callback?: () => void) => {
@@ -556,6 +593,7 @@ export function attachToDevServer(
                     res.end = originalEnd;
 
                     if (!(contentType.includes("text/html") || looksLikeHtml)) {
+                        flushPendingWriteHead();
                         originalEnd(bodyBuffer);
                         return;
                     }
@@ -585,6 +623,16 @@ export function attachToDevServer(
                                 ctx: httpCtx,
                                 loadAppShell: currentAppShell,
                             });
+
+                            if ("redirect" in rendered) {
+                                originalWriteHead(rendered.redirect.statusCode, {
+                                    Location: rendered.redirect.destination,
+                                    "Cache-Control": "no-store",
+                                });
+                                originalEnd();
+                                return;
+                            }
+
                             html = rendered.html;
                         } catch (error) {
                             const message = error instanceof Error ? error.message : String(error);
@@ -605,6 +653,7 @@ export function attachToDevServer(
                         html = injectSocialMetaIntoHtml(html, devResolvedMetadata);
                     }
 
+                    flushPendingWriteHead();
                     originalEnd(Buffer.from(html, "utf-8"));
                 };
 
