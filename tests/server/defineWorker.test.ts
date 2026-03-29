@@ -150,6 +150,60 @@ describe("defineWorker", () => {
 
             expect(attempts).toBe(3);
         });
+
+        it("should expose abort signal and run returned cleanup on stop", async () => {
+            const cleanup = vi.fn();
+            let signal: AbortSignal | undefined;
+            const worker = defineWorker(
+                (_ctx, lifecycle) => {
+                    signal = lifecycle.signal;
+                    return cleanup;
+                },
+                { name: "cleanupWorker" }
+            );
+
+            const createContext = (): HeliumContext => ({
+                req: { ip: "127.0.0.1", headers: {}, raw: {} as HeliumContext["req"]["raw"] },
+            });
+
+            const instance = await startWorker(worker, createContext);
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(instance.status).toBe("running");
+            expect(signal?.aborted).toBe(false);
+
+            await instance.stop();
+
+            expect(signal?.aborted).toBe(true);
+            expect(cleanup).toHaveBeenCalledTimes(1);
+            expect(getWorkerById("cleanupWorker")).toBeUndefined();
+        });
+
+        it("should await async cleanup when stopping all workers", async () => {
+            let cleanupFinished = false;
+            const worker = defineWorker(
+                () => async () => {
+                    await new Promise((resolve) => setTimeout(resolve, 25));
+                    cleanupFinished = true;
+                },
+                { name: "asyncCleanupWorker" }
+            );
+
+            const createContext = (): HeliumContext => ({
+                req: { ip: "127.0.0.1", headers: {}, raw: {} as HeliumContext["req"]["raw"] },
+            });
+
+            await startWorker(worker, createContext);
+            await vi.advanceTimersByTimeAsync(0);
+
+            const stopPromise = stopAllWorkers();
+            expect(cleanupFinished).toBe(false);
+
+            await vi.advanceTimersByTimeAsync(25);
+            await stopPromise;
+
+            expect(cleanupFinished).toBe(true);
+        });
     });
 
     describe("stopWorker", () => {
@@ -168,6 +222,7 @@ describe("defineWorker", () => {
             await startWorker(worker, createContext);
 
             const result = stopWorker("stoppableWorker");
+            await vi.advanceTimersByTimeAsync(0);
 
             expect(result).toBe(true);
             expect(getWorkerById("stoppableWorker")).toBeUndefined();

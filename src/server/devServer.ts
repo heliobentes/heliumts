@@ -50,6 +50,47 @@ let wss: WebSocketServer | null = null;
 let rateLimiter: RateLimiter | null = null;
 let currentWorkers: WorkerEntry[] = [];
 let cachedDefaultMeta: Awaited<ReturnType<typeof loadDefaultSocialMetaFromHtmlFile>> | undefined;
+let workerReloadPromise: Promise<void> = Promise.resolve();
+
+function createWorkerContext(): HeliumContext {
+    return {
+        req: {
+            ip: "127.0.0.1",
+            headers: {},
+            url: undefined,
+            method: undefined,
+            raw: {} as http.IncomingMessage,
+        },
+    };
+}
+
+function normalizeWorkerName(name: string, worker: HeliumWorkerDef) {
+    if (worker.name !== "anonymous") {
+        return;
+    }
+
+    worker.name = name;
+    worker.__id = name;
+    worker.options.name = name;
+}
+
+async function reloadWorkers(workers: WorkerEntry[]) {
+    await stopAllWorkers();
+
+    for (const { name, worker } of workers) {
+        normalizeWorkerName(name, worker);
+
+        if (!worker.options.autoStart) {
+            continue;
+        }
+
+        startWorker(worker, createWorkerContext).catch((err) => {
+            log("error", `Failed to start worker '${worker.name}':`, err);
+        });
+    }
+
+    currentWorkers = workers;
+}
 
 /**
  * Attaches HeliumTS HTTP handlers and WebSocket RPC server to an existing HTTP server.
@@ -112,62 +153,12 @@ export function attachToDevServer(
     });
     currentSEORouter = seoRouter;
 
-    // Start workers if they changed
-    const workersChanged = workers.length !== currentWorkers.length || workers.some((w, i) => w.name !== currentWorkers[i]?.name || w.worker !== currentWorkers[i]?.worker);
-
-    if (workersChanged && workers.length > 0) {
-        // Stop all existing workers before starting new ones
-        stopAllWorkers().then(() => {
-            // Start new workers
-            for (const { name, worker } of workers) {
-                // Use export name if worker name is anonymous
-                if (worker.name === "anonymous") {
-                    worker.name = name;
-                    worker.__id = name;
-                    worker.options.name = name;
-                }
-                if (worker.options.autoStart) {
-                    const createContext = (): HeliumContext => ({
-                        req: {
-                            ip: "127.0.0.1",
-                            headers: {},
-                            url: undefined,
-                            method: undefined,
-                            raw: {} as http.IncomingMessage,
-                        },
-                    });
-                    startWorker(worker, createContext).catch((err) => {
-                        log("error", `Failed to start worker '${worker.name}':`, err);
-                    });
-                }
-            }
-            currentWorkers = workers;
-        });
-    } else if (currentWorkers.length === 0 && workers.length > 0) {
-        // First time starting workers
-        for (const { name, worker } of workers) {
-            // Use export name if worker name is anonymous
-            if (worker.name === "anonymous") {
-                worker.name = name;
-                worker.__id = name;
-                worker.options.name = name;
-            }
-            if (worker.options.autoStart) {
-                const createContext = (): HeliumContext => ({
-                    req: {
-                        ip: "127.0.0.1",
-                        headers: {},
-                        url: undefined,
-                        method: undefined,
-                        raw: {} as http.IncomingMessage,
-                    },
-                });
-                startWorker(worker, createContext).catch((err) => {
-                    log("error", `Failed to start worker '${worker.name}':`, err);
-                });
-            }
-        }
-        currentWorkers = workers;
+    if (workers.length > 0 || currentWorkers.length > 0) {
+        workerReloadPromise = workerReloadPromise
+            .then(() => reloadWorkers(workers))
+            .catch((error) => {
+                log("error", "Failed to reload workers in dev mode", error);
+            });
     }
 
     // Attach WebSocket server if not already attached

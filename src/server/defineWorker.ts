@@ -1,6 +1,13 @@
 import { log } from "../utils/logger.js";
 import type { HeliumContext } from "./context.js";
 
+export type WorkerCleanup = (() => Promise<void> | void) | void;
+
+export interface WorkerLifecycle {
+    signal: AbortSignal;
+    onCleanup: (cleanup: WorkerCleanup) => void;
+}
+
 export interface WorkerOptions {
     /**
      * The name of the worker, used for logging and identification.
@@ -34,7 +41,7 @@ export interface WorkerOptions {
     autoStart?: boolean;
 }
 
-export type WorkerHandler = (ctx: HeliumContext) => Promise<void> | void;
+export type WorkerHandler = (ctx: HeliumContext, lifecycle: WorkerLifecycle) => Promise<WorkerCleanup> | WorkerCleanup;
 
 export type HeliumWorkerDef = {
     __kind: "worker";
@@ -61,8 +68,64 @@ const runningWorkers = new Map<
         abortController: AbortController;
         promise: Promise<void>;
         instance: WorkerInstance;
+        cleanupHandlers: Array<() => Promise<void> | void>;
+        cleanupPromise: Promise<void> | null;
     }
 >();
+
+function isCleanupHandler(cleanup: WorkerCleanup): cleanup is () => Promise<void> | void {
+    return typeof cleanup === "function";
+}
+
+function registerCleanup(
+    workerState: {
+        cleanupHandlers: Array<() => Promise<void> | void>;
+    },
+    cleanup: WorkerCleanup
+) {
+    if (!isCleanupHandler(cleanup)) {
+        return;
+    }
+
+    workerState.cleanupHandlers.push(cleanup);
+}
+
+async function runWorkerCleanup(
+    name: string,
+    workerState: {
+        cleanupHandlers: Array<() => Promise<void> | void>;
+        cleanupPromise: Promise<void> | null;
+    }
+): Promise<void> {
+    if (workerState.cleanupPromise) {
+        await workerState.cleanupPromise;
+        return;
+    }
+
+    workerState.cleanupPromise = (async () => {
+        const cleanupHandlers = workerState.cleanupHandlers.splice(0).reverse();
+
+        for (const cleanup of cleanupHandlers) {
+            try {
+                await cleanup();
+            } catch (error) {
+                log("error", `Worker '${name}' cleanup failed:`, error);
+            }
+        }
+    })();
+
+    await workerState.cleanupPromise;
+}
+
+function waitForAbort(signal: AbortSignal): Promise<void> {
+    if (signal.aborted) {
+        return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+}
 
 /**
  * Create a Helium background worker definition.
@@ -148,6 +211,13 @@ export async function startWorker(worker: HeliumWorkerDef, createContext: () => 
 
     const abortController = new AbortController();
     let restartCount = 0;
+    const workerState = {
+        abortController,
+        promise: Promise.resolve(),
+        instance: undefined as unknown as WorkerInstance,
+        cleanupHandlers: [] as Array<() => Promise<void> | void>,
+        cleanupPromise: null as Promise<void> | null,
+    };
 
     const instance: WorkerInstance = {
         id: name,
@@ -158,10 +228,12 @@ export async function startWorker(worker: HeliumWorkerDef, createContext: () => 
         stop: async () => {
             abortController.abort();
             instance.status = "stopped";
+            await runWorkerCleanup(name, workerState);
             runningWorkers.delete(name);
             log("info", `Worker '${name}' stopped`);
         },
     };
+    workerState.instance = instance;
 
     const runWorker = async (): Promise<void> => {
         while (!abortController.signal.aborted) {
@@ -171,10 +243,22 @@ export async function startWorker(worker: HeliumWorkerDef, createContext: () => 
                 log("info", `Starting worker '${name}'`);
 
                 const ctx = createContext();
-                await handler(ctx);
+                const lifecycle: WorkerLifecycle = {
+                    signal: abortController.signal,
+                    onCleanup: (cleanup) => {
+                        registerCleanup(workerState, cleanup);
+                    },
+                };
+                const cleanup = await handler(ctx, lifecycle);
+                registerCleanup(workerState, cleanup);
+
+                if (isCleanupHandler(cleanup) && !abortController.signal.aborted) {
+                    await waitForAbort(abortController.signal);
+                }
 
                 // If handler completes normally, exit the loop
                 if (!abortController.signal.aborted) {
+                    await runWorkerCleanup(name, workerState);
                     log("info", `Worker '${name}' completed successfully`);
                     instance.status = "stopped";
                     runningWorkers.delete(name);
@@ -185,6 +269,9 @@ export async function startWorker(worker: HeliumWorkerDef, createContext: () => 
                     // Worker was intentionally stopped
                     break;
                 }
+
+                await runWorkerCleanup(name, workerState);
+                workerState.cleanupPromise = null;
 
                 instance.lastError = error instanceof Error ? error : new Error(String(error));
                 instance.status = "crashed";
@@ -217,12 +304,9 @@ export async function startWorker(worker: HeliumWorkerDef, createContext: () => 
     };
 
     const promise = runWorker();
+    workerState.promise = promise;
 
-    runningWorkers.set(name, {
-        abortController,
-        promise,
-        instance,
-    });
+    runningWorkers.set(name, workerState);
 
     return instance;
 }
@@ -235,8 +319,12 @@ export function stopWorker(name: string): boolean {
     if (worker) {
         worker.abortController.abort();
         worker.instance.status = "stopped";
-        runningWorkers.delete(name);
-        log("info", `Worker '${name}' stopped`);
+        void runWorkerCleanup(name, worker)
+            .catch(() => {})
+            .finally(() => {
+                runningWorkers.delete(name);
+                log("info", `Worker '${name}' stopped`);
+            });
         return true;
     }
     return false;
@@ -251,6 +339,7 @@ export async function stopAllWorkers(): Promise<void> {
         worker.abortController.abort();
         worker.instance.status = "stopped";
     }
+    await Promise.all(workers.map(async (worker) => runWorkerCleanup(worker.instance.name, worker)));
     runningWorkers.clear();
     log("info", `Stopped ${workers.length} worker(s)`);
 }

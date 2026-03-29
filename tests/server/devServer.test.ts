@@ -1,4 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { EventEmitter } from "events";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+afterEach(async () => {
+    const workerModule = await import("../../src/server/defineWorker");
+    await workerModule.stopAllWorkers();
+    vi.restoreAllMocks();
+    vi.resetModules();
+});
 
 // Note: devServer.ts is a highly integrated module that attaches to Vite's dev server.
 // Full integration testing would require complex mocking that can become fragile.
@@ -11,6 +20,63 @@ describe("devServer", () => {
             const mod = await import("../../src/server/devServer");
             expect(mod.attachToDevServer).toBeDefined();
             expect(typeof mod.attachToDevServer).toBe("function");
+        });
+
+        it("should dispose the previous worker before starting the replacement", async () => {
+            vi.useFakeTimers();
+
+            const workerModule = await import("../../src/server/defineWorker");
+            const { defineWorker, getWorkerStatus } = workerModule;
+            const firstCleanup = vi.fn(async () => {
+                await new Promise((resolve) => setTimeout(resolve, 50));
+            });
+            const startEvents: string[] = [];
+            const firstWorker = defineWorker(
+                () => {
+                    startEvents.push("first:start");
+                    return firstCleanup;
+                },
+                { name: "watcher" }
+            );
+            const secondWorker = defineWorker(
+                () => {
+                    startEvents.push("second:start");
+                    return () => undefined;
+                },
+                { name: "watcher" }
+            );
+
+            const server = new EventEmitter() as EventEmitter & {
+                listeners(eventName: string): Function[];
+                removeAllListeners(eventName?: string | symbol): EventEmitter;
+                on(eventName: string | symbol, listener: (...args: any[]) => void): EventEmitter;
+            };
+            server.on("request", () => undefined);
+
+            const flushReloadQueue = async () => {
+                await Promise.resolve();
+                await Promise.resolve();
+                await vi.advanceTimersByTimeAsync(0);
+            };
+
+            const mod = await import("../../src/server/devServer");
+
+            mod.attachToDevServer(server as any, () => undefined, {}, [{ name: "watcher", worker: firstWorker }]);
+            await flushReloadQueue();
+
+            mod.attachToDevServer(server as any, () => undefined, {}, [{ name: "watcher", worker: secondWorker }]);
+            await flushReloadQueue();
+
+            expect(startEvents).toEqual(["first:start"]);
+
+            await vi.advanceTimersByTimeAsync(50);
+            await flushReloadQueue();
+
+            expect(firstCleanup).toHaveBeenCalledTimes(1);
+            expect(startEvents).toEqual(["first:start", "second:start"]);
+            expect(getWorkerStatus()).toHaveLength(1);
+
+            vi.useRealTimers();
         });
     });
 

@@ -83,7 +83,27 @@ interface WorkerOptions {
      */
     autoStart?: boolean;
 }
+
+interface WorkerLifecycle {
+    signal: AbortSignal;
+    onCleanup(cleanup: () => Promise<void> | void): void;
+}
 ```
+
+The worker handler receives `ctx` as the first argument and a lifecycle object as the second:
+
+```typescript
+type WorkerHandler = (
+    ctx: HeliumContext,
+    lifecycle: WorkerLifecycle
+) => Promise<(() => Promise<void> | void) | void> | (() => Promise<void> | void) | void;
+```
+
+Use the lifecycle object for long-running resources:
+
+- `signal` is aborted when Helium stops the worker during shutdown or hot reload.
+- `onCleanup(...)` registers teardown logic for change streams, intervals, event listeners, queue consumers, and similar resources.
+- Returning a cleanup function is shorthand for workers that start background resources and should stay alive until Helium aborts them.
 
 ### Example with Options
 
@@ -91,8 +111,11 @@ interface WorkerOptions {
 import { defineWorker } from "heliumts/server";
 
 export const dataSync = defineWorker(
-    async (ctx) => {
+    async (ctx, { signal }) => {
         while (true) {
+            if (signal.aborted) {
+                break;
+            }
             await syncDataFromExternalAPI();
             await new Promise((resolve) => setTimeout(resolve, 30000)); // Every 30 seconds
         }
@@ -116,7 +139,7 @@ import { Queue, Worker } from "bullmq";
 import { redis } from "../lib/redis";
 
 export const emailQueueConsumer = defineWorker(
-    async (ctx) => {
+    async (ctx, { onCleanup }) => {
         const worker = new Worker(
             "email-queue",
             async (job) => {
@@ -133,6 +156,8 @@ export const emailQueueConsumer = defineWorker(
         worker.on("failed", (job, err) => {
             console.error(`Email job ${job?.id} failed:`, err);
         });
+
+        onCleanup(() => worker.close());
 
         // Keep the worker running
         await new Promise(() => {});
@@ -173,7 +198,7 @@ export const dailyCleanup = defineWorker(
 import { defineWorker } from "heliumts/server";
 
 export const priceSync = defineWorker(
-    async (ctx) => {
+    (ctx) => {
         const ws = new WebSocket("wss://api.exchange.com/prices");
 
         ws.on("message", async (data) => {
@@ -186,8 +211,7 @@ export const priceSync = defineWorker(
             throw new Error("WebSocket connection closed");
         });
 
-        // Keep the connection alive
-        await new Promise(() => {});
+        return () => ws.close();
     },
     {
         name: "priceSync",
@@ -196,6 +220,29 @@ export const priceSync = defineWorker(
     }
 );
 ```
+
+### MongoDB Change Stream Cleanup
+
+```typescript
+import { defineWorker } from "heliumts/server";
+
+export const orderWatcher = defineWorker(
+    (_ctx, { onCleanup }) => {
+        const stream = OrderModel.watch();
+
+        stream.on("change", async (change) => {
+            await enqueueOrderSync(change.documentKey?._id?.toString());
+        });
+
+        onCleanup(async () => {
+            await stream.close();
+        });
+    },
+    { name: "orderWatcher" }
+);
+```
+
+In `helium dev`, Helium runs cleanup before starting the replacement worker after a hot reload, so only one watcher instance remains active.
 
 ### Cache Warmer
 
