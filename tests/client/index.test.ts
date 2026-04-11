@@ -42,6 +42,16 @@ describe("client index exports", () => {
         expect(clientModule.getRpcTransport).toBeDefined();
     });
 
+    it("should export getPublicEnv", async () => {
+        const clientModule = await import("../../src/client/index");
+        expect(clientModule.getPublicEnv).toBeDefined();
+    });
+
+    it("should export getPublicEnvValue", async () => {
+        const clientModule = await import("../../src/client/index");
+        expect(clientModule.getPublicEnvValue).toBeDefined();
+    });
+
     it("should export isAutoHttpOnMobileEnabled", async () => {
         const clientModule = await import("../../src/client/index");
         expect(clientModule.isAutoHttpOnMobileEnabled).toBeDefined();

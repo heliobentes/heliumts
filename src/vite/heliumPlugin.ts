@@ -554,6 +554,14 @@ export function useFetch() {
 
 export class RpcError extends Error {}
 
+export function getPublicEnv() {
+    return {};
+}
+
+export function getPublicEnvValue() {
+    return undefined;
+}
+
 export function getRpcTransport() {
     return 'websocket';
 }
