@@ -486,7 +486,6 @@ export function attachToDevServer(
             path.extname(pathname) === "" &&
             !pathname.startsWith("/api") &&
             !pathname.startsWith("/webhooks") &&
-            !pathname.startsWith("/auth") &&
             !pathname.startsWith("/@") &&
             !pathname.startsWith("/__helium__");
         const ssrMatch = isEligibleHtmlRequest ? matchSSRPage(pathname, currentSSRPages) : null;

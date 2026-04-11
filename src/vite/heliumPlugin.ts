@@ -230,7 +230,6 @@ export default function helium(): Plugin {
                     path.extname(cleanUrl) !== "" ||
                     cleanUrl.startsWith("/api") ||
                     cleanUrl.startsWith("/webhooks") ||
-                    cleanUrl.startsWith("/auth") ||
                     cleanUrl.startsWith("/@") ||
                     cleanUrl.startsWith("/__helium__")
                 ) {

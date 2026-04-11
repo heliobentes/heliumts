@@ -333,7 +333,7 @@ export function startProdServer(options: ProdServerOptions) {
 
             // If file doesn't exist or is a directory, fall back to index.html for SPA routing
             const isFileOrExists = !is404 && filePath && fs.existsSync(filePath) && fs.statSync(filePath).isFile();
-            if (!isFileOrExists && !url.startsWith("/api") && !url.startsWith("/webhooks") && !url.startsWith("/auth")) {
+            if (!isFileOrExists && !url.startsWith("/api") && !url.startsWith("/webhooks")) {
                 // For static asset requests (files with known extensions), return 404 instead
                 // of falling back to index.html. Serving HTML for a .js/.css request causes
                 // MIME type errors in the browser (e.g., "Expected a JavaScript module script
