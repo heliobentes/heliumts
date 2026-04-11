@@ -344,6 +344,49 @@ describe("heliumPlugin", () => {
         });
     });
 
+    describe("runtime env transform", () => {
+        function transformEnv(code: string): string {
+            return code.replace(
+                /\bimport\.meta\.env\b(?!\.)/g,
+                "({...import.meta.env,...(typeof window !== 'undefined' && window.__HELIUM_PUBLIC_ENV__ || {})})"
+            );
+        }
+
+        it("should replace bare import.meta.env with merged spread", () => {
+            const code = 'console.log("env", import.meta.env);';
+            const result = transformEnv(code);
+            expect(result).toContain("window.__HELIUM_PUBLIC_ENV__");
+            expect(result).toContain("{...import.meta.env,");
+        });
+
+        it("should NOT replace import.meta.env.SPECIFIC_KEY (property access)", () => {
+            const code = 'const key = import.meta.env.HELIUM_PUBLIC_API_KEY;';
+            const result = transformEnv(code);
+            expect(result).toBe(code); // unchanged
+        });
+
+        it("should replace bare import.meta.env but not property accesses in mixed code", () => {
+            const code = 'const env = import.meta.env; const key = import.meta.env.HELIUM_PUBLIC_X;';
+            const result = transformEnv(code);
+            expect(result).toContain("({...import.meta.env,...(typeof window !== 'undefined' && window.__HELIUM_PUBLIC_ENV__ || {})})");
+            // The property access should remain intact
+            expect(result).toContain("import.meta.env.HELIUM_PUBLIC_X");
+        });
+
+        it("should handle multiple bare import.meta.env references", () => {
+            const code = 'const a = import.meta.env; const b = import.meta.env;';
+            const result = transformEnv(code);
+            const matches = result.match(/window\.__HELIUM_PUBLIC_ENV__/g);
+            expect(matches?.length).toBe(2);
+        });
+
+        it("should not transform code without import.meta.env", () => {
+            const code = 'const x = 42;';
+            const result = transformEnv(code);
+            expect(result).toBe(code);
+        });
+    });
+
     describe("touchTsConfig", () => {
         afterEach(() => {
             vi.restoreAllMocks();

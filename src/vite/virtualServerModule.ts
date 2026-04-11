@@ -192,13 +192,6 @@ import { createRoot, hydrateRoot } from 'react-dom/client';
 import { AppRouter } from 'heliumts/client';
 import App from '/src/App';
 
-// Merge runtime public env vars injected by the production server.
-// This ensures platform env vars (Render, DigitalOcean Apps, etc.) are
-// available via import.meta.env even if they weren't present at build time.
-if (typeof window !== 'undefined' && window.__HELIUM_PUBLIC_ENV__) {
-    Object.assign(import.meta.env, window.__HELIUM_PUBLIC_ENV__);
-}
-
 const rootEl = document.getElementById('root');
 if (!rootEl) {
     throw new Error('Root element not found. Helium requires a <div id="root"></div> in your HTML.');

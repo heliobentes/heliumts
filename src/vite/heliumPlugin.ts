@@ -184,6 +184,29 @@ export default function helium(): Plugin {
             if (!options?.ssr && /\.server\.(ts|js|tsx|jsx|mts|mjs)$/.test(id)) {
                 return { code: "export default null;", map: null };
             }
+
+            // For client-side code, replace bare `import.meta.env` object references
+            // with a runtime-merged version that includes window.__HELIUM_PUBLIC_ENV__.
+            // This is needed because Vite compiles each `import.meta.env` into a separate
+            // object literal per module. The envPrefix approach handles build-time vars,
+            // but platform deployments (Render, DO Apps) may set env vars only at runtime.
+            // This transform ensures ALL import.meta.env copies include runtime env vars.
+            if (!options?.ssr && code.includes("import.meta.env")) {
+                // Skip virtual modules and node_modules (except .heliumts)
+                if (id.startsWith("\0") || (id.includes("node_modules") && !id.includes(".heliumts"))) {
+                    return;
+                }
+
+                // Replace `import.meta.env` (the full object, NOT property access like import.meta.env.X)
+                // with a spread that merges runtime env vars.
+                // We use a negative lookahead to avoid replacing import.meta.env.SOME_PROP
+                // which are handled by Vite's define/envPrefix.
+                const transformed = code.replace(/\bimport\.meta\.env\b(?!\.)/g, "({...import.meta.env,...(typeof window !== 'undefined' && window.__HELIUM_PUBLIC_ENV__ || {})})");
+
+                if (transformed !== code) {
+                    return { code: transformed, map: null };
+                }
+            }
         },
         load(id) {
             if (id === RESOLVED_VIRTUAL_SSR_CLIENT_MODULE_ID) {
