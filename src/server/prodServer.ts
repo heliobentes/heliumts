@@ -11,6 +11,7 @@ import { brotliCompress, deflate, gzip } from "zlib";
 import { SEO_METADATA_RPC_METHOD } from "../runtime/internalMethods.js";
 import { extractClientIP } from "../utils/ipExtractor.js";
 import { log } from "../utils/logger.js";
+import { injectPublicEnvIntoHtml } from "../utils/envLoader.js";
 import type { HeliumConfig } from "./config.js";
 import { getRpcConfig, getRpcSecurityConfig, getTrustProxyDepth } from "./config.js";
 import type { HeliumContext } from "./context.js";
@@ -431,6 +432,9 @@ export function startProdServer(options: ProdServerOptions) {
                 if (metadata) {
                     html = injectSocialMetaIntoHtml(html, metadata);
                 }
+
+                // Inject runtime public env vars (for platform deployments like Render, DO Apps)
+                html = injectPublicEnvIntoHtml(html);
 
                 responseBody = Buffer.from(html, "utf-8");
             }
