@@ -4,7 +4,7 @@ import type { Plugin } from "vite";
 
 import { clearConfigCache, getRpcClientConfig, loadConfig } from "../server/config.js";
 import { attachToDevServer } from "../server/devServer.js";
-import { createEnvDefines, injectEnvToProcess, loadEnvFiles } from "../utils/envLoader.js";
+import { injectEnvToProcess, loadEnvFiles } from "../utils/envLoader.js";
 import { log } from "../utils/logger.js";
 import {
     RESOLVED_VIRTUAL_CLIENT_MODULE_ID,
@@ -21,11 +21,8 @@ import { generateClientModule, generateEntryModule, generateServerManifest, gene
 export default function helium(): Plugin {
     let root = process.cwd();
     const serverDir = normalizeToPosix(SERVER_DIR);
-    const VIRTUAL_SSR_CLIENT_MODULE_ID = "heliumts/__ssr_client";
     const RESOLVED_VIRTUAL_SSR_CLIENT_MODULE_ID = "\0heliumts:ssr-client";
-    const VIRTUAL_SSR_TRANSITIONS_MODULE_ID = "heliumts/__ssr_transitions";
     const RESOLVED_VIRTUAL_SSR_TRANSITIONS_MODULE_ID = "\0heliumts:ssr-transitions";
-    const VIRTUAL_SSR_PREFETCH_MODULE_ID = "heliumts/__ssr_prefetch";
     const RESOLVED_VIRTUAL_SSR_PREFETCH_MODULE_ID = "\0heliumts:ssr-prefetch";
 
     return {
@@ -74,30 +71,17 @@ export default function helium(): Plugin {
             const mode = config.mode || "development";
             const envVars = loadEnvFiles({ root, mode });
 
-            // Inject env vars into process.env BEFORE Vite's own env resolution.
-            // This ensures platform-set env vars (Render, DigitalOcean Apps, etc.)
-            // are picked up by Vite's envPrefix matching and included in all
-            // import.meta.env object references throughout the bundle.
+            // Inject env vars into process.env so server-side code can access them
+            // consistently in both development and production.
             injectEnvToProcess(envVars);
-
-            // Create defines for client-side env variables
-            const envDefines = createEnvDefines(envVars);
 
             // Load helium config to get client-side RPC transport settings
             const heliumConfig = await loadConfig(root);
             const rpcClientConfig = getRpcClientConfig(heliumConfig);
 
-            // Merge user-configured envPrefix with HELIUM_PUBLIC_
-            const userPrefix = config.envPrefix ?? "VITE_";
-            const prefixArray = Array.isArray(userPrefix) ? userPrefix : [userPrefix];
-            if (!prefixArray.includes("HELIUM_PUBLIC_")) {
-                prefixArray.push("HELIUM_PUBLIC_");
-            }
-
             // Provide default index.html if none exists
             return {
                 appType: "spa",
-                envPrefix: prefixArray,
                 optimizeDeps: {
                     include: ["react-dom/client"],
                     // Exclude helium from pre-bundling since it's the framework itself
@@ -136,7 +120,6 @@ export default function helium(): Plugin {
                     },
                 },
                 define: {
-                    ...envDefines,
                     __HELIUM_DEV__: JSON.stringify(mode !== "production"),
                     __HELIUM_RPC_TRANSPORT__: JSON.stringify(rpcClientConfig.transport),
                     __HELIUM_RPC_AUTO_HTTP_ON_MOBILE__: JSON.stringify(rpcClientConfig.autoHttpOnMobile),
@@ -183,29 +166,6 @@ export default function helium(): Plugin {
             // These files contain server-only logic (e.g. DB queries) and must never run in the browser.
             if (!options?.ssr && /\.server\.(ts|js|tsx|jsx|mts|mjs)$/.test(id)) {
                 return { code: "export default null;", map: null };
-            }
-
-            // For client-side code, replace bare `import.meta.env` object references
-            // with a runtime-merged version that includes window.__HELIUM_PUBLIC_ENV__.
-            // This is needed because Vite compiles each `import.meta.env` into a separate
-            // object literal per module. The envPrefix approach handles build-time vars,
-            // but platform deployments (Render, DO Apps) may set env vars only at runtime.
-            // This transform ensures ALL import.meta.env copies include runtime env vars.
-            if (!options?.ssr && code.includes("import.meta.env")) {
-                // Skip virtual modules and node_modules (except .heliumts)
-                if (id.startsWith("\0") || (id.includes("node_modules") && !id.includes(".heliumts"))) {
-                    return;
-                }
-
-                // Replace `import.meta.env` (the full object, NOT property access like import.meta.env.X)
-                // with a spread that merges runtime env vars.
-                // We use a negative lookahead to avoid replacing import.meta.env.SOME_PROP
-                // which are handled by Vite's define/envPrefix.
-                const transformed = code.replace(/\bimport\.meta\.env\b(?!\.)/g, "({...import.meta.env,...(typeof window !== 'undefined' && window.__HELIUM_PUBLIC_ENV__ || {})})");
-
-                if (transformed !== code) {
-                    return { code: transformed, map: null };
-                }
             }
         },
         load(id) {

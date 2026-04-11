@@ -150,28 +150,6 @@ describe("heliumPlugin", () => {
     });
 
     describe("environment variables integration", () => {
-        it("should create client-side env defines", () => {
-            function createEnvDefines(env: Record<string, string>): Record<string, string> {
-                const defines: Record<string, string> = {};
-                for (const [key, value] of Object.entries(env)) {
-                    if (key.startsWith("HELIUM_PUBLIC_")) {
-                        defines[`import.meta.env.${key}`] = JSON.stringify(value);
-                    }
-                }
-                return defines;
-            }
-
-            const env = {
-                HELIUM_PUBLIC_API_URL: "https://api.example.com",
-                SECRET_KEY: "secret",
-            };
-
-            const defines = createEnvDefines(env);
-
-            expect(defines["import.meta.env.HELIUM_PUBLIC_API_URL"]).toBe('"https://api.example.com"');
-            expect(defines["import.meta.env.SECRET_KEY"]).toBeUndefined();
-        });
-
         it("should include RPC transport defines", () => {
             const rpcDefines = {
                 __HELIUM_DEV__: JSON.stringify(true),
@@ -297,93 +275,6 @@ describe("heliumPlugin", () => {
             expect(shouldSkipMiddleware("/")).toBe(false);
             expect(shouldSkipMiddleware("/about")).toBe(false);
             expect(shouldSkipMiddleware("/docs/guides/auth")).toBe(false);
-        });
-    });
-
-    describe("envPrefix configuration", () => {
-        it("should include HELIUM_PUBLIC_ in envPrefix array", () => {
-            function resolveEnvPrefix(userPrefix?: string | string[]): string[] {
-                const base = userPrefix ?? "VITE_";
-                const prefixArray = Array.isArray(base) ? [...base] : [base];
-                if (!prefixArray.includes("HELIUM_PUBLIC_")) {
-                    prefixArray.push("HELIUM_PUBLIC_");
-                }
-                return prefixArray;
-            }
-
-            expect(resolveEnvPrefix()).toContain("HELIUM_PUBLIC_");
-            expect(resolveEnvPrefix()).toContain("VITE_");
-        });
-
-        it("should preserve user-configured envPrefix", () => {
-            function resolveEnvPrefix(userPrefix?: string | string[]): string[] {
-                const base = userPrefix ?? "VITE_";
-                const prefixArray = Array.isArray(base) ? [...base] : [base];
-                if (!prefixArray.includes("HELIUM_PUBLIC_")) {
-                    prefixArray.push("HELIUM_PUBLIC_");
-                }
-                return prefixArray;
-            }
-
-            expect(resolveEnvPrefix("MY_APP_")).toEqual(["MY_APP_", "HELIUM_PUBLIC_"]);
-            expect(resolveEnvPrefix(["VITE_", "CUSTOM_"])).toEqual(["VITE_", "CUSTOM_", "HELIUM_PUBLIC_"]);
-        });
-
-        it("should not duplicate HELIUM_PUBLIC_ if already present", () => {
-            function resolveEnvPrefix(userPrefix?: string | string[]): string[] {
-                const base = userPrefix ?? "VITE_";
-                const prefixArray = Array.isArray(base) ? [...base] : [base];
-                if (!prefixArray.includes("HELIUM_PUBLIC_")) {
-                    prefixArray.push("HELIUM_PUBLIC_");
-                }
-                return prefixArray;
-            }
-
-            const result = resolveEnvPrefix(["VITE_", "HELIUM_PUBLIC_"]);
-            expect(result.filter((p) => p === "HELIUM_PUBLIC_").length).toBe(1);
-        });
-    });
-
-    describe("runtime env transform", () => {
-        function transformEnv(code: string): string {
-            return code.replace(
-                /\bimport\.meta\.env\b(?!\.)/g,
-                "({...import.meta.env,...(typeof window !== 'undefined' && window.__HELIUM_PUBLIC_ENV__ || {})})"
-            );
-        }
-
-        it("should replace bare import.meta.env with merged spread", () => {
-            const code = 'console.log("env", import.meta.env);';
-            const result = transformEnv(code);
-            expect(result).toContain("window.__HELIUM_PUBLIC_ENV__");
-            expect(result).toContain("{...import.meta.env,");
-        });
-
-        it("should NOT replace import.meta.env.SPECIFIC_KEY (property access)", () => {
-            const code = 'const key = import.meta.env.HELIUM_PUBLIC_API_KEY;';
-            const result = transformEnv(code);
-            expect(result).toBe(code); // unchanged
-        });
-
-        it("should replace bare import.meta.env but not property accesses in mixed code", () => {
-            const code = 'const env = import.meta.env; const key = import.meta.env.HELIUM_PUBLIC_X;';
-            const result = transformEnv(code);
-            expect(result).toContain("({...import.meta.env,...(typeof window !== 'undefined' && window.__HELIUM_PUBLIC_ENV__ || {})})");
-            // The property access should remain intact
-            expect(result).toContain("import.meta.env.HELIUM_PUBLIC_X");
-        });
-
-        it("should handle multiple bare import.meta.env references", () => {
-            const code = 'const a = import.meta.env; const b = import.meta.env;';
-            const result = transformEnv(code);
-            const matches = result.match(/window\.__HELIUM_PUBLIC_ENV__/g);
-            expect(matches?.length).toBe(2);
-        });
-
-        it("should not transform code without import.meta.env", () => {
-            const code = 'const x = 42;';
-            const result = transformEnv(code);
-            expect(result).toBe(code);
         });
     });
 

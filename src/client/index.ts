@@ -1,4 +1,5 @@
 import { installStaleClientRecovery } from "./staleRecovery.js";
+export { getPublicEnv, getPublicEnvValue, isDevEnvironment } from "./env.js";
 
 installStaleClientRecovery();
 

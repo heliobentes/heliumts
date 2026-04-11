@@ -9,7 +9,7 @@ import { WebSocketServer } from "ws";
 import { brotliCompress, deflate, gzip } from "zlib";
 
 import { SEO_METADATA_RPC_METHOD } from "../runtime/internalMethods.js";
-import { injectPublicEnvIntoHtml } from "../utils/envLoader.js";
+import { injectHeliumEnvIntoHtml } from "../utils/envLoader.js";
 import { extractClientIP } from "../utils/ipExtractor.js";
 import { log } from "../utils/logger.js";
 import type { HeliumConfig } from "./config.js";
@@ -465,8 +465,8 @@ export function startProdServer(options: ProdServerOptions) {
                     html = injectSocialMetaIntoHtml(html, metadata);
                 }
 
-                // Inject runtime public env vars (for platform deployments like Render, DO Apps)
-                html = injectPublicEnvIntoHtml(html);
+                // Expose runtime public env vars via window.__HELIUM__.env.
+                html = injectHeliumEnvIntoHtml(html);
 
                 responseBody = Buffer.from(html, "utf-8");
             }

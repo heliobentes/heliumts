@@ -5,5 +5,7 @@ interface ImportMeta {
 }
 
 interface Window {
-    __HELIUM_PUBLIC_ENV__?: Record<string, string>;
+    __HELIUM__?: {
+        env?: Record<string, string>;
+    };
 }

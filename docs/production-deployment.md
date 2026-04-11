@@ -177,13 +177,16 @@ HELIUM_PUBLIC_API_URL=https://api.example.com
 HELIUM_PUBLIC_FEATURE_FLAG=true
 ```
 
-Access them in your React components using `import.meta.env`:
+Access them in your React components using `getPublicEnv()` or `window.__HELIUM__.env`:
 
 ```typescript
+import { getPublicEnv } from 'heliumts/client';
+
 function MyComponent() {
-    const appName = import.meta.env.HELIUM_PUBLIC_APP_NAME;
-    const apiUrl = import.meta.env.HELIUM_PUBLIC_API_URL;
-    const featureEnabled = import.meta.env.HELIUM_PUBLIC_FEATURE_FLAG === 'true';
+    const env = getPublicEnv();
+    const appName = env.HELIUM_PUBLIC_APP_NAME;
+    const apiUrl = env.HELIUM_PUBLIC_API_URL;
+    const featureEnabled = env.HELIUM_PUBLIC_FEATURE_FLAG === 'true';
     
     return <div>{appName} - {apiUrl}</div>;
 }
@@ -191,7 +194,7 @@ function MyComponent() {
 
 **Important:**
 
-- Build-time injection: Environment variables are injected at **build time** by Vite. Make sure your hosting platform (Digital Ocean, Vercel, etc.) has the environment variables set before the build runs.
+- Runtime injection: Public environment variables are exposed through `window.__HELIUM__.env` for both dev and prod.
 - Only `HELIUM_PUBLIC_*` variables are exposed to the browser for security reasons
 - Server-side code can access all environment variables via `process.env`
 

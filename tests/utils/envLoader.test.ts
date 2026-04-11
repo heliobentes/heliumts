@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildPublicEnvScript, createEnvDefines, filterClientEnv, getPublicEnvFromProcess, injectEnvToProcess, injectPublicEnvIntoHtml, loadEnvFiles } from "../../src/utils/envLoader";
+import { buildHeliumEnvScript, filterClientEnv, getPublicEnvFromProcess, injectEnvToProcess, injectHeliumEnvIntoHtml, loadEnvFiles } from "../../src/utils/envLoader";
 
 // Mock dotenv
 vi.mock("dotenv", () => ({
@@ -204,33 +204,6 @@ describe("envLoader", () => {
         });
     });
 
-    describe("createEnvDefines", () => {
-        it("should create Vite define config for client env", () => {
-            const env = {
-                HELIUM_PUBLIC_API_URL: "https://api.example.com",
-                SECRET_KEY: "secret",
-            };
-
-            const result = createEnvDefines(env);
-
-            expect(result).toEqual({
-                "import.meta.env.HELIUM_PUBLIC_API_URL": '"https://api.example.com"',
-            });
-        });
-
-        it("should properly stringify values", () => {
-            const env = {
-                HELIUM_PUBLIC_DEBUG: "true",
-                HELIUM_PUBLIC_COUNT: "42",
-            };
-
-            const result = createEnvDefines(env);
-
-            expect(result["import.meta.env.HELIUM_PUBLIC_DEBUG"]).toBe('"true"');
-            expect(result["import.meta.env.HELIUM_PUBLIC_COUNT"]).toBe('"42"');
-        });
-    });
-
     describe("getPublicEnvFromProcess", () => {
         it("should collect HELIUM_PUBLIC_ vars from process.env", () => {
             process.env.HELIUM_PUBLIC_KEY1 = "value1";
@@ -267,14 +240,15 @@ describe("envLoader", () => {
         });
     });
 
-    describe("buildPublicEnvScript", () => {
+    describe("buildHeliumEnvScript", () => {
         it("should generate script tag with HELIUM_PUBLIC_ vars from process.env", () => {
             process.env.HELIUM_PUBLIC_APP_NAME = "TestApp";
 
-            const result = buildPublicEnvScript();
+            const result = buildHeliumEnvScript();
 
             expect(result).toContain("<script>");
-            expect(result).toContain("window.__HELIUM_PUBLIC_ENV__=");
+            expect(result).toContain("window.__HELIUM__=window.__HELIUM__||{};");
+            expect(result).toContain("window.__HELIUM__.env=");
             expect(result).toContain("HELIUM_PUBLIC_APP_NAME");
             expect(result).toContain("TestApp");
 
@@ -282,18 +256,18 @@ describe("envLoader", () => {
         });
 
         it("should return empty string when no public vars exist", () => {
-            const result = buildPublicEnvScript("NONEXISTENT_PREFIX_");
+            const result = buildHeliumEnvScript("NONEXISTENT_PREFIX_");
             expect(result).toBe("");
         });
 
         it("should properly escape JSON values", () => {
             process.env.HELIUM_PUBLIC_SPECIAL = 'value with "quotes"';
 
-            const result = buildPublicEnvScript();
+            const result = buildHeliumEnvScript();
 
             expect(result).toContain("<script>");
             // Should be valid JSON inside the script
-            const match = result.match(/window\.__HELIUM_PUBLIC_ENV__=(.+?)<\/script>/);
+            const match = result.match(/window\.__HELIUM__\.env=(.+?);<\/script>/);
             expect(match).not.toBeNull();
             const parsed = JSON.parse(match![1]);
             expect(parsed.HELIUM_PUBLIC_SPECIAL).toBe('value with "quotes"');
@@ -302,14 +276,14 @@ describe("envLoader", () => {
         });
     });
 
-    describe("injectPublicEnvIntoHtml", () => {
+    describe("injectHeliumEnvIntoHtml", () => {
         it("should inject script at start of <head>", () => {
             process.env.HELIUM_PUBLIC_API = "https://api.test.com";
 
             const html = "<html><head><title>Test</title></head><body></body></html>";
-            const result = injectPublicEnvIntoHtml(html);
+            const result = injectHeliumEnvIntoHtml(html);
 
-            expect(result).toContain("<head>\n<script>window.__HELIUM_PUBLIC_ENV__=");
+            expect(result).toContain("<head>\n<script>window.__HELIUM__=window.__HELIUM__||{};window.__HELIUM__.env=");
             expect(result).toContain("HELIUM_PUBLIC_API");
             expect(result).toContain("https://api.test.com");
 
@@ -318,7 +292,7 @@ describe("envLoader", () => {
 
         it("should return unchanged HTML when no public vars exist", () => {
             const html = "<html><head><title>Test</title></head><body></body></html>";
-            const result = injectPublicEnvIntoHtml(html, "NONEXISTENT_PREFIX_");
+            const result = injectHeliumEnvIntoHtml(html, "NONEXISTENT_PREFIX_");
 
             expect(result).toBe(html);
         });
@@ -327,9 +301,9 @@ describe("envLoader", () => {
             process.env.HELIUM_PUBLIC_VAR = "value";
 
             const html = "<html><body></body></html>";
-            const result = injectPublicEnvIntoHtml(html);
+            const result = injectHeliumEnvIntoHtml(html);
 
-            expect(result).toMatch(/^<script>window\.__HELIUM_PUBLIC_ENV__=/);
+            expect(result).toMatch(/^<script>window\.__HELIUM__=window\.__HELIUM__\|\|\{\};window\.__HELIUM__\.env=/);
 
             delete process.env.HELIUM_PUBLIC_VAR;
         });

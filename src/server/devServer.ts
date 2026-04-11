@@ -10,7 +10,7 @@ import { WebSocketServer } from "ws";
 import { brotliCompress, deflate, gzip } from "zlib";
 
 import { SEO_METADATA_RPC_METHOD } from "../runtime/internalMethods.js";
-import { injectEnvToProcess, loadEnvFiles } from "../utils/envLoader.js";
+import { injectEnvToProcess, injectHeliumEnvIntoHtml, loadEnvFiles } from "../utils/envLoader.js";
 import { extractClientIP } from "../utils/ipExtractor.js";
 import { log } from "../utils/logger.js";
 import type { HeliumConfig } from "./config.js";
@@ -643,6 +643,8 @@ export function attachToDevServer(
                     if (devResolvedMetadata) {
                         html = injectSocialMetaIntoHtml(html, devResolvedMetadata);
                     }
+
+                    html = injectHeliumEnvIntoHtml(html);
 
                     flushPendingWriteHead();
                     originalEnd(Buffer.from(html, "utf-8"));

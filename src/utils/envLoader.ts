@@ -95,45 +95,26 @@ export function filterClientEnv(env: Record<string, string>, prefix: string = "H
 }
 
 /**
- * Creates Vite define config for injecting env variables into the client bundle.
+ * Generates an inline <script> tag that exposes HELIUM_PUBLIC_ env vars
+ * via window.__HELIUM__.env before the client bundle executes.
  */
-export function createEnvDefines(env: Record<string, string>, prefix: string = "HELIUM_PUBLIC_"): Record<string, string> {
-    const defines: Record<string, string> = {};
-    const clientEnv = filterClientEnv(env, prefix);
-
-    for (const [key, value] of Object.entries(clientEnv)) {
-        defines[`import.meta.env.${key}`] = JSON.stringify(value);
-    }
-
-    return defines;
-}
-
-/**
- * Generates an inline <script> tag that injects HELIUM_PUBLIC_ env vars
- * into import.meta.env at runtime. This is used by the production server
- * to ensure platform environment variables are available even if they
- * weren't present at build time.
- *
- * The script is injected before module scripts in <head>, so the values
- * are available when application code runs.
- */
-export function buildPublicEnvScript(prefix: string = "HELIUM_PUBLIC_"): string {
+export function buildHeliumEnvScript(prefix: string = "HELIUM_PUBLIC_"): string {
     const publicEnv = getPublicEnvFromProcess(prefix);
 
     if (Object.keys(publicEnv).length === 0) {
         return "";
     }
 
-    const envJson = JSON.stringify(publicEnv);
-    return `<script>window.__HELIUM_PUBLIC_ENV__=${envJson}</script>`;
+    const envJson = JSON.stringify(publicEnv).replace(/</g, "\\u003c");
+    return `<script>window.__HELIUM__=window.__HELIUM__||{};window.__HELIUM__.env=${envJson};</script>`;
 }
 
 /**
- * Injects the public env script into an HTML string, placing it
+ * Injects the Helium bootstrap script into an HTML string, placing it
  * at the beginning of <head> so it runs before any module scripts.
  */
-export function injectPublicEnvIntoHtml(html: string, prefix: string = "HELIUM_PUBLIC_"): string {
-    const script = buildPublicEnvScript(prefix);
+export function injectHeliumEnvIntoHtml(html: string, prefix: string = "HELIUM_PUBLIC_"): string {
+    const script = buildHeliumEnvScript(prefix);
 
     if (!script) {
         return html;
