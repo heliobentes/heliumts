@@ -38,6 +38,11 @@
             "import": "./dist/client/index.js",
             "require": "./dist/client/index.js"
         },
+        "./client/env": {
+            "types": "./dist/client/env.d.ts",
+            "import": "./dist/client/env.js",
+            "require": "./dist/client/env.js"
+        },
         "./client/transitions": {
             "types": "./dist/client/transitions.d.ts",
             "import": "./dist/client/transitions.js",

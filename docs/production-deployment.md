@@ -192,6 +192,14 @@ function MyComponent() {
 }
 ```
 
+If you only need public env access in a browser-only script or widget bundle, import the narrower env entry instead of the full client runtime:
+
+```typescript
+import { getPublicEnv } from 'heliumts/client/env';
+```
+
+This avoids pulling in the router and RPC runtime in non-Helium builds.
+
 **Important:**
 
 - Runtime injection: Public environment variables are exposed through `window.__HELIUM__.env` for both dev and prod.
