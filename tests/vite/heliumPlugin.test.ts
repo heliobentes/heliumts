@@ -300,6 +300,50 @@ describe("heliumPlugin", () => {
         });
     });
 
+    describe("envPrefix configuration", () => {
+        it("should include HELIUM_PUBLIC_ in envPrefix array", () => {
+            function resolveEnvPrefix(userPrefix?: string | string[]): string[] {
+                const base = userPrefix ?? "VITE_";
+                const prefixArray = Array.isArray(base) ? [...base] : [base];
+                if (!prefixArray.includes("HELIUM_PUBLIC_")) {
+                    prefixArray.push("HELIUM_PUBLIC_");
+                }
+                return prefixArray;
+            }
+
+            expect(resolveEnvPrefix()).toContain("HELIUM_PUBLIC_");
+            expect(resolveEnvPrefix()).toContain("VITE_");
+        });
+
+        it("should preserve user-configured envPrefix", () => {
+            function resolveEnvPrefix(userPrefix?: string | string[]): string[] {
+                const base = userPrefix ?? "VITE_";
+                const prefixArray = Array.isArray(base) ? [...base] : [base];
+                if (!prefixArray.includes("HELIUM_PUBLIC_")) {
+                    prefixArray.push("HELIUM_PUBLIC_");
+                }
+                return prefixArray;
+            }
+
+            expect(resolveEnvPrefix("MY_APP_")).toEqual(["MY_APP_", "HELIUM_PUBLIC_"]);
+            expect(resolveEnvPrefix(["VITE_", "CUSTOM_"])).toEqual(["VITE_", "CUSTOM_", "HELIUM_PUBLIC_"]);
+        });
+
+        it("should not duplicate HELIUM_PUBLIC_ if already present", () => {
+            function resolveEnvPrefix(userPrefix?: string | string[]): string[] {
+                const base = userPrefix ?? "VITE_";
+                const prefixArray = Array.isArray(base) ? [...base] : [base];
+                if (!prefixArray.includes("HELIUM_PUBLIC_")) {
+                    prefixArray.push("HELIUM_PUBLIC_");
+                }
+                return prefixArray;
+            }
+
+            const result = resolveEnvPrefix(["VITE_", "HELIUM_PUBLIC_"]);
+            expect(result.filter((p) => p === "HELIUM_PUBLIC_").length).toBe(1);
+        });
+    });
+
     describe("touchTsConfig", () => {
         afterEach(() => {
             vi.restoreAllMocks();

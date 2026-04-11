@@ -33,11 +33,6 @@ export default function helium(): Plugin {
         enforce: "pre",
         configResolved(config) {
             root = config.root;
-
-            // Load and inject environment variables
-            const mode = config.mode || "development";
-            const envVars = loadEnvFiles({ root, mode });
-            injectEnvToProcess(envVars);
         },
         transformIndexHtml: {
             order: "pre",
@@ -79,6 +74,12 @@ export default function helium(): Plugin {
             const mode = config.mode || "development";
             const envVars = loadEnvFiles({ root, mode });
 
+            // Inject env vars into process.env BEFORE Vite's own env resolution.
+            // This ensures platform-set env vars (Render, DigitalOcean Apps, etc.)
+            // are picked up by Vite's envPrefix matching and included in all
+            // import.meta.env object references throughout the bundle.
+            injectEnvToProcess(envVars);
+
             // Create defines for client-side env variables
             const envDefines = createEnvDefines(envVars);
 
@@ -86,9 +87,17 @@ export default function helium(): Plugin {
             const heliumConfig = await loadConfig(root);
             const rpcClientConfig = getRpcClientConfig(heliumConfig);
 
+            // Merge user-configured envPrefix with HELIUM_PUBLIC_
+            const userPrefix = config.envPrefix ?? "VITE_";
+            const prefixArray = Array.isArray(userPrefix) ? userPrefix : [userPrefix];
+            if (!prefixArray.includes("HELIUM_PUBLIC_")) {
+                prefixArray.push("HELIUM_PUBLIC_");
+            }
+
             // Provide default index.html if none exists
             return {
                 appType: "spa",
+                envPrefix: prefixArray,
                 optimizeDeps: {
                     include: ["react-dom/client"],
                     // Exclude helium from pre-bundling since it's the framework itself
