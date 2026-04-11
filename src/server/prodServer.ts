@@ -9,9 +9,9 @@ import { WebSocketServer } from "ws";
 import { brotliCompress, deflate, gzip } from "zlib";
 
 import { SEO_METADATA_RPC_METHOD } from "../runtime/internalMethods.js";
+import { injectPublicEnvIntoHtml } from "../utils/envLoader.js";
 import { extractClientIP } from "../utils/ipExtractor.js";
 import { log } from "../utils/logger.js";
-import { injectPublicEnvIntoHtml } from "../utils/envLoader.js";
 import type { HeliumConfig } from "./config.js";
 import { getRpcConfig, getRpcSecurityConfig, getTrustProxyDepth } from "./config.js";
 import type { HeliumContext } from "./context.js";
@@ -334,6 +334,38 @@ export function startProdServer(options: ProdServerOptions) {
             // If file doesn't exist or is a directory, fall back to index.html for SPA routing
             const isFileOrExists = !is404 && filePath && fs.existsSync(filePath) && fs.statSync(filePath).isFile();
             if (!isFileOrExists && !url.startsWith("/api") && !url.startsWith("/webhooks") && !url.startsWith("/auth")) {
+                // For static asset requests (files with known extensions), return 404 instead
+                // of falling back to index.html. Serving HTML for a .js/.css request causes
+                // MIME type errors in the browser (e.g., "Expected a JavaScript module script
+                // but the server responded with text/html").
+                const reqExt = path.extname(cleanUrl).toLowerCase();
+                const staticExtensions = new Set([
+                    ".js",
+                    ".mjs",
+                    ".css",
+                    ".map",
+                    ".json",
+                    ".png",
+                    ".jpg",
+                    ".jpeg",
+                    ".gif",
+                    ".svg",
+                    ".ico",
+                    ".woff",
+                    ".woff2",
+                    ".ttf",
+                    ".eot",
+                    ".webp",
+                    ".avif",
+                    ".mp4",
+                    ".webm",
+                ]);
+                if (reqExt && staticExtensions.has(reqExt)) {
+                    res.writeHead(404, { "Content-Type": "text/plain" });
+                    res.end("Not found");
+                    return;
+                }
+
                 // Fall back to index.html for SPA routing
                 // Note: We don't set is404 here because the client-side router will determine
                 // if the route exists. If it doesn't, the router will render the 404 page.

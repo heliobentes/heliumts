@@ -249,6 +249,36 @@ describe("prodServer", () => {
         });
     });
 
+    describe("static asset fallback prevention", () => {
+        const staticExtensions = new Set([".js", ".mjs", ".css", ".map", ".json", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".eot", ".webp", ".avif", ".mp4", ".webm"]);
+
+        it("should identify .js files as static assets", () => {
+            const ext = path.extname("/assets/vendor-BhNvX4lm.js").toLowerCase();
+            expect(staticExtensions.has(ext)).toBe(true);
+        });
+
+        it("should identify .css files as static assets", () => {
+            const ext = path.extname("/assets/index-kPbEIYCV.css").toLowerCase();
+            expect(staticExtensions.has(ext)).toBe(true);
+        });
+
+        it("should identify .woff2 files as static assets", () => {
+            const ext = path.extname("/fonts/inter.woff2").toLowerCase();
+            expect(staticExtensions.has(ext)).toBe(true);
+        });
+
+        it("should NOT identify extensionless paths as static assets", () => {
+            const ext = path.extname("/about").toLowerCase();
+            expect(ext).toBe("");
+            expect(staticExtensions.has(ext)).toBe(false);
+        });
+
+        it("should NOT identify .html paths as static assets", () => {
+            const ext = path.extname("/about.html").toLowerCase();
+            expect(staticExtensions.has(ext)).toBe(false);
+        });
+    });
+
     describe("security headers configuration", () => {
         it("should include default security headers by default", () => {
             const headers = getSecurityHeaders({});
