@@ -490,7 +490,7 @@ export function attachToDevServer(
             !pathname.startsWith("/__helium__");
         const ssrMatch = isEligibleHtmlRequest ? matchSSRPage(pathname, currentSSRPages) : null;
 
-        if (devResolvedMetadata || ssrMatch) {
+        if (isEligibleHtmlRequest) {
             const originalWriteHead = res.writeHead.bind(res);
             const originalWrite = res.write.bind(res);
             const originalEnd = res.end.bind(res);
