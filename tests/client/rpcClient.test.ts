@@ -638,10 +638,11 @@ describe("rpcClient", () => {
             }
 
             const resultPromise = rpcCallWithRetry();
+            const rejection = expect(resultPromise).rejects.toThrow("Connection reset");
             // Advance past all retry delays: 500 + 1000 + 2000 = 3500ms
             await vi.advanceTimersByTimeAsync(10_000);
 
-            await expect(resultPromise).rejects.toThrow("Connection reset");
+            await rejection;
             expect(attempts).toBe(4); // 1 original + 3 retries, then gives up
 
             vi.useRealTimers();

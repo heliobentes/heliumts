@@ -128,15 +128,25 @@ export class HTTPRouter {
                 if (isWebResponse(result)) {
                     res.statusCode = result.status;
                     result.headers.forEach((value: string, key: string) => {
-                        res.setHeader(key, value);
+                        if (key.toLowerCase() !== "set-cookie") {
+                            res.setHeader(key, value);
+                        }
                     });
+                    // Preserve separate cookies instead of overwriting earlier
+                    // values (or joining them, which breaks Expires attributes).
+                    const cookies = result.headers.getSetCookie();
+                    if (cookies.length > 0) {
+                        res.setHeader("set-cookie", cookies);
+                    }
 
                     if (result.body && typeof result.body.getReader === "function") {
                         const reader = result.body.getReader();
                         try {
                             while (true) {
                                 const { done, value } = await reader.read();
-                                if (done) break;
+                                if (done) {
+                                    break;
+                                }
                                 res.write(value);
                             }
                         } finally {
