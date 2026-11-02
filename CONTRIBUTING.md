@@ -568,7 +568,7 @@ This entire project was initially created with the assistance of AI tools. We be
 
 (For maintainers)
 
-1. Update `package.json`, `package-lock.json`, `CHANGELOG.md`, and affected documentation.
+1. Update `package.json`, `package-lock.json`, `CHANGELOG.md`, and affected documentation. Use the same version for `heliumts` and `create-heliumts-app`, and set both starter templates to depend on that framework release.
 2. Run `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm test`, `npm run build`, and `npm run test:smoke`.
 3. Pack the package and validate its tarball in the scaffolder templates, docs site, and example app.
 4. Commit the release and create its version tag.
