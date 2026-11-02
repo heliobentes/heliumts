@@ -3,10 +3,8 @@ import fs from "fs";
 import http from "http";
 import path from "path";
 import type { ComponentType, ReactNode } from "react";
-import { promisify } from "util";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
-import { brotliCompress, deflate, gzip } from "zlib";
 
 import { SEO_METADATA_RPC_METHOD } from "../runtime/internalMethods.js";
 import { injectHeliumEnvIntoHtml } from "../utils/envLoader.js";
@@ -17,6 +15,7 @@ import { getRpcConfig, getRpcSecurityConfig, getTrustProxyDepth } from "./config
 import type { HeliumContext } from "./context.js";
 import type { HeliumWorkerDef } from "./defineWorker.js";
 import { startWorker, stopAllWorkers } from "./defineWorker.js";
+import { compressHttpRpcResponse } from "./httpCompression.js";
 import { HTTPRouter } from "./httpRouter.js";
 import { injectSocialMetaIntoHtml, loadDefaultSocialMetaFromHtmlFile } from "./meta.js";
 import { RateLimiter } from "./rateLimiter.js";
@@ -26,10 +25,6 @@ import { generateConnectionToken, initializeSecurity, verifyConnectionToken } fr
 import { SEOMetadataRouter } from "./seoMetadataRouter.js";
 import { prepareForMsgpack } from "./serializer.js";
 import { matchSSRPage, renderSSRHTML, resolveServerSideProps, SSRPageDef } from "./ssr.js";
-
-const gzipAsync = promisify(gzip);
-const deflateAsync = promisify(deflate);
-const brotliCompressAsync = promisify(brotliCompress);
 
 interface WorkerEntry {
     name: string;
@@ -90,6 +85,7 @@ export function startProdServer(options: ProdServerOptions) {
     registerHandlers(registry, httpRouter, seoRouter);
     registry.setRateLimiter(rateLimiter);
     registry.setMaxBatchSize(rpcConfig.maxBatchSize);
+    registry.setCompressionConfig(compressionConfig);
 
     // Security: max body size for HTTP requests (1 MB default)
     const maxBodySize = rpcConfig.maxBodySize ?? 1_048_576;
@@ -242,29 +238,18 @@ export function startProdServer(options: ProdServerOptions) {
                     const result = await registry.handleHttpRequest(body, ip, req);
 
                     const encoded = msgpackEncode(prepareForMsgpack(result.response));
-                    let responseBody = Buffer.from(encoded as Uint8Array);
+                    const compressed = await compressHttpRpcResponse(Buffer.from(encoded as Uint8Array), req.headers["accept-encoding"]);
                     const headers: Record<string, string> = {
                         "Content-Type": "application/msgpack",
                         "Cache-Control": "no-store",
                     };
 
-                    // Handle compression
-                    const acceptEncoding = req.headers["accept-encoding"] as string;
-                    if (acceptEncoding && responseBody.length > 1024) {
-                        if (acceptEncoding.includes("br")) {
-                            responseBody = await brotliCompressAsync(responseBody);
-                            headers["Content-Encoding"] = "br";
-                        } else if (acceptEncoding.includes("gzip")) {
-                            responseBody = await gzipAsync(responseBody);
-                            headers["Content-Encoding"] = "gzip";
-                        } else if (acceptEncoding.includes("deflate")) {
-                            responseBody = await deflateAsync(responseBody);
-                            headers["Content-Encoding"] = "deflate";
-                        }
+                    if (compressed.encoding) {
+                        headers["Content-Encoding"] = compressed.encoding;
                     }
 
                     res.writeHead(200, headers);
-                    res.end(responseBody);
+                    res.end(compressed.body);
                 } catch (error) {
                     log("error", "HTTP RPC error:", error);
                     res.writeHead(500, { "Content-Type": "application/json" });
@@ -601,7 +586,8 @@ export function startProdServer(options: ProdServerOptions) {
                     }
 
                     log("warn", `Rate limit exceeded for IP ${ip}, resets in ${resetInSeconds} seconds`);
-                    socket.send(msgpackEncode(errorResponse) as Buffer);
+                    const encodedError = msgpackEncode(errorResponse);
+                    socket.send(encodedError, { compress: compressionConfig.enabled && encodedError.length > compressionConfig.threshold });
                 } catch {
                     // If we can't parse the request, just close the connection
                     socket.close();

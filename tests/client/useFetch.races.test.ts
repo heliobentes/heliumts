@@ -17,7 +17,7 @@ function deferred<T>() {
     return { promise, resolve, reject };
 }
 
-type Result = { data: string; stats: { remainingRequests: number; resetInSeconds: number } };
+type Result = { data: string; stats: { remainingRequests: number; resetInSeconds: number }; transport: "websocket" };
 const stats = { remainingRequests: 10, resetInSeconds: 1 };
 const method = { __kind: "method" as const, __id: "query", handler: (_args: unknown) => "" };
 
@@ -38,9 +38,9 @@ describe("useFetch request lifecycle", () => {
         vi.mocked(rpcCall).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
         const { result, rerender } = renderHook(({ id }) => useFetch(method, { id }), { initialProps: { id: 1 } });
         rerender({ id: 2 });
-        await act(async () => second.resolve({ data: "second", stats }));
+        await act(async () => second.resolve({ data: "second", stats, transport: "websocket" }));
         expect(result.current.data).toBe("second");
-        await act(async () => first.resolve({ data: "first", stats }));
+        await act(async () => first.resolve({ data: "first", stats, transport: "websocket" }));
         expect(result.current.data).toBe("second");
         expect(get(cacheKey(method.__id, { id: 1 }))).toBe("first");
         expect(get(cacheKey(method.__id, { id: 2 }))).toBe("second");
@@ -52,10 +52,10 @@ describe("useFetch request lifecycle", () => {
         vi.mocked(rpcCall).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
         const { result, rerender } = renderHook(({ id }) => useFetch(method, { id }), { initialProps: { id: 1 } });
         rerender({ id: 2 });
-        await act(async () => first.resolve({ data: "first", stats }));
+        await act(async () => first.resolve({ data: "first", stats, transport: "websocket" }));
         expect(result.current.isLoading).toBe(true);
         expect(result.current.data).toBeUndefined();
-        await act(async () => second.resolve({ data: "second", stats }));
+        await act(async () => second.resolve({ data: "second", stats, transport: "websocket" }));
         expect(result.current.isLoading).toBe(false);
     });
 
@@ -66,10 +66,10 @@ describe("useFetch request lifecycle", () => {
         const { result } = renderHook(() => useFetch(method));
         act(() => invalidateByMethod(method.__id));
         expect(rpcCall).toHaveBeenCalledTimes(2);
-        await act(async () => first.resolve({ data: "stale", stats }));
+        await act(async () => first.resolve({ data: "stale", stats, transport: "websocket" }));
         expect(isPending(cacheKey(method.__id, undefined))).toBe(true);
         expect(result.current.data).toBeUndefined();
-        await act(async () => second.resolve({ data: "fresh", stats }));
+        await act(async () => second.resolve({ data: "fresh", stats, transport: "websocket" }));
         expect(result.current.data).toBe("fresh");
         expect(get(cacheKey(method.__id, undefined))).toBe("fresh");
     });
@@ -81,8 +81,8 @@ describe("useFetch request lifecycle", () => {
         const { result } = renderHook(() => useFetch(method));
         act(() => invalidateAll());
         expect(rpcCall).toHaveBeenCalledTimes(2);
-        await act(async () => second.resolve({ data: "fresh", stats }));
-        await act(async () => first.resolve({ data: "stale", stats }));
+        await act(async () => second.resolve({ data: "fresh", stats, transport: "websocket" }));
+        await act(async () => first.resolve({ data: "stale", stats, transport: "websocket" }));
         expect(result.current.data).toBe("fresh");
         expect(get(cacheKey(method.__id, undefined))).toBe("fresh");
     });
@@ -104,7 +104,7 @@ describe("useFetch request lifecycle", () => {
             initialProps: { enabled: true },
         });
         rerender({ enabled: false });
-        await act(async () => request.resolve({ data: "cached while disabled", stats }));
+        await act(async () => request.resolve({ data: "cached while disabled", stats, transport: "websocket" }));
         expect(result.current.data).toBeUndefined();
         rerender({ enabled: true });
         expect(result.current.data).toBe("cached while disabled");

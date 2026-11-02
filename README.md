@@ -5,7 +5,7 @@
 
 # HeliumTS
 
-HeliumTS is a blazing fast 🚀 and opinionated full-stack React + Vite framework designed for simplicity and type safety. It provides seamless RPC communication and file-based routing.
+HeliumTS is a lightweight, opinionated full-stack React + Vite framework designed for simplicity and type safety. It provides typed RPC communication and file-based routing.
 
 ## Table of Contents
 
@@ -31,7 +31,7 @@ HeliumTS is a blazing fast 🚀 and opinionated full-stack React + Vite framewor
 
 ## 1. Getting Started
 
-The current release is **0.9.6**. See the [changelog](./CHANGELOG.md) for fixes and upgrade notes.
+The current release is **0.9.7**. See the [changelog](./CHANGELOG.md) for fixes and upgrade notes.
 
 ### 1.1. Installation
 

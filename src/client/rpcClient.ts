@@ -6,10 +6,14 @@ import { RpcError } from "./RpcError.js";
 export type RpcResult<T> = {
     data: T;
     stats: RpcStats;
+    /** The transport that actually delivered this response, including automatic fallback. */
+    transport: "http" | "websocket";
 };
 
 export type RpcCallOptions = {
     forceHttp?: boolean;
+    /** Explicit selection disables automatic transport switching. */
+    transport?: "http" | "websocket";
 };
 
 function toArrayBuffer(data: Uint8Array<ArrayBufferLike>): ArrayBuffer {
@@ -23,8 +27,8 @@ function toArrayBuffer(data: Uint8Array<ArrayBufferLike>): ArrayBuffer {
 
 /**
  * Transport mode for RPC calls.
- * - "http": Uses HTTP POST requests (faster on mobile/high-latency networks, benefits from HTTP/2)
- * - "websocket": Uses persistent WebSocket connection (lower latency on desktop/low-latency networks)
+ * - "http": Uses HTTP POST requests, with connection reuse provided by the browser
+ * - "websocket": Uses a persistent WebSocket connection
  * - "auto": Automatically selects based on connection type
  */
 export type RpcTransport = "http" | "websocket" | "auto";
@@ -235,7 +239,7 @@ async function sendBatchHttp(batch: PendingRequest[]) {
             const res = responseMap.get(item.req.id);
             if (res) {
                 if (res.ok) {
-                    item.resolve({ data: res.result, stats: res.stats });
+                    item.resolve({ data: res.result, stats: res.stats, transport: "http" });
                 } else {
                     item.reject(new RpcError(res.error, res.stats));
                 }
@@ -684,7 +688,7 @@ async function createSocket(): Promise<WebSocket> {
                 return;
             }
             if (res.ok) {
-                entry.resolve({ data: res.result, stats: res.stats });
+                entry.resolve({ data: res.result, stats: res.stats, transport: "websocket" });
             } else {
                 entry.reject(new RpcError(res.error, res.stats));
             }
@@ -837,7 +841,7 @@ async function rpcCallWebSocket<TResult, TArgs>(methodId: string, args?: TArgs):
  *
  * Includes automatic retry logic: if a call fails due to a connection error
  * (e.g. stale WebSocket after mobile browser was backgrounded), the client
- * forces a fresh connection (with a new token) and retries once.
+ * forces a fresh connection and retries with bounded exponential backoff.
  */
 export async function rpcCall<TResult = unknown, TArgs = unknown>(methodId: string, args?: TArgs): Promise<RpcResult<TResult>> {
     return rpcCallWithRetry<TResult, TArgs>(methodId, args, 0, {});
@@ -858,16 +862,19 @@ async function rpcCallViaHttpBatch<TResult, TArgs>(methodId: string, args: TArgs
 }
 
 async function rpcCallWithRetry<TResult, TArgs>(methodId: string, args: TArgs | undefined, attempt = 0, options: RpcCallOptions = {}): Promise<RpcResult<TResult>> {
+    const useHttp = options.transport === "http" || (options.transport === undefined && (options.forceHttp || shouldUseHttpTransport()));
     try {
-        if (options.forceHttp || shouldUseHttpTransport()) {
+        if (useHttp) {
             return await rpcCallViaHttpBatch<TResult, TArgs>(methodId, args);
         }
 
         return await rpcCallWebSocket<TResult, TArgs>(methodId, args);
     } catch (err) {
         if (attempt < MAX_RETRIES && isRetriableError(err)) {
-            // Force a fresh connection (fetches a new token)
-            forceReconnect();
+            // An HTTP failure must not close unrelated in-flight WebSocket calls.
+            if (!useHttp) {
+                forceReconnect();
+            }
             // Exponential backoff with jitter: 500ms, 1000ms, 2000ms (capped at 5s)
             const baseDelay = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
             const jitter = Math.random() * baseDelay * 0.3;
@@ -875,7 +882,7 @@ async function rpcCallWithRetry<TResult, TArgs>(methodId: string, args: TArgs | 
             return rpcCallWithRetry<TResult, TArgs>(methodId, args, attempt + 1, options);
         }
 
-        if (isRetriableError(err) && configuredTransport !== "http" && !options.forceHttp) {
+        if (isRetriableError(err) && !useHttp && options.transport === undefined && configuredTransport !== "http" && !options.forceHttp) {
             activateTemporaryHttpFallback();
             return rpcCallViaHttpBatch<TResult, TArgs>(methodId, args);
         }

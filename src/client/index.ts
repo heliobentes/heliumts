@@ -14,6 +14,7 @@ export type { LayoutProps } from "./routerManifest.js";
 export type { PageTransitionProps } from "./transitions.js";
 
 // RPC hooks for data fetching and mutations
+export { callMethod, type CallMethodOptions } from "./callMethod.js";
 export * from "./useCall.js";
 export * from "./useFetch.js";
 
@@ -30,7 +31,7 @@ export function isSSR(): boolean {
 }
 
 // RPC transport info (configured via helium.config.js)
-export type { RpcTransport } from "./rpcClient.js";
+export type { RpcResult, RpcTransport } from "./rpcClient.js";
 export { getRpcTransport, isAutoHttpOnMobileEnabled, preconnect } from "./rpcClient.js";
 
 // Type definitions

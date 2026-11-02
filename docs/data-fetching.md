@@ -389,6 +389,22 @@ const { data } = useFetch(getUser, { id: "123" });
 ```
 
 
+## Calling methods without a hook
+
+Use `callMethod` in event handlers or other browser code when you do not need React state or automatic cache invalidation:
+
+```ts
+import { callMethod } from "heliumts/client";
+import { getUser } from "heliumts/server";
+
+const { data, stats, transport } = await callMethod(getUser, { id: "123" });
+// data is inferred from getUser; transport is "http" or "websocket".
+```
+
+By default, this uses the configured transport selection and automatic fallback. Pass `{ transport: "http" }` or `{ transport: "websocket" }` as the third argument to require one transport. Explicit selections retain connection retries but never switch transport. Failures reject the promise; they do not return an empty result. Unlike the hooks, this function does not update React state or invalidate cached queries.
+
+WebSocket RPC is not guaranteed to beat an HTTP endpoint. Both can reuse established connections, and payload size, compression, browser decoding, network conditions, and hosting proxies affect the result. When comparing them, warm both paths, alternate their order, validate equivalent responses, and retain successful samples below any expected server duration. Chrome DevTools throttling treats established WebSocket latency differently from HTTP latency, so its speed ratio is not evidence of a real mobile-network advantage.
+
 ## Request lifecycle and retries
 
 Queries with the same method and arguments share pending work. Changing arguments ignores older responses, and invalidating a pending query prevents its old result from replacing the fresh cache entry. `invalidateAll()` also includes pending queries. Shared layouts preserve their component state as navigation changes the page.

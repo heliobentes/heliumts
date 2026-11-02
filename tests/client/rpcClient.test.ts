@@ -112,6 +112,7 @@ describe("rpcClient", () => {
             const mockResult: RpcResult<{ name: string }> = {
                 data: { name: "test" },
                 stats: { remainingRequests: 100, resetInSeconds: 60 },
+                transport: "websocket",
             };
 
             expect(mockResult.data.name).toBe("test");

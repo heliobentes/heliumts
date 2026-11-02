@@ -53,12 +53,17 @@ function prepareForMsgpackInner(value: unknown, stack: WeakSet<object>): unknown
     const newObj: Record<string, unknown> = {};
     for (const key in value) {
         if (Object.prototype.hasOwnProperty.call(value, key)) {
-            Object.defineProperty(newObj, key, {
-                value: prepareForMsgpackInner((value as Record<string, unknown>)[key], stack),
-                enumerable: true,
-                writable: true,
-                configurable: true,
-            });
+            const prepared = prepareForMsgpackInner((value as Record<string, unknown>)[key], stack);
+            if (key === "__proto__") {
+                Object.defineProperty(newObj, key, {
+                    value: prepared,
+                    enumerable: true,
+                    writable: true,
+                    configurable: true,
+                });
+            } else {
+                newObj[key] = prepared;
+            }
         }
     }
     stack.delete(value as object);

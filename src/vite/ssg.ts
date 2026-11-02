@@ -431,6 +431,10 @@ export function Redirect({ to, replace }) {
 }
 
 // Mock useCall hook
+export async function callMethod() {
+    throw new Error('callMethod is only available in the browser. Load server data with getServerSideProps instead.');
+}
+
 export function useCall(serverFn) {
     return { call: async () => null, isCalling: false, error: null };
 }

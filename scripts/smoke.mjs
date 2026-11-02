@@ -129,11 +129,11 @@ try {
     );
     write(
         "src/pages/index.tsx",
-        '"use ssg"; import React from "react"; import {getPublicEnvValue,useRouter} from "heliumts/client"; export default function Home(){return React.createElement("main",null,"static $& $$ "+getPublicEnvValue("HELIUM_PUBLIC_GREETING")+" "+useRouter().path);}'
+        '"use ssg"; import React from "react"; import {callMethod,getPublicEnvValue,useRouter} from "heliumts/client"; import {echo} from "heliumts/server"; export default function Home(){return React.createElement("main",null,"static $& $$ "+getPublicEnvValue("HELIUM_PUBLIC_GREETING")+" "+useRouter().path,React.createElement("button",{onClick:()=>callMethod(echo,{value:"clicked"})},"SSG RPC button"));}'
     );
     write(
         "src/pages/search.tsx",
-        '"use ssr"; import React from "react"; import {useFetch} from "heliumts/client"; import {echo} from "heliumts/server"; export default function Search(props){useFetch(echo,{value:"unused"});return React.createElement("main",null,"SSR query:"+props.query);}'
+        '"use ssr"; import React from "react"; import {callMethod,useFetch} from "heliumts/client"; import {echo} from "heliumts/server"; export default function Search(props){useFetch(echo,{value:"unused"});return React.createElement("main",null,"SSR query:"+props.query,React.createElement("button",{onClick:()=>callMethod(echo,{value:"clicked"})},"SSR RPC button"));}'
     );
     write(
         "src/pages/search.server.ts",
@@ -149,6 +149,7 @@ try {
     const staticHtml = fs.readFileSync(path.join(fixture, "dist/index.ssg.html"), "utf8");
     assert.match(staticHtml, /data-app="yes"/);
     assert.match(staticHtml, /data-layout="yes"/);
+    assert.match(staticHtml, /SSG RPC button/);
     assert.match(staticHtml, /opacity:1;transition:opacity 150ms ease/);
     assert.match(staticHtml, /static \$&amp; \$\$ public-greeting/);
     assert.ok(!staticHtml.includes("Old sibling"), staticHtml);
@@ -164,6 +165,7 @@ try {
     const html = await rendered.text();
     assert.equal(rendered.headers.get("x-smoke"), "from-config-helper");
     assert.match(html, /SSR query:hello/);
+    assert.match(html, /SSR RPC button/);
     assert.match(html, /data-app="yes"/);
     assert.ok(!html.includes("Old sibling"), html);
     assert.equal((await fetch(`${base}/search?fail=1`)).status, 500);
@@ -183,7 +185,7 @@ try {
     assert.equal((await fetch(base)).headers.get("x-smoke"), "from-config-helper");
     await stop();
     console.log(
-        "Smoke checks passed: CLI build, SSG, SSR, layouts, transitions, config helpers, public env, HTTP RPC, error privacy, custom OPTIONS, static assets, direct server, CLI start and dev in a path with spaces."
+        "Smoke checks passed: CLI build, SSG, SSR, callMethod handler imports, layouts, transitions, config helpers, public env, HTTP RPC, error privacy, custom OPTIONS, static assets, direct server, CLI start and dev in a path with spaces."
     );
 } catch (error) {
     console.error(output);

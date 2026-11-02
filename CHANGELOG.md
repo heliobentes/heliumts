@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.7
+
+- Use Brotli quality 4 for dynamic HTTP RPC responses in development and production, avoiding maximum-quality compression on every request.
+- Honor accepted HTTP compression encodings and quality weights, and apply WebSocket compression enablement and thresholds to both compression layers.
+- Reduce serialization overhead for ordinary object properties while preserving safe handling of own `__proto__` properties.
+- Add typed `callMethod` calls outside React hooks, report the transport used by each response, and honor explicit transport selection without automatic fallback.
+- Keep HTTP retries from interrupting unrelated WebSocket requests, and support importing `callMethod` in SSR and SSG event handlers.
+- Clarify that RPC latency depends on the network, payload, browser, and hosting path; persistent connections and MessagePack do not guarantee a speed advantage over HTTP.
+
 ## 0.9.6
 
 - Fix stale query responses, cache invalidation races, overlapping mutation loading state, and page/layout state lost during navigation.

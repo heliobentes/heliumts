@@ -6,6 +6,8 @@ import { gzip } from "zlib";
 
 import type { RpcRequest, RpcResponse, RpcStats } from "../runtime/protocol.js";
 import { log } from "../utils/logger.js";
+import type { HeliumCompressionConfig } from "./config.js";
+import { getCompressionConfig } from "./config.js";
 import type { HeliumContext } from "./context.js";
 import type { HeliumMethodDef } from "./defineMethod.js";
 import type { HeliumMiddleware } from "./middleware.js";
@@ -33,6 +35,7 @@ export class RpcRegistry {
     private rateLimiter: RateLimiter | null = null;
     private socketMetadata = new WeakMap<WebSocket, SocketMetadata>();
     private maxBatchSize: number = 20;
+    private compression = getCompressionConfig();
 
     register(id: string, def: HeliumMethodDef<any, any>) {
         def.__id = id;
@@ -49,6 +52,10 @@ export class RpcRegistry {
 
     setMaxBatchSize(size: number) {
         this.maxBatchSize = size;
+    }
+
+    setCompressionConfig(config: HeliumCompressionConfig) {
+        this.compression = getCompressionConfig({ rpc: { compression: config } });
     }
 
     /**
@@ -171,7 +178,7 @@ export class RpcRegistry {
                 stats: this.getStats(socket),
                 error: `Batch size ${req.length} exceeds maximum of ${this.maxBatchSize}`,
             };
-            socket.send(msgpackEncode(prepareForMsgpack(errorResponse)) as Buffer);
+            await this.sendResponse(socket, errorResponse);
             return;
         }
 
@@ -182,14 +189,16 @@ export class RpcRegistry {
             response = await this.processRequest(req, socket);
         }
 
+        await this.sendResponse(socket, response);
+    }
+
+    private async sendResponse(socket: WebSocket, response: RpcResponse | RpcResponse[]): Promise<void> {
         const encoded = msgpackEncode(prepareForMsgpack(response));
-        // Compress if larger than 1KB
-        if (encoded.length > 1024) {
-            const compressed = await gzipAsync(encoded);
-            socket.send(compressed);
-        } else {
-            socket.send(encoded as Buffer);
-        }
+        const compress = this.compression.enabled && encoded.length > this.compression.threshold;
+        const body = compress ? await gzipAsync(encoded) : encoded;
+        // With context takeover, ws ignores its threshold option. Make the
+        // per-message choice explicit so both compression layers honor it.
+        socket.send(body, { compress });
     }
 
     private async processRequestHttp(value: unknown, ip: string, httpReq: http.IncomingMessage): Promise<RpcResponse> {

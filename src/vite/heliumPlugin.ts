@@ -511,6 +511,10 @@ export function AppRouter() {
     return null;
 }
 
+export async function callMethod() {
+    throw new Error('callMethod is only available in the browser. Load server data with getServerSideProps instead.');
+}
+
 export function useCall() {
     return {
         call: async () => null,

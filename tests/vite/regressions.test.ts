@@ -1,9 +1,11 @@
 // @vitest-environment node
 import { EventEmitter } from "events";
 import fs from "fs";
+import { createRequire } from "module";
 import os from "os";
 import path from "path";
 import React from "react";
+import { renderToString } from "react-dom/server";
 import { pathToFileURL } from "url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -81,6 +83,23 @@ describe("Vite and static generation regressions", () => {
         expect(result.code).not.toContain("private");
         expect(() => getHook(plugin, "transform")("const token = 'private';", `${root}/src/server/secret.ts`, {})).toThrow("Server-only module");
         expect(getHook(plugin, "transform")("const token = 'private';", `${root}/src/server/secret.ts`, { ssr: true })).toBeUndefined();
+    });
+
+    it("loads callMethod imports in SSR event handlers without attempting server-side RPC", async () => {
+        const plugin = helium();
+        const id = getHook(plugin, "resolveId")("heliumts/client", undefined, { ssr: true });
+        const code = getHook(plugin, "load")(id);
+        const reactUrl = pathToFileURL(createRequire(import.meta.url).resolve("react")).href;
+        const modulePath = path.join(root, "ssr-client.mjs");
+        fs.writeFileSync(modulePath, code.replace("from 'react'", `from ${JSON.stringify(reactUrl)}`));
+        const loaded = await import(/* @vite-ignore */ pathToFileURL(modulePath).href);
+        const fetch = vi.spyOn(globalThis, "fetch");
+        const html = renderToString(React.createElement("button", { onClick: () => loaded.callMethod({ __id: "echo" }, {}) }, "Call method"));
+
+        expect(html).toContain("Call method");
+        expect(fetch).not.toHaveBeenCalled();
+        await expect(loaded.callMethod({ __id: "echo" }, {})).rejects.toThrow("only available in the browser");
+        expect(fetch).not.toHaveBeenCalled();
     });
 
     it("refreshes the manifest when SSR pages, sidecars, or app shells change", async () => {

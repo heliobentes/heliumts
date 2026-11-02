@@ -298,6 +298,33 @@ describe("RpcRegistry", () => {
     });
 
     describe("handleMessage (WebSocket)", () => {
+        it("honors compression enablement and the exact configured payload threshold", async () => {
+            const { encode, decode } = await import("@msgpack/msgpack");
+            const { gunzipSync } = await import("zlib");
+            const payload = "repeated response data ".repeat(100);
+            registry.register("large", { __kind: "method", __id: "large", handler: () => payload });
+            const socket = createMockSocket();
+            const request = Buffer.from(encode({ id: 1, method: "large" }));
+
+            registry.setCompressionConfig({ enabled: false });
+            await registry.handleMessage(socket, request);
+            const raw = socket.sentMessages[0];
+            expect(decode(raw)).toMatchObject({ id: 1, ok: true, result: payload });
+            expect(socket.send).toHaveBeenLastCalledWith(raw, { compress: false });
+
+            registry.setCompressionConfig({ enabled: true, threshold: raw.length });
+            await registry.handleMessage(socket, request);
+            expect(socket.sentMessages[1]).toEqual(raw);
+            expect(socket.send).toHaveBeenLastCalledWith(socket.sentMessages[1], { compress: false });
+
+            registry.setCompressionConfig({ threshold: raw.length - 1 });
+            await registry.handleMessage(socket, request);
+            const compressed = socket.sentMessages[2];
+            expect([compressed[0], compressed[1]]).toEqual([0x1f, 0x8b]);
+            expect(decode(gunzipSync(compressed))).toMatchObject({ id: 1, ok: true, result: payload });
+            expect(socket.send).toHaveBeenLastCalledWith(compressed, { compress: true });
+        });
+
         it("should process a single WebSocket RPC request", async () => {
             const method: HeliumMethodDef<{ id: number }, { name: string }> = {
                 __kind: "method",
