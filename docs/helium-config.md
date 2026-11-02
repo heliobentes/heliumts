@@ -31,6 +31,8 @@ export default {
 
 Tokens protect the framework endpoint; application authorization belongs in method handlers or [middleware](./middleware.md). A token is not an authenticated user session.
 
+RPC request containers may nest up to 128 levels. The framework validates encoded structure before decoding and rejects malformed or more deeply nested requests.
+
 Ordinary RPC responses negotiate Brotli, gzip, or deflate through `Accept-Encoding`. Compression is handled by the framework without a transport or compression setting. Streaming responses are sent incrementally without whole-response compression; each encoded stream frame is capped at 10 MiB. The client hook has a configurable idle timeout; see [streaming](./streaming.md).
 
 The in-memory request limiter is process-local. Multiple instances need an external shared limiter for global quotas. Users behind a NAT can share an IP; choose limits that fit the application and configure proxy trust correctly.

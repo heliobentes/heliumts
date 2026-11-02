@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.1
+
+- Validate MessagePack request structure before decoding in both RPC endpoints, bounding declared container sizes and nesting depth within the request-body limit.
+- Reject malformed, truncated, and excessively nested requests before allocating decoded containers. Existing HTTP-only RPC and streaming APIs are unchanged.
+
 ## 0.10.0
 
 - Use HTTP for all RPC calls and remove the framework WebSocket client, server, reconnection logic, transport detection, and direct socket dependencies. Vite HMR remains independent.

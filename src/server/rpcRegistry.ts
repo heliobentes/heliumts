@@ -1,4 +1,3 @@
-import { decode as msgpackDecode } from "@msgpack/msgpack";
 import type http from "http";
 
 import type { RpcRequest, RpcResponse, RpcStats } from "../runtime/protocol.js";
@@ -8,6 +7,7 @@ import type { HeliumMethodDef } from "./defineMethod.js";
 import type { HeliumMiddleware } from "./middleware.js";
 import type { RateLimiter } from "./rateLimiter.js";
 import { trackRequestCleanup } from "./requestSignal.js";
+import { decodeRpcRequest } from "./rpcDecoder.js";
 
 export interface HttpRpcResult {
     response: RpcResponse | RpcResponse[];
@@ -159,7 +159,7 @@ export class RpcRegistry {
     async handleHttpRequest(body: Buffer | string, ip: string, req: http.IncomingMessage, signal: AbortSignal = new AbortController().signal): Promise<HttpRpcResult> {
         let value: unknown;
         try {
-            value = msgpackDecode(Buffer.isBuffer(body) ? body : Buffer.from(body));
+            value = decodeRpcRequest(body);
         } catch {
             return { response: { id: "unknown", ok: false, stats: this.getStats(ip), error: "Invalid request format" } };
         }
@@ -210,7 +210,7 @@ export class RpcRegistry {
     ): Promise<RpcStats> {
         let request: unknown;
         try {
-            request = msgpackDecode(body);
+            request = decodeRpcRequest(body);
         } catch {
             throw new PublicError("Invalid request format");
         }

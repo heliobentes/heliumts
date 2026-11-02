@@ -78,6 +78,25 @@ function frames(response: Response) {
 }
 for (const mode of ["development", "production"])
     describe(`${mode} streaming RPC`, () => {
+        it("rejects impossible MessagePack declarations and excessive depth on both HTTP endpoints", async () => {
+            const { base, token } = await start(mode, () => {});
+            const nested = Buffer.alloc(64, 0xc0);
+            for (let offset = 0; offset < 15; offset += 5) {
+                nested[offset] = 0xdd;
+                nested.writeUInt32BE(20, offset + 1);
+            }
+            const deep = Buffer.alloc(130, 0x91);
+            deep[deep.length - 1] = 0xc0;
+            for (const body of [Buffer.from([0xdd, 0, 0x0f, 0x42, 0x40]), nested, deep]) {
+                const options = { method: "POST", headers: { "X-Helium-Token": token }, body };
+                const unary = await fetch(`${base}/__helium__/rpc`, options);
+                expect(unary.status).toBe(200);
+                expect(decode(new Uint8Array(await unary.arrayBuffer()))).toMatchObject({ ok: false, error: "Invalid request format" });
+                const stream = frames(await fetch(`${base}/__helium__/stream`, options));
+                expect(await stream.next()).toMatchObject({ type: "error", error: "Invalid request format" });
+                expect(await stream.next()).toBe(null);
+            }
+        });
         it("delivers a typed early chunk before the generator finishes, then done stats", async () => {
             let release!: () => void;
             const gate = new Promise<void>((resolve) => {
