@@ -96,6 +96,102 @@ Implement that adapter using your provider's documented streaming API. Provider 
 
 Cancellation is cooperative: Helium aborts `ctx.signal` and requests iterator cleanup, but arbitrary provider code must observe that signal to stop work promptly. A generation may already have incurred provider usage before cancellation. Completed streams are not cached, and ordinary `useCall`, `useFetch`, and `callMethod` do not consume async iterables.
 
+## OpenAI example
+
+Install the official SDK in your app:
+
+```sh
+npm install openai
+```
+
+Set `OPENAI_API_KEY` in your server environment. Optionally set `OPENAI_MODEL` to a model available to your project; this example defaults to `gpt-6-astra`. Keep these variables server-only.
+
+The SDK is created inside the handler so discovering methods or building the app does not require an API key. `maxRetries: 0` disables SDK retries; starting another generation is an explicit application action.
+
+```ts
+// src/server/assistant.ts
+import { defineMethod, PublicError } from "heliumts/server";
+import OpenAI from "openai";
+
+export const streamAssistant = defineMethod(async function* (
+    { prompt }: { prompt: string }, ctx
+) {
+    if (typeof prompt !== "string" || !prompt.trim()) {
+        throw new PublicError("Enter a prompt.");
+    }
+
+    const openai = new OpenAI({ maxRetries: 0 });
+    const stream = await openai.responses.create(
+        {
+            model: process.env.OPENAI_MODEL || "gpt-6-astra",
+            input: prompt.trim(),
+            stream: true,
+        },
+        { signal: ctx.signal },
+    );
+
+    let completed = false;
+    try {
+        for await (const event of stream) {
+            if (event.type === "response.output_text.delta" ||
+                event.type === "response.refusal.delta") {
+                yield event.delta;
+            } else if (event.type === "response.completed") {
+                completed = true;
+            } else if (event.type === "error" ||
+                event.type === "response.failed" ||
+                event.type === "response.incomplete") {
+                throw new PublicError("The response could not be completed. Try again.");
+            }
+        }
+        if (!completed && !ctx.signal.aborted) {
+            throw new PublicError("The response ended before completion. Try again.");
+        }
+    } finally {
+        stream.controller.abort();
+    }
+});
+```
+
+The async generator yields only text deltas, including refusal text. It converts failed or incomplete responses into a safe public error, and closes the upstream stream in `finally`. Passing `ctx.signal` lets cancel, restart, or unmount stop the OpenAI request.
+
+```tsx
+// src/pages/assistant.tsx
+import { useState } from "react";
+import { useStreaming } from "heliumts/client";
+import { streamAssistant } from "heliumts/server";
+
+export default function Assistant() {
+    const [prompt, setPrompt] = useState("");
+    const { text, error, isStreaming, start, cancel, reset } =
+        useStreaming(streamAssistant);
+
+    return (
+        <form onSubmit={(event) => {
+            event.preventDefault();
+            void start({ prompt });
+        }}>
+            <label htmlFor="assistant-prompt">Prompt</label>
+            <input id="assistant-prompt" value={prompt}
+                onChange={(event) => setPrompt(event.target.value)} />
+            <button type="submit" disabled={!prompt.trim()}>
+                {isStreaming ? "Restart" : "Send"}
+            </button>
+            <button type="button" disabled={!isStreaming} onClick={cancel}>
+                Cancel
+            </button>
+            <button type="button" onClick={reset}>Reset</button>
+            <output aria-live="polite" style={{ whiteSpace: "pre-wrap" }}>{text}</output>
+            {error && <p role="alert">{error}</p>}
+        </form>
+    );
+}
+```
+
+The component imports the generated method stub from `heliumts/server`; the OpenAI SDK and API key stay on the server. `text` accumulates string chunks, and `error` appears separately without discarding received text. Apply application authentication and quotas in method middleware before exposing a provider-backed method.
+
+This example uses the OpenAI [Responses streaming API](https://developers.openai.com/api/docs/guides/streaming-responses). It requires your own OpenAI project credentials; the [deterministic demo](https://heliumts.com/streaming) runs without provider calls.
+
 ## Errors, limits, and deployment
 
 Streams use their own authenticated HTTP requests, outside ordinary RPC batches. They share per-IP request limits and request-body bounds with other RPC calls. A frame is capped at 10 MiB. Ordinary errors are sanitized in production; use `PublicError` or an error marked `public: true` for intended user messages.
