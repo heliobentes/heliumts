@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.2
+
+- Hydrate SSR and SSG pages using their initial route instead of briefly selecting the home route, preserving server-rendered markup on direct visits.
+- Replace the raw HTTP OpenAI streaming recipe with a typed `defineMethod` and `useStreaming` example, including upstream cancellation and partial failures.
+
 ## 0.10.1
 
 - Validate MessagePack request structure before decoding in both RPC endpoints, bounding declared container sizes and nesting depth within the request-body limit.

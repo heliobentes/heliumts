@@ -31,7 +31,7 @@ HeliumTS is a lightweight, opinionated full-stack React + Vite framework designe
 
 ## 1. Getting Started
 
-The current release is **0.10.1**. See the [changelog](./CHANGELOG.md) for fixes and upgrade notes.
+The current release is **0.10.2**. See the [changelog](./CHANGELOG.md) for fixes and upgrade notes.
 
 ### 1.1. Installation
 

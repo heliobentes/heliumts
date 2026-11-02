@@ -153,6 +153,7 @@ if (typeof window !== "undefined" && isDevEnvironment()) {
 
 type RouterState = {
     path: string;
+    search: string;
     searchParams: URLSearchParams;
     isNavigating: boolean;
 };
@@ -161,6 +162,7 @@ function getLocation(): RouterState {
     const { pathname, search } = window.location;
     return {
         path: pathname,
+        search,
         searchParams: new URLSearchParams(search),
         isNavigating: false,
     };
@@ -198,7 +200,7 @@ if (typeof window !== "undefined" && isDevEnvironment()) {
     currentLocation = getLocation();
     locationListeners = new Set();
 } else {
-    currentLocation = { path: "/", searchParams: new URLSearchParams(), isNavigating: false };
+    currentLocation = { path: "/", search: "", searchParams: new URLSearchParams(), isNavigating: false };
     locationListeners = new Set();
 }
 
@@ -226,9 +228,22 @@ function getLocationSnapshot() {
     return currentLocation;
 }
 
-const SERVER_SNAPSHOT: RouterState = { path: "/", searchParams: new URLSearchParams(), isNavigating: false };
+const SERVER_SNAPSHOT: RouterState = { path: "/", search: "", searchParams: new URLSearchParams(), isNavigating: false };
+let hydrationSnapshot: RouterState | undefined;
 function getServerSnapshot() {
-    return SERVER_SNAPSHOT;
+    if (typeof window === "undefined") {
+        return SERVER_SNAPSHOT;
+    }
+    if (!hydrationSnapshot) {
+        const bootstrap = getInitialSSRBootstrap();
+        const staticPath = document.getElementById("root")?.getAttribute("data-ssg-page");
+        // Static pages were rendered with their canonical pathname and no query.
+        // SSR pages serialize the exact request search, including its encoding.
+        const path = bootstrap?.path ?? staticPath ?? window.location.pathname;
+        const search = bootstrap ? (bootstrap.search ?? window.location.search) : staticPath !== null && staticPath !== undefined ? "" : window.location.search;
+        hydrationSnapshot = { path, search, searchParams: new URLSearchParams(search), isNavigating: false };
+    }
+    return hydrationSnapshot;
 }
 
 function updateLocation(isNavigating = false) {
@@ -574,7 +589,7 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
     // Use useSyncExternalStore to subscribe to location changes
     // This ensures synchronous updates when location changes
     const state = useSyncExternalStore(subscribeToLocation, getLocationSnapshot, getServerSnapshot);
-    const targetPath = `${state.path}${typeof window !== "undefined" ? window.location.search : ""}`;
+    const targetPath = `${state.path}${state.search ?? (typeof window !== "undefined" ? window.location.search : "")}`;
     const [runtimeSSRProps, setRuntimeSSRProps] = React.useState<{ path: string; props: Record<string, unknown> }>(() => {
         const payload = getInitialSSRBootstrap();
         if (!payload) {
@@ -591,7 +606,7 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
     const currentParams = match?.params ?? (isDevEnvironment() ? extractParamsFromPath(state.path) : {});
 
     // In dev mode, always read fresh searchParams from URL to handle HMR edge cases
-    const currentSearchParams = isDevEnvironment() ? new URLSearchParams(window.location.search) : state.searchParams;
+    const currentSearchParams = isDevEnvironment() && state !== hydrationSnapshot ? new URLSearchParams(window.location.search) : state.searchParams;
 
     const routerValue: RouterContext = {
         path: state.path,
