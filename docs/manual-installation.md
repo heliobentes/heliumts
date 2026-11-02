@@ -2,6 +2,8 @@
 
 If you prefer to set up your project manually instead of using the scaffolding tool, follow these steps to create a new HeliumTS project.
 
+Requires Node.js 20.19+ within Node 20, or Node.js 22.12+, and React 18 or 19.
+
 ## 1. Install React + Vite
 
 Create a new Vite project with the React TypeScript template:
@@ -16,7 +18,8 @@ cd my-helium-app
 Install the HeliumTS package:
 
 ```bash
-npm install heliumts
+npm install heliumts@^0.9.6 cac@^6.7.14 esbuild@^0.27.0
+npm install -D vite@^7.3.7
 ```
 
 ## 3. Setup Vite Config

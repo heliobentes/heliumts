@@ -184,7 +184,7 @@ See [Route Groups - Layout Hierarchy](./route-groups.md#layout-hierarchy) for mo
 
 ### Layouts and SSR
 
-When a page uses the `"use ssr"` directive, layouts are rendered on the server too. If a layout has an auth guard that returns `null` (e.g. while a session is loading), the server render will produce empty markup. Use `isSSR()` to skip the guard on the server while still rendering providers:
+When a page uses the `"use ssr"` directive, layouts render on the server too. Authenticate and authorize protected data in `getServerSideProps` and RPC/HTTP handlers before returning it. A client layout guard is not access control. After that server-side check, `isSSR()` can skip browser-only session-loading UI while still rendering providers:
 
 ```tsx
 import { isSSR } from "heliumts/client";
@@ -236,11 +236,11 @@ export default function Nav() {
 - Left-clicks are intercepted for SPA navigation
 - Modifier keys (Ctrl, Cmd, Shift, Alt) preserve normal link behavior (open in new tab, etc.)
 - Right-clicks and middle-clicks work normally
-- **Automatic prefetching**: When users hover over or focus on a link, the page chunk is preloaded in the background for instant navigation
+- **Prefetch hooks**: Hover and focus trigger the route preload function. In 0.9.6, route discovery also eagerly imports page components, so this does not provide independent page chunks or guarantee a smaller initial bundle.
 
 **Prefetching:**
 
-Links automatically prefetch page chunks on hover and focus (keyboard navigation). This means when a user clicks a link, the page is often already loaded:
+Links call route preload functions on hover and focus (keyboard navigation). The current route manifest eagerly imports pages; full page-level code splitting is not implemented.
 
 ```tsx
 // Prefetching enabled by default
@@ -585,7 +585,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
 ### How It Works
 
-1. **Lazy Loading**: Pages are automatically code-split and lazy-loaded
+1. **Page Loading**: The current manifest eagerly imports pages; it also exposes preload functions for navigation.
 2. **Prefetching**: Link components prefetch pages on hover/focus
 3. **Deferred Rendering**: React renders new pages in the background
 4. **Visual Feedback**: Old content fades while new content loads
@@ -954,3 +954,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(<AppRouter>{/* Your
 - [SSR](./ssr.md) - Server-side rendering per request
 - [Context API](./context-api.md) - Access request context
 - [RPC Methods](./README.md#rpc-remote-procedure-calls) - Fetch data in pages
+
+
+## Route discovery and state
+
+Static segments take precedence over dynamic segments, which take precedence over catch-all segments. The client and SSR use the same ordering. `_layout.*`, `_app.*`, declaration files, and `*.server.*` sidecars are not page routes.
+
+Shared layout instances keep their state across navigation. SSR bootstrap props belong to the exact pathname and query string; navigating to a new target resolves that target's props before rendering it.

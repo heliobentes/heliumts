@@ -1,298 +1,133 @@
-# Production Deployment
+# Production deployment
 
-## Platform Compatibility
+Helium's production build runs a persistent Node.js HTTP server with HTTP handlers, SSR, and HTTP/WebSocket RPC. Deploy `dist/server.js` to a host that runs Node.js and accepts WebSocket upgrades when using the WebSocket transport. Uploading `dist` to static hosting serves assets and generated pages, but does not run server methods or SSR.
 
-Helium uses WebSocket-based RPC for real-time communication between client and server. This architecture requires a **persistent server process**, which affects your choice of hosting platform.
+## Build and start
 
-### ✅ Fully Compatible Platforms
-
-These platforms support persistent Node.js servers and WebSocket connections:
-
-| Platform | WebSocket Support | RPC Support | Notes |
-|----------|------------------|-------------|-------|
-| **Digital Ocean App Platform** | ✅ | ✅ | Recommended. Full support for all features |
-| **Railway** | ✅ | ✅ | Excellent for quick deployments |
-| **Render** | ✅ | ✅ | Free tier available |
-| **Fly.io** | ✅ | ✅ | Great for edge deployments |
-| **AWS EC2 / ECS** | ✅ | ✅ | Full control, requires more setup |
-| **Google Cloud Run** | ✅ | ✅ | Set `--session-affinity` for WebSockets |
-| **Heroku** | ✅ | ✅ | Use `heroku labs:enable http-session-affinity` |
-| **Self-hosted / VPS** | ✅ | ✅ | Docker or direct Node.js |
-
-### ⚠️ Limited Compatibility Platforms
-
-These platforms have fundamental limitations that affect Helium features:
-
-| Platform | Issue | What Works | What Doesn't Work |
-|----------|-------|------------|-------------------|
-| **Vercel** | Serverless (no persistent connections) | SSG pages, static assets | WebSocket RPC, direct URL navigation to dynamic routes |
-| **Netlify** | Serverless (no persistent connections) | SSG pages, static assets | WebSocket RPC, direct URL navigation to dynamic routes |
-| **Cloudflare Pages** | Serverless | SSG pages, static assets | WebSocket RPC |
-
-### Using Helium on Vercel/Netlify (Limited Mode)
-
-If you must use Vercel or Netlify, Helium can work in **SSG-only mode**:
-
-1. **Pre-render all pages** using SSG (see [SSG documentation](./ssg.md))
-2. **Avoid RPC calls** - use external APIs or pre-fetched data instead
-3. **Add SPA fallback** with a `vercel.json`:
-
-```json
-{
-    "rewrites": [
-        { "source": "/(.*)", "destination": "/index.html" }
-    ]
-}
-```
-
-**Note:** Even with SPA fallback, refreshing a page or navigating directly to a URL (not from the home page) may fail if that route requires server-side data.
-
----
-
-## Configuration Files in Production
-
-When deploying your Helium application, the framework needs to load your `helium.config` file. The build process automatically handles TypeScript config files for you.
-
-### Automatic Config Transpilation
-
-During `helium build`, the framework:
-
-1. **If `helium.config.ts` exists**: Automatically transpiles it to `dist/helium.config.js`
-2. **If `helium.config.js` exists**: Copies it to `dist/helium.config.js`
-3. **If `helium.config.mjs` exists**: Copies it to `dist/helium.config.mjs`
-
-When you run `helium start`, the production server looks for the config file in the `dist` directory first, then falls back to the project root.
-
-### Deployment Structure
-
-After running `helium build`, your deployment should include:
-
-```
-your-app/
-├── dist/
-│   ├── server.js              # Bundled server code
-│   ├── helium.config.js       # Transpiled config (if you had .ts)
-│   ├── index.html             # Client entry
-│   └── assets/                # Client bundles
-├── package.json
-└── node_modules/
-```
-
-### Platform-Specific Instructions
-
-#### Digital Ocean App Platform
-
-1. Set build command: `npm run build`
-2. Set run command: `npm run start` (or directly: `helium start`)
-3. Ensure `node_modules` is included in the deployment
-4. Add environment variables in Settings → App-Level Environment Variables
-    - Example: `DATABASE_URL`, `JWT_SECRET`, `PORT`, etc.
-    - These will be available in `process.env` automatically
-
-#### Docker
-
-```dockerfile
-FROM node:18-alpine
-
-WORKDIR /app
-
-# Copy package files
-COPY package*.json ./
-RUN npm ci --only=production
-
-# Copy built files
-COPY dist ./dist
-
-# The config file should be in dist/ after build
-EXPOSE 3000
-
-CMD ["node", "dist/server.js"]
-```
-
-#### Vercel / Netlify (Limited Support)
-
-> ⚠️ **Important:** Vercel and Netlify are **serverless platforms** that do not support persistent WebSocket connections. This means:
-> - **WebSocket-based RPC will not work**
-> - **Direct URL navigation** to routes (other than the home page) will return 404 errors
-> - Only **pre-rendered SSG pages** and **SPA navigation from the home page** work correctly
-
-**If you need full Helium functionality, use a platform that supports persistent servers** (see [Platform Compatibility](#platform-compatibility) above).
-
-For SSG-only deployments on Vercel, add a `vercel.json`:
-
-```json
-{
-    "rewrites": [
-        { "source": "/(.*)", "destination": "/index.html" }
-    ]
-}
-```
-
-For Netlify, add a `_redirects` file in your `public` folder:
-
-```
-/*    /index.html   200
-```
-
-### Manual Config Conversion
-
-If you prefer to use `.js` config files in production without transpilation:
-
-1. Rename your config file:
-
-    ```bash
-    mv helium.config.ts helium.config.js
-    ```
-
-2. Update the syntax to JavaScript:
-    ```javascript
-    // helium.config.js
-    export default {
-        trustProxyDepth: 1,
-        rpc: {
-        compression: {
-            enabled: true,
-            threshold: 1024,
-        },
-            security: {
-                maxConnectionsPerIP: 10,
-                maxMessagesPerWindow: 100,
-                rateLimitWindowMs: 60000,
-                tokenValidityMs: 30000,
-            },
-        },
-    };
-    ```
-
-## Environment Variables
-
-### Client-Side Environment Variables
-
-To expose environment variables to the browser, prefix them with `HELIUM_PUBLIC_`:
+Requires Node.js 20.19+ within Node 20, or Node.js 22.12+. React 18 and 19 are supported.
 
 ```bash
-# .env or platform environment variables
-HELIUM_PUBLIC_APP_NAME=My App
-HELIUM_PUBLIC_API_URL=https://api.example.com
-HELIUM_PUBLIC_FEATURE_FLAG=true
+npm ci
+npm run build
+npm run start
 ```
 
-Access them in your React components using `getPublicEnv()` or `window.__HELIUM__.env`:
-
-```typescript
-import { getPublicEnv } from 'heliumts/client';
-
-function MyComponent() {
-    const env = getPublicEnv();
-    const appName = env.HELIUM_PUBLIC_APP_NAME;
-    const apiUrl = env.HELIUM_PUBLIC_API_URL;
-    const featureEnabled = env.HELIUM_PUBLIC_FEATURE_FLAG === 'true';
-    
-    return <div>{appName} - {apiUrl}</div>;
-}
-```
-
-If you only need public env access in a browser-only script or widget bundle, import the narrower env entry instead of the full client runtime:
-
-```typescript
-import { getPublicEnv } from 'heliumts/client/env';
-```
-
-This avoids pulling in the router and RPC runtime in non-Helium builds.
-
-**Important:**
-
-- Runtime injection: Public environment variables are exposed through `window.__HELIUM__.env` for both dev and prod.
-- Only `HELIUM_PUBLIC_*` variables are exposed to the browser for security reasons
-- Server-side code can access all environment variables via `process.env`
-
-### Using Platform Environment Variables (Recommended)
-
-Most cloud platforms (Digital Ocean, Vercel, Heroku, etc.) provide their own environment variable management. This is the **recommended approach** for production:
-
-**Digital Ocean App Platform:**
-
-1. Go to your app's Settings → App-Level Environment Variables
-2. Add your variables (e.g., `DATABASE_URL`, `API_KEY`, `HELIUM_PUBLIC_APP_NAME`)
-3. They'll be automatically injected into `process.env` and exposed to the client if prefixed with `HELIUM_PUBLIC_`
-
-**Advantages:**
-
-- No need to deploy `.env` files
-- Variables are managed securely by the platform
-- Different values per environment (staging/production)
-- No risk of committing secrets to git
-- **No rebuild required** when changing client-side variables
-
-### Using .env Files in Production
-
-If you need to deploy `.env` files, you have two options:
-
-**Option 1: Include in deployment**
-
-Add `.env` files to your deployment artifacts. For Digital Ocean:
-
-1. Remove `.env` from `.gitignore` (only for non-secret configs)
-2. Or manually upload `.env` files via the platform UI
-
-**Option 2: Copy during build**
-
-Update your build process to copy `.env` files:
+For a typical app, these scripts are:
 
 ```json
 {
     "scripts": {
-        "build": "helium build && cp .env* dist/ 2>/dev/null || true"
+        "dev": "helium dev",
+        "build": "helium build",
+        "start": "helium start"
     }
 }
 ```
 
-Then in production, run from the `dist` directory:
+You can also start the built server directly from the project root:
 
 ```bash
-cd dist && node server.js
+NODE_ENV=production node dist/server.js
 ```
 
-### Environment Variable Priority
+The built entry defaults `NODE_ENV` to `production` when it is unset. Both startup paths use `PORT` (default 3000), load production environment files from the working directory, and look for built configuration beside `server.js`. Signals reach the server and stop background workers before shutdown.
 
-Helium loads environment variables in this order (highest to lowest priority):
+## Configuration in the build
 
-1. **Platform environment variables** (from hosting provider)
-2. `.env.production.local`
-3. `.env.local`
-4. `.env.production`
-5. `.env`
+`helium build` finds `helium.config.js`, `helium.config.mjs`, or `helium.config.ts`, in that order, and bundles it with its relative helpers into `dist/helium.config.js`. The same TypeScript configuration works during development without a separate TypeScript runtime loader.
 
-Existing `process.env` values are never overridden by `.env` files.
+Invalid configuration fails startup/build instead of silently replacing security or RPC settings with defaults. Keep configuration packages that remain external in the application's runtime dependencies.
 
-### Troubleshooting
+A deployment contains:
 
-**Warning: "No .env files found or no variables loaded"**
+```text
+your-app/
+├── dist/
+│   ├── server.js
+│   ├── helium.config.js       # Present when a config exists
+│   ├── index.html             # SPA fallback
+│   ├── index.ssg.html         # Present when / uses SSG
+│   └── assets/
+├── package.json
+├── package-lock.json
+└── node_modules/              # Runtime dependencies and external integrations
+```
 
-This warning appears when:
+An explicit `HELIUM_CONFIG_DIR` overrides the config search directory. Leave it unset unless you intentionally deploy configuration separately.
 
-1. No `.env` files exist (normal if using platform variables)
-2. `.env` files exist but contain no variables
-3. Working directory doesn't contain `.env` files
+## Environment variables
 
-**Solutions:**
+Set server secrets through the host's environment settings or a privately supplied environment file. Keep `.env*` files out of Git and out of the public static artifact.
 
-- If using platform environment variables: Ignore this warning, it's expected
-- If using `.env` files: Ensure they're in the same directory as `server.js`
-- Check `process.cwd()` matches your `.env` file location
+- `PORT` selects the HTTP listening port.
+- `HELIUM_SECRET` provides a stable connection-token signing secret. Set the same value on instances that share traffic. A generated fallback secret changes across restarts and is not shared across instances.
+- Application database/API credentials stay server-side and must never be returned from RPC methods or SSR props.
+- Only values prefixed `HELIUM_PUBLIC_` are intended for browser exposure. Use `getPublicEnv()` or `getPublicEnvValue()` from `heliumts/client`; `heliumts/client/env` is a smaller entry for browser-only code that does not need the router.
 
-**Error: "Unknown file extension .ts"**
+Production reads `.env`, `.env.production`, `.env.local`, and `.env.production.local`. More specific files take priority over less specific files; existing process environment values are not overwritten. Run from the directory containing those files if you use them.
 
-This means the config file wasn't transpiled during build. Ensure:
+The server injects public process environment values into HTML before the client runs. Values rendered into SSG content are fixed at build time; rebuild SSG pages when those values change. Do not assume that an environment update rewrites already generated page content.
 
-1. Your config file is at the project root as `helium.config.ts`
-2. You ran `helium build` before deploying
-3. The `dist/helium.config.js` file exists after build
+## Reverse proxies and multiple instances
 
-**Config not loading in production**
+Set `trustProxyDepth` to the actual number of trusted proxies. The default is zero, which ignores forwarding headers. At positive depth, Helium selects `X-Forwarded-For` from the right, counting the socket peer as the first hop. The proxy must append the actual connection IP and overwrite provider-specific IP/protocol headers.
 
-Check that:
+```ts
+import type { HeliumConfig } from "heliumts/server";
 
-1. The config file is in the `dist` directory
-2. You're running from the correct directory (where `dist/` exists)
-3. The `HELIUM_CONFIG_DIR` environment variable isn't incorrectly set
+export default {
+    trustProxyDepth: 1,
+    rpc: {
+        transport: "auto",
+        security: {
+            maxConnectionsPerIP: 10,
+            maxMessagesPerWindow: 100,
+            rateLimitWindowMs: 60_000,
+        },
+    },
+} satisfies HeliumConfig;
+```
+
+Use depth one only when that topology matches the deployment. See [proxy configuration](./proxy-configuration.md) for examples.
+
+HTTP RPC limits share an IP window; WebSocket message limits are per connection. The limiter is process-local. Shared quotas across multiple instances need enforcement outside this in-memory limiter. Background workers start in each server instance unless their application configuration disables them; account for that when scaling consumers or scheduled work.
+
+Configure the proxy to forward WebSocket upgrade headers and use appropriate connection timeouts. Even with HTTP RPC selected, the built application still needs its Node.js server for RPC handlers and SSR.
+
+## Docker example
+
+Build the app before running the runtime image. Use a supported Node.js image in both stages:
+
+```dockerfile
+FROM node:22-alpine AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:22-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+COPY package*.json ./
+RUN npm ci --omit=dev --ignore-scripts
+COPY --from=build /app/dist ./dist
+EXPOSE 3000
+CMD ["node", "dist/server.js"]
+```
+
+Exclude local dependencies, `.git`, and secret environment files from the Docker build context. Supply production secrets at runtime. If an external dependency requires an installation script, review and run its installation step rather than assuming `--ignore-scripts` works for that integration.
+
+## Static-only hosting
+
+Static hosting can serve SSG pages and SPA assets. It cannot run this Node server's SSR, RPC, custom HTTP endpoints, or workers. Configure route rewrites for the host and preserve per-route generated HTML before falling back to `index.html`. Test direct links as well as client navigation; a universal rewrite to the SPA shell can discard generated HTML.
+
+## Release checks
+
+Verify the actual built artifact after deployment:
+
+1. Load an SSG page and an SSR page directly, then navigate to each from another route.
+2. Confirm query parameters reach SSR props and private props are returned only to an authorized user.
+3. Test the configured RPC transport, custom HTTP callbacks, and all expected cookies.
+4. Check trusted client IP/protocol values behind the real proxy.
+5. Confirm HTML is not shared-cached across users, and verify worker start/shutdown behavior.

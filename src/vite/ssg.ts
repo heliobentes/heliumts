@@ -3,7 +3,7 @@ import path from "path";
 
 import { replaceHtmlRootContents } from "../utils/html.js";
 import { log } from "../utils/logger.js";
-import { isPageFile, scanAppShell, scanServerExports } from "./scanner.js";
+import { hasPageDirective, isPageFile, scanAppShell, scanServerExports } from "./scanner.js";
 import { generateClientModule } from "./virtualServerModule.js";
 
 /**
@@ -120,7 +120,7 @@ export function scanSSGPages(root: string): SSGPage[] {
                 const content = fs.readFileSync(fullPath, "utf-8");
 
                 // Check for "use ssg"; directive at the top of the file
-                if (/^\s*["']use ssg["']\s*;/m.test(content)) {
+                if (hasPageDirective(content, "use ssg")) {
                     const relativePath = path.relative(path.join(root, "src"), fullPath);
                     const urlPath = filePathToUrlPath(relativePath);
 

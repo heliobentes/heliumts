@@ -31,9 +31,11 @@ HeliumTS is a blazing fast 🚀 and opinionated full-stack React + Vite framewor
 
 ## 1. Getting Started
 
+The current release is **0.9.6**. See the [changelog](./CHANGELOG.md) for fixes and upgrade notes.
+
 ### 1.1. Installation
 
-Requires Node.js 20.19+ or 22.12+ and React 18 or 19.
+Requires Node.js 20.19+ within Node 20, or Node.js 22.12+, and React 18 or 19.
 
 The easiest way to get started with HeliumTS is by using the scaffolding tool:
 
@@ -421,7 +423,7 @@ See [SSR Documentation](./docs/ssr.md) for detailed information including sideca
 -   [HTTP Handlers & Webhooks](./docs/http-handlers.md) - Create custom HTTP endpoints for webhooks and REST APIs
 -   [Production Deployment](./docs/production-deployment.md) - Deploy to production platforms and platform compatibility
 
-> ⚠️ **Hosting Note:** Helium requires a platform that supports persistent Node.js servers (e.g., Digital Ocean, Railway, Render). Serverless platforms like **Vercel and Netlify are not fully compatible** due to WebSocket limitations. See [Production Deployment](./docs/production-deployment.md) for details.
+> **Hosting:** Full Helium functionality runs through its persistent Node.js server. Static-only hosting serves assets and SSG output, but does not execute SSR, RPC, HTTP handlers, or workers. See [Production Deployment](./docs/production-deployment.md).
 
 ## 6. Contributing
 

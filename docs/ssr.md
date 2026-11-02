@@ -25,7 +25,7 @@ That's it. On every request for `/dashboard`, HeliumTS renders the component on 
 | HTML on first load       | ✅ Per-request            | ✅ Build-time | ❌ Empty `<div id="root">`       |
 | Dynamic per-request data | ✅                        | ❌            | ✅ (client-only)                 |
 | Server-side props        | ✅ `getServerSideProps`   | ❌            | ❌                               |
-| Auth-protected pages     | ✅ (skip guard on server) | ❌            | ✅                               |
+| Auth-protected pages     | ✅ Authorize server-side  | ❌            | ✅ Authorize server APIs         |
 | Build step required      | ❌                        | ✅            | ❌                               |
 | Suitable for SEO         | ✅                        | ✅            | ⚠️ Requires crawler JS execution |
 
@@ -33,7 +33,7 @@ That's it. On every request for `/dashboard`, HeliumTS renders the component on 
 
 To fetch data on the server for each request, export a `getServerSideProps` function from the same page file **or** from a sidecar `page.server.ts` file.
 
-### Inline export (NOT recommended)
+### Inline export (avoid server-only imports)
 
 ```tsx
 "use ssr";
@@ -52,11 +52,11 @@ export default function ProfilePage({ user }: { user: { name: string } }) {
 
 ### Sidecar file (recommended)
 
-Using a `page.server.ts` sidecar avoids mixing server and client code in the same file, which prevents React Fast Refresh warnings:
+Use a `page.server.ts` sidecar for database clients, secrets, authentication, and other server-only dependencies. Page files enter the browser bundle; the sidecar is loaded only for server rendering and props.
 
 ```
 src/pages/
-└── profile.tsx          # Page component ("use ssr")
+├── profile.tsx          # Page component ("use ssr")
 └── profile.server.ts    # Server-side props
 ```
 
@@ -146,7 +146,9 @@ Behavior:
 
 Layouts work the same way with SSR pages as with regular pages. However, layouts that contain auth guards or other logic that returns `null` during SSR will produce an empty server render.
 
-Use the `isSSR()` utility to skip client-only logic while still rendering the full provider tree on the server:
+Authenticate and authorize every protected SSR request in `getServerSideProps`, and protect subsequent RPC/HTTP access independently. Return a redirect or throw before returning protected props when the user has no access. A client-only layout guard cannot protect server-rendered data.
+
+After implementing server authorization, use `isSSR()` only to skip browser-only loading behavior while rendering the provider tree:
 
 ```tsx
 // src/pages/(app)/_layout.tsx
@@ -164,7 +166,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     }, [data, isPending, router]);
 
     // Skip the auth guard during SSR so providers still wrap the page for rendering.
-    // Client-side hydration will enforce the redirect if needed.
+    // Protected props must already have passed server-side authorization.
     if (!isSSR()) {
         if (isPending) return null;
         if (!data?.session) return null;
@@ -198,7 +200,7 @@ Returns `true` when running on the server during SSR, `false` in the browser. Eq
 
 ## Client-Side Navigation
 
-On subsequent navigations (after the first page load), HeliumTS fetches props via `GET /__helium__/page-props?path=<url>` and re-renders the page client-side — no full page reload is needed.
+On subsequent navigations, HeliumTS fetches props via `GET /__helium__/page-props?path=<encoded-url>` and re-renders the page client-side. The target query string is passed to `getServerSideProps`. The endpoint and rendered HTML use `Cache-Control: no-store`; authorize it just as you authorize the initial page request. Only serialize data that the current browser user may read.
 
 ## Sidecar File Conventions
 
@@ -215,7 +217,7 @@ The sidecar must export `getServerSideProps`. Any other exports in the sidecar a
 
 ## Browser-Only Dependencies
 
-If a page or its transitively imported modules access browser globals (`window`, `document`, `navigator`) at module evaluation time, SSR will fail with a runtime error and the page will fall back to the default SPA shell.
+If a page or its transitively imported modules access browser globals (`window`, `document`, `navigator`) at module evaluation time, SSR will fail with a runtime error and the page falls back to the default SPA shell for those browser-global errors. Other rendering/props errors return HTTP 500; Helium does not retry a failed layout by rendering the page alone.
 
 The most common cause is importing a browser-only library (e.g. a map library) directly at the top level. Move such imports inside `useEffect` or use a dynamic `import()`:
 

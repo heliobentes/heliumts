@@ -1,6 +1,6 @@
 # Data Fetching
 
-HeliumTS provides two React hooks for data fetching and mutations: `useFetch` and `useCall`. Both hooks communicate with the server over WebSocket RPC, providing real-time, type-safe data operations.
+HeliumTS provides two React hooks for data fetching and mutations: `useFetch` and `useCall`. Both hooks use the RPC transport configured in `helium.config.ts`: WebSocket, HTTP, or automatic selection. Import method stubs from `heliumts/server` in client components; keep their implementations in `src/server`.
 
 ## Public errors in production
 
@@ -54,7 +54,7 @@ function TaskList() {
 | `data`      | `TResult \| undefined`                                    | The fetched data (typed based on server method return type) |
 | `isLoading` | `boolean`                                                 | Whether a fetch is in progress                              |
 | `error`     | `string \| null`                                          | Error message if the fetch failed                           |
-| `stats`     | `RpcStats \| null`                                        | RPC statistics (timing, etc.)                               |
+| `stats`     | `RpcStats \| null`                                        | Remaining request allowance and window reset time                               |
 | `refetch`   | `(showLoader?: boolean) => Promise<TResult \| undefined>` | Function to manually trigger a refetch                      |
 
 ### Options
@@ -73,7 +73,7 @@ const { data, isLoading } = useFetch(method, args, {
 
 | Option                 | Type      | Default          | Description                                                                                                                                     |
 | ---------------------- | --------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ttl`                  | `number`  | `300000` (5 min) | Time-to-live for cached data in milliseconds. After TTL expires, data is automatically refetched.                                               |
+| `ttl`                  | `number`  | `300000` (5 min) | Time-to-live for cached data in milliseconds. An expired entry is fetched on the next read/refetch trigger; TTL is not a polling interval.                                               |
 | `refetchOnWindowFocus` | `boolean` | `true`           | Automatically refetch when the browser tab becomes visible or window regains focus.                                                             |
 | `showLoaderOnRefocus`  | `boolean` | `false`          | Whether to show loading state during focus-triggered refetches. When `false`, data updates silently in the background without showing a loader. |
 | `showLoaderOnInvalidate` | `boolean` | `false`        | Whether to show loading state during refetches triggered by cache invalidation. When `false`, data updates silently in the background.          |
@@ -106,7 +106,7 @@ Set a shorter cache duration for frequently changing data:
 
 ```tsx
 const { data: notifications } = useFetch(getNotifications, undefined, {
-    ttl: 10000, // Refresh every 10 seconds
+    ttl: 10000, // Cached results expire after 10 seconds; this does not poll
 });
 ```
 
@@ -128,6 +128,7 @@ If you want to show a loading indicator when refetching on focus:
 const { data, isLoading } = useFetch(getPosts, undefined, {
     showLoaderOnRefocus: true, // Show loader when refetching on tab focus
 });
+```
 
 #### Show Loader on Invalidate
 
@@ -137,7 +138,6 @@ If you want invalidation-triggered refetches to show a loading indicator:
 const { data, isLoading } = useFetch(getPosts, undefined, {
     showLoaderOnInvalidate: true, // Show loader when refetching after invalidation
 });
-```
 ```
 
 #### Disable Refetch on Window Focus
@@ -225,7 +225,7 @@ function CreateTaskForm() {
 | `call`      | `(args: TArgs) => Promise<TResult \| undefined>` | Function to execute the server method |
 | `isCalling` | `boolean`                                        | Whether a call is in progress         |
 | `error`     | `string \| null`                                 | Error message if the call failed      |
-| `stats`     | `RpcStats \| null`                               | RPC statistics (timing, etc.)         |
+| `stats`     | `RpcStats \| null`                               | Remaining request allowance and window reset time         |
 
 ### Options
 
@@ -387,3 +387,12 @@ export const getUser = defineMethod(async (args: { id: string }) => {
 const { data } = useFetch(getUser, { id: "123" });
 // data is typed as { id: string; name: string; email: string } | undefined
 ```
+
+
+## Request lifecycle and retries
+
+Queries with the same method and arguments share pending work. Changing arguments ignores older responses, and invalidating a pending query prevents its old result from replacing the fresh cache entry. `invalidateAll()` also includes pending queries. Shared layouts preserve their component state as navigation changes the page.
+
+HTTP calls are grouped up to `rpc.maxBatchSize` (default 20), use a 30-second request timeout, and share a rate-limit window per client IP. WebSocket limits apply per connection, with a separate concurrent-connection limit per IP.
+
+Transport failures can trigger automatic retries. A lost response does not prove that a mutation failed to run: make side-effecting methods idempotent before relying on retries, especially for payments, email delivery, or job creation. Helium does not provide server-side deduplication of logical mutations.

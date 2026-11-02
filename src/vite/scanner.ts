@@ -191,9 +191,79 @@ export function isPageFile(fileName: string): boolean {
     return /\.(tsx|jsx|ts|js)$/.test(fileName) && !/\.d\.ts$/.test(fileName) && !fileName.includes(".server.") && !/^_(?:layout|app)\./.test(fileName);
 }
 
-function hasUseSSRDirective(content: string): boolean {
-    // Directive can be single or double quoted and may omit semicolon.
-    return /^\s*["']use ssr["']\s*;?/m.test(content);
+/** Read directives only from the module prologue, never from comments or examples. */
+export function hasPageDirective(source: string, directive: "use ssr" | "use ssg"): boolean {
+    const skipTrivia = (start: number): { position: number; lineBreak: boolean } => {
+        let position = start;
+        let lineBreak = false;
+        while (position < source.length) {
+            const char = source[position];
+            if (/\s/.test(char)) {
+                lineBreak ||= /[\n\r\u2028\u2029]/.test(char);
+                position++;
+            } else if (source.startsWith("//", position)) {
+                const end = source.slice(position + 2).search(/[\n\r\u2028\u2029]/);
+                position = end < 0 ? source.length : position + 2 + end;
+            } else if (source.startsWith("/*", position)) {
+                const end = source.indexOf("*/", position + 2);
+                if (end < 0) {
+                    return { position: source.length, lineBreak };
+                }
+                lineBreak ||= /[\n\r\u2028\u2029]/.test(source.slice(position + 2, end));
+                position = end + 2;
+            } else {
+                break;
+            }
+        }
+        return { position, lineBreak };
+    };
+
+    let position = source.charCodeAt(0) === 0xfeff ? 1 : 0;
+    if (source.startsWith("#!", position)) {
+        const end = source.indexOf("\n", position);
+        position = end < 0 ? source.length : end + 1;
+    }
+    position = skipTrivia(position).position;
+
+    while (position < source.length) {
+        const quote = source[position];
+        if (quote !== '"' && quote !== "'") {
+            return false;
+        }
+        const valueStart = ++position;
+        while (position < source.length && source[position] !== quote) {
+            if (/[\n\r\u2028\u2029]/.test(source[position])) {
+                return false;
+            }
+            if (source[position] === "\\") {
+                position++;
+                if (source[position] === "\r" && source[position + 1] === "\n") {
+                    position++;
+                }
+            }
+            position++;
+        }
+        if (position >= source.length) {
+            return false;
+        }
+        const value = source.slice(valueStart, position);
+        const after = skipTrivia(position + 1);
+        const next = source.slice(after.position);
+        // A string followed by an operator, call, property access, or template is
+        // part of a larger expression, not a directive (including across a newline).
+        const continuesExpression = /^(?:[([.?,`*/%&|^<>=]|\+(?!\+)|-(?!-)|!=|(?:in|instanceof|as|satisfies)\b)/.test(next);
+        if (next.startsWith(";")) {
+            position = skipTrivia(after.position + 1).position;
+        } else if (next === "" || (after.lineBreak && !continuesExpression)) {
+            position = after.position;
+        } else {
+            return false;
+        }
+        if (value === directive) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function findSidecarServerFile(pageFilePath: string): string | null {
@@ -268,7 +338,7 @@ export function scanSSRPages(root: string): SSRPageExport[] {
             }
 
             const content = fs.readFileSync(fullPath, "utf-8");
-            if (!hasUseSSRDirective(content)) {
+            if (!hasPageDirective(content, "use ssr")) {
                 continue;
             }
 

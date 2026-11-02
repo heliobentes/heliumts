@@ -568,12 +568,13 @@ This entire project was initially created with the assistance of AI tools. We be
 
 (For maintainers)
 
-1. Update version in `package.json`
-2. Update CHANGELOG.md
-3. Create a git tag: `git tag v1.2.3`
-4. Push tag: `git push --tags`
-5. Create GitHub release with notes
-6. Publish to npm: `npm publish` (coming soon)
+1. Update `package.json`, `package-lock.json`, `CHANGELOG.md`, and affected documentation.
+2. Run `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm test`, `npm run build`, and `npm run test:smoke`.
+3. Pack the package and validate its tarball in the scaffolder templates, docs site, and example app.
+4. Commit the release and create its version tag.
+5. Publish the validated tarball with `npm publish <tarball> --access public --tag latest`; verify the registry version and integrity.
+6. Update companion lockfiles against the published version, validate their builds, and push release commits/tags.
+7. Publish the scaffolder tarball and verify the installed generator creates working apps. Update the existing docs deployment through its configured release process.
 
 ## License
 

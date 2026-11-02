@@ -77,7 +77,7 @@ export default config;
 
 ### RPC Configuration
 
-The `rpc` section configures WebSocket-based RPC communication between client and server.
+The `rpc` section configures WebSocket/HTTP communication, payload and batch limits, compression, and rate-limit windows.
 
 #### Transport Mode
 
@@ -179,9 +179,9 @@ const config: HeliumConfig = {
   - Set to `0` to disable this limit
   - Uses the client IP extracted based on `trustProxyDepth` configuration
 
-- `maxMessagesPerWindow` (number): Maximum number of RPC messages allowed per connection within the time window
+- `maxMessagesPerWindow` (number): Maximum number of RPC envelopes within the time window: per WebSocket connection or per client IP for HTTP
   - Default: `100`
-  - Helps prevent abuse by limiting message throughput per connection
+  - HTTP requests share an IP window; WebSocket messages share a connection window
   - Set to `0` to disable rate limiting
   - Resets after `rateLimitWindowMs`
 
