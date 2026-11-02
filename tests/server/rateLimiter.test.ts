@@ -248,3 +248,29 @@ describe("RateLimiter", () => {
         });
     });
 });
+
+describe("HTTP rate limits", () => {
+    it("shares a window per IP and resets when it expires", () => {
+        vi.useFakeTimers();
+        try {
+            const limiter = new RateLimiter(2, 1000, 10);
+            expect(limiter.checkHttpRateLimit("a")).toBe(true);
+            expect(limiter.checkHttpRateLimit("a")).toBe(true);
+            expect(limiter.checkHttpRateLimit("a")).toBe(false);
+            expect(limiter.checkHttpRateLimit("b")).toBe(true);
+            expect(limiter.getHttpStats("a")).toEqual({ remainingRequests: 0, resetInSeconds: 1 });
+            vi.advanceTimersByTime(1000);
+            expect(limiter.checkHttpRateLimit("a")).toBe(true);
+            expect(limiter.getHttpStats("a")).toEqual({ remainingRequests: 1, resetInSeconds: 1 });
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+    it("supports disabling HTTP rate limiting", () => {
+        const limiter = new RateLimiter(0, 1000, 10);
+        for (let i = 0; i < 100; i++) {
+            expect(limiter.checkHttpRateLimit("a")).toBe(true);
+        }
+        expect(limiter.getHttpStats("a")).toEqual({ remainingRequests: Infinity, resetInSeconds: 0 });
+    });
+});

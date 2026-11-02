@@ -46,8 +46,8 @@ describe("ipExtractor", () => {
 
             const ip = extractClientIP(req, 1);
 
-            // X-Forwarded-For is now checked first for security (prevents single-header spoofing)
-            expect(ip).toBe("203.0.113.1");
+            // Ignore an untrusted prefix prepended before the trusted proxy appends the client IP.
+            expect(ip).toBe("198.51.100.1");
         });
 
         it("should fall back to cf-connecting-ip when x-forwarded-for is not present", () => {
@@ -80,14 +80,14 @@ describe("ipExtractor", () => {
             expect(ip).toBe("203.0.113.25");
         });
 
-        it("should extract first IP from x-forwarded-for when other headers not present", () => {
+        it("should select the rightmost forwarded IP for one trusted proxy", () => {
             const req = createMockRequest({
                 "x-forwarded-for": "203.0.113.1, 198.51.100.1, 192.0.2.1",
             });
 
             const ip = extractClientIP(req, 1);
 
-            expect(ip).toBe("203.0.113.1");
+            expect(ip).toBe("192.0.2.1");
         });
 
         it("should handle x-forwarded-for as array", () => {
@@ -97,7 +97,7 @@ describe("ipExtractor", () => {
 
             const ip = extractClientIP(req, 1);
 
-            expect(ip).toBe("203.0.113.1");
+            expect(ip).toBe("198.51.100.1");
         });
 
         it("should trim whitespace from IP addresses", () => {
@@ -151,7 +151,7 @@ describe("ipExtractor", () => {
             expect(ip).toBe("192.168.1.1");
         });
 
-        it("should still prioritize single-value headers", () => {
+        it("should prioritize the trusted forwarded chain over provider headers", () => {
             const req = createMockRequest({
                 "cf-connecting-ip": "203.0.113.50",
                 "x-forwarded-for": "203.0.113.1, 198.51.100.1",
@@ -159,7 +159,7 @@ describe("ipExtractor", () => {
 
             const ip = extractClientIPFromRight(req, 1);
 
-            expect(ip).toBe("203.0.113.50");
+            expect(ip).toBe("198.51.100.1");
         });
 
         it("should extract IP from right side of x-forwarded-for chain", () => {
@@ -167,21 +167,40 @@ describe("ipExtractor", () => {
                 "x-forwarded-for": "203.0.113.1, 198.51.100.1, 192.0.2.1",
             });
 
-            // trustProxyDepth=1: skip last 1 proxy, return index length-1-1 = 1
+            // The direct socket is the one trusted proxy.
             const ip = extractClientIPFromRight(req, 1);
 
-            expect(ip).toBe("198.51.100.1");
+            expect(ip).toBe("192.0.2.1");
         });
 
-        it("should return first IP when trustProxyDepth equals chain length", () => {
+        it("should move left by the number of additional trusted proxies", () => {
             const req = createMockRequest({
                 "x-forwarded-for": "203.0.113.1, 198.51.100.1, 192.0.2.1",
             });
 
-            // trustProxyDepth=2: skip last 2 proxies, return the client
+            // The direct socket and the rightmost forwarded entry are trusted.
             const ip = extractClientIPFromRight(req, 2);
 
-            expect(ip).toBe("203.0.113.1");
+            expect(ip).toBe("198.51.100.1");
         });
+    });
+});
+
+describe("proxy trust boundaries", () => {
+    it("ignores arbitrary spoofed prefixes", () => {
+        for (const spoof of ["1.1.1.1", "1.1.1.1, 2.2.2.2", "malformed"]) {
+            expect(extractClientIP(createMockRequest({ "x-forwarded-for": `${spoof}, 203.0.113.8` }), 1)).toBe("203.0.113.8");
+        }
+    });
+    it("supports multiple proxies counting the direct socket", () => {
+        const req = createMockRequest({ "x-forwarded-for": "1.1.1.1, 203.0.113.8, 10.0.0.1" });
+        expect(extractClientIP(req, 2)).toBe("203.0.113.8");
+        expect(extractClientIP(req, 3)).toBe("1.1.1.1");
+    });
+    it("rejects invalid depths and malformed addresses", () => {
+        const req = createMockRequest({ "x-forwarded-for": "bad", "cf-connecting-ip": "1.1.1.1" });
+        for (const depth of [-1, 0.5, NaN, Infinity, 1, 2]) {
+            expect(extractClientIP(req, depth)).toBe("127.0.0.1");
+        }
     });
 });

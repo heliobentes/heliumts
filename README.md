@@ -33,6 +33,8 @@ HeliumTS is a blazing fast 🚀 and opinionated full-stack React + Vite framewor
 
 ### 1.1. Installation
 
+Requires Node.js 20.19+ or 22.12+ and React 18 or 19.
+
 The easiest way to get started with HeliumTS is by using the scaffolding tool:
 
 ```bash

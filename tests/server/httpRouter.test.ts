@@ -916,6 +916,7 @@ describe("HTTPRouter Response handling", () => {
     });
 
     it("should convert request to Web Request via toWebRequest()", async () => {
+        router.setTrustProxyDepth(1);
         let webRequest: Request | undefined;
 
         const mockHandler: HeliumHTTPDef = {

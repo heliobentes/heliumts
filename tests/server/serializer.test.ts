@@ -32,6 +32,28 @@ describe("serializer", () => {
             expect(result instanceof Uint8Array).toBe(true);
         });
 
+        it("should preserve repeated Date and binary references", () => {
+            const date = new Date("2026-01-01");
+            const binary = new Uint8Array([1, 2]);
+            expect(prepareForMsgpack([date, date, binary, binary])).toEqual([date, date, binary, binary]);
+        });
+
+        it("should preserve own __proto__ data without changing the output prototype", () => {
+            const value = JSON.parse('{"__proto__":{"private":true},"visible":true}');
+            const result = prepareForMsgpack(value) as Record<string, unknown>;
+            expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+            expect(Object.prototype.hasOwnProperty.call(result, "__proto__")).toBe(true);
+            expect(result["__proto__"]).toEqual({ private: true });
+            expect(result.private).toBeUndefined();
+        });
+
+        it("should replace true cycles without losing shared object references", () => {
+            const shared = { value: 1 };
+            const value: Record<string, unknown> = { first: shared, second: shared };
+            value.self = value;
+            expect(prepareForMsgpack(value)).toEqual({ first: shared, second: shared, self: null });
+        });
+
         it("should call toJSON on objects that implement it", () => {
             const obj = {
                 privateField: "secret",
@@ -44,13 +66,13 @@ describe("serializer", () => {
             const result = prepareForMsgpack(obj);
 
             expect(result).toEqual({ publicField: "visible" });
-            expect(result.privateField).toBeUndefined();
+            expect(result).not.toHaveProperty("privateField");
         });
 
         it("should process arrays recursively", () => {
             const arr = [1, "string", new Date("2024-01-15"), { toJSON: () => ({ processed: true }) }];
 
-            const result = prepareForMsgpack(arr);
+            const result = prepareForMsgpack(arr) as unknown[];
 
             expect(result[0]).toBe(1);
             expect(result[1]).toBe("string");
@@ -71,9 +93,10 @@ describe("serializer", () => {
 
             const result = prepareForMsgpack(obj);
 
-            expect(result.name).toBe("Test");
-            expect(result.nested.value).toBe(123);
-            expect(result.nested.deeper).toEqual({ simplified: true });
+            expect(result).toEqual({
+                name: "Test",
+                nested: { value: 123, deeper: { simplified: true } },
+            });
         });
 
         it("should handle complex nested structures with toJSON", () => {
@@ -111,8 +134,8 @@ describe("serializer", () => {
 
             const result = prepareForMsgpack(obj);
 
-            expect(result.own).toBe("property");
-            expect(result.inherited).toBeUndefined();
+            expect(result).toEqual({ own: "property" });
+            expect(result).not.toHaveProperty("inherited");
         });
 
         it("should handle array of objects with toJSON", () => {

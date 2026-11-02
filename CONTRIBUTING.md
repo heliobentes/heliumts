@@ -29,7 +29,7 @@ By participating in this project, you agree to maintain a respectful and inclusi
 
 ### Prerequisites
 
-- Node.js 18 or higher
+- Node.js 20.19+ or 22.12+ (matching Vite 7)
 - npm or yarn
 - Git
 - React 18+
@@ -249,7 +249,18 @@ Before submitting a PR, verify:
 
 ### Automated Tests
 
-We're working on adding automated tests. If you'd like to help with testing infrastructure, please open an issue to discuss.
+Run the complete checks before submitting changes:
+
+```bash
+npm run typecheck
+npm run lint
+npm run format:check
+npm test
+npm run build
+npm run test:smoke
+```
+
+The suite includes browser-like unit tests and production HTTP/WebSocket tests on temporary local ports. Dependency upgrades should also be checked with `npm audit`.
 
 ## Submitting Changes
 

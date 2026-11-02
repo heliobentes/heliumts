@@ -28,11 +28,12 @@ export function escapeHtml(value: string): string {
 function stripExistingHeadMeta(headContent: string): string {
     return headContent
         .replace(/<title[^>]*>[\s\S]*?<\/title>/gi, "")
-        .replace(/<meta\s+name=["']description["'][^>]*>/gi, "")
-        .replace(/<meta\s+name=["']robots["'][^>]*>/gi, "")
-        .replace(/<meta\s+property=["']og:[^"']+["'][^>]*>/gi, "")
-        .replace(/<meta\s+name=["']twitter:[^"']+["'][^>]*>/gi, "")
-        .replace(/<link\s+rel=["']canonical["'][^>]*>/gi, "");
+        .replace(/<meta\b[^>]*>/gi, (tag) => {
+            const name = extractAttribute(tag, "name")?.toLowerCase();
+            const property = extractAttribute(tag, "property")?.toLowerCase();
+            return name === "description" || name === "robots" || name?.startsWith("twitter:") || property?.startsWith("og:") ? "" : tag;
+        })
+        .replace(/<link\b[^>]*>/gi, (tag) => (extractAttribute(tag, "rel")?.toLowerCase().split(/\s+/).includes("canonical") ? "" : tag));
 }
 
 export function buildSocialMetaTags(meta: SocialMeta): string {
@@ -93,9 +94,10 @@ export function injectSocialMetaIntoHtml(html: string, meta: SocialMeta): string
     const fullHead = headMatch[0];
     const innerHead = headMatch[1];
     const cleanedInnerHead = stripExistingHeadMeta(innerHead).trim();
-    const replacementHead = `<head>\n${generated}${cleanedInnerHead ? `\n${cleanedInnerHead}` : ""}\n</head>`;
+    const openingHead = fullHead.slice(0, fullHead.indexOf(">") + 1);
+    const replacementHead = `${openingHead}\n${generated}${cleanedInnerHead ? `\n${cleanedInnerHead}` : ""}\n</head>`;
 
-    return html.replace(fullHead, replacementHead);
+    return html.replace(fullHead, () => replacementHead);
 }
 
 export function extractSocialMetaFromHtml(html: string): SocialMeta | null {
@@ -140,19 +142,25 @@ export async function loadDefaultSocialMetaFromHtmlFile(filePath: string): Promi
 }
 
 function extractMetaContent(html: string, attributeName: "name" | "property", attributeValue: string): string | undefined {
-    const pattern = new RegExp(`<meta\\s+[^>]*${attributeName}=["']${escapeRegex(attributeValue)}["'][^>]*content=["']([^"']*)["'][^>]*>`, "i");
-    const match = html.match(pattern);
-    return match?.[1] ? decodeHtmlEntities(match[1].trim()) : undefined;
+    const tag = html.match(/<meta\b[^>]*>/gi)?.find((candidate) => extractAttribute(candidate, attributeName)?.toLowerCase() === attributeValue);
+    const content = tag ? extractAttribute(tag, "content") : undefined;
+    return content ? decodeHtmlEntities(content.trim()) : undefined;
 }
 
 function extractCanonicalHref(html: string): string | undefined {
-    const pattern = /<link\s+[^>]*rel=["']canonical["'][^>]*href=["']([^"']*)["'][^>]*>/i;
-    const match = html.match(pattern);
-    return match?.[1] ? decodeHtmlEntities(match[1].trim()) : undefined;
+    const tag = html.match(/<link\b[^>]*>/gi)?.find((candidate) => extractAttribute(candidate, "rel")?.toLowerCase().split(/\s+/).includes("canonical"));
+    const href = tag ? extractAttribute(tag, "href") : undefined;
+    return href ? decodeHtmlEntities(href.trim()) : undefined;
 }
 
-function escapeRegex(value: string): string {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function extractAttribute(tag: string, name: "name" | "property" | "content" | "rel" | "href"): string | undefined {
+    const attributes = tag.matchAll(/\s+([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g);
+    for (const attribute of attributes) {
+        if (attribute[1].toLowerCase() === name) {
+            return attribute[2] ?? attribute[3] ?? attribute[4] ?? "";
+        }
+    }
+    return undefined;
 }
 
 function decodeHtmlEntities(value: string): string {

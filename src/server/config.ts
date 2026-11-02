@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import fs from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
@@ -261,7 +262,7 @@ const DEFAULT_COMPRESSION: Required<HeliumCompressionConfig> = {
     threshold: 1024,
 };
 
-let cachedConfig: HeliumConfig | null = null;
+const cachedConfigs = new Map<string, HeliumConfig>();
 
 /**
  * Load Helium configuration from the project root.
@@ -274,44 +275,68 @@ let cachedConfig: HeliumConfig | null = null;
  * @internal - Used by framework internals only
  */
 export async function loadConfig(root: string = process.cwd()): Promise<HeliumConfig> {
+    // Check if there's a custom config directory (used in production)
+    const configDir = process.env.HELIUM_CONFIG_DIR || root;
+    const cacheKey = JSON.stringify([path.resolve(root), path.resolve(configDir)]);
+    const cachedConfig = cachedConfigs.get(cacheKey);
     if (cachedConfig) {
         return cachedConfig;
     }
 
-    // Check if there's a custom config directory (used in production)
-    const configDir = process.env.HELIUM_CONFIG_DIR || root;
-
-    // Prioritize .js/.mjs (work in both dev and production)
-    // .ts files work in dev with Vite but fail in production without transpilation
     const configFiles = ["helium.config.js", "helium.config.mjs", "helium.config.ts"];
-
-    // In production with HELIUM_CONFIG_DIR set, check dist directory first
     const searchPaths = configDir !== root ? [configDir, root] : [root];
 
     for (const searchPath of searchPaths) {
         for (const configFile of configFiles) {
-            const configPath = path.join(searchPath, configFile);
-            if (fs.existsSync(configPath)) {
-                try {
-                    const fileUrl = pathToFileURL(configPath).href;
-                    const module = await import(/* @vite-ignore */ `${fileUrl}?t=${Date.now()}`);
-                    const config = module.default || {};
-                    cachedConfig = config;
-                    return config;
-                } catch (err) {
-                    // In production, .ts files will fail to load without a TypeScript loader
-                    if (configFile.endsWith(".ts") && err instanceof Error && "code" in err && err.code === "ERR_UNKNOWN_FILE_EXTENSION") {
-                        console.warn(`[Helium] Cannot load ${configFile} in production. The build process should have transpiled it.`);
-                    } else {
-                        console.warn(`[Helium] Failed to load config from ${configFile}:`, err);
-                    }
+            const configPath = path.resolve(searchPath, configFile);
+            if (!fs.existsSync(configPath)) {
+                continue;
+            }
+            try {
+                const module = await importConfig(configPath);
+                const config = module.default;
+                if (!config || typeof config !== "object" || Array.isArray(config)) {
+                    throw new Error("Expected a configuration object as the default export");
                 }
+                cachedConfigs.set(cacheKey, config);
+                return config;
+            } catch (error) {
+                // Never silently replace security settings with defaults after a load failure.
+                throw new Error(`Failed to load Helium config at ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
             }
         }
     }
 
-    cachedConfig = {};
-    return cachedConfig;
+    const config = {};
+    cachedConfigs.set(cacheKey, config);
+    return config;
+}
+
+async function importConfig(configPath: string): Promise<{ default?: HeliumConfig }> {
+    if (!configPath.endsWith(".ts")) {
+        return import(/* @vite-ignore */ `${pathToFileURL(configPath).href}?t=${randomUUID()}`);
+    }
+
+    // Node 20 cannot execute TypeScript. Bundle local helpers as well as stripping types.
+    const { build } = await import("esbuild");
+    const result = await build({
+        entryPoints: [configPath],
+        bundle: true,
+        packages: "external",
+        platform: "node",
+        format: "esm",
+        target: "node20",
+        write: false,
+        logLevel: "silent",
+    });
+    // Keep package resolution and import.meta.url relative to the original config directory.
+    const tempPath = path.join(path.dirname(configPath), `.helium-config-${randomUUID()}.mjs`);
+    try {
+        fs.writeFileSync(tempPath, result.outputFiles[0].text);
+        return await import(/* @vite-ignore */ pathToFileURL(tempPath).href);
+    } finally {
+        fs.rmSync(tempPath, { force: true });
+    }
 }
 
 /**
@@ -401,5 +426,5 @@ export function getRpcClientConfig(config: HeliumConfig = {}): RpcClientTranspor
  * @internal - Used by framework internals only
  */
 export function clearConfigCache() {
-    cachedConfig = null;
+    cachedConfigs.clear();
 }

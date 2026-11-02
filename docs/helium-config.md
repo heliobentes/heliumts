@@ -349,13 +349,9 @@ export default config;
 
 ### Automatic Transpilation
 
-During `helium build`, the framework automatically handles TypeScript config files:
+During `helium build`, the framework selects `helium.config.js`, `helium.config.mjs`, or `helium.config.ts` in that order and bundles it to `dist/helium.config.js`. Local imports are included in the bundle so they continue to work after the config moves to `dist`; package dependencies remain external.
 
-1. **If `helium.config.ts` exists**: Automatically transpiles it to `dist/helium.config.js`
-2. **If `helium.config.js` exists**: Copies it to `dist/helium.config.js`
-3. **If `helium.config.mjs` exists**: Copies it to `dist/helium.config.mjs`
-
-When you run `helium start`, the production server looks for the config file in the `dist` directory first, then falls back to the project root.
+Both `helium start` and `node dist/server.js` load the config from the build directory first, then fall back to the project root. You can override the search directory with `HELIUM_CONFIG_DIR`. A config build or evaluation error fails the build or startup instead of silently using default settings.
 
 ### Manual Conversion
 
@@ -397,10 +393,12 @@ The framework loads configuration in the following order:
 2. Looks for config files in priority order:
    - `helium.config.js`
    - `helium.config.mjs`
-   - `helium.config.ts` (only in development with Vite)
+   - `helium.config.ts` (bundled with esbuild before loading, including local TypeScript imports)
 3. Falls back to default configuration if no file is found
 
-Configuration is cached for the lifetime of the process.
+Configuration must have an object as its default export. A file that exists but fails to load produces an error; defaults apply only when no config file exists.
+
+Configuration is cached per project and config directory. The development server reloads it when the config file changes.
 
 ## Default Values
 

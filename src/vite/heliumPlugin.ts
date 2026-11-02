@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import type { Plugin } from "vite";
 
-import { clearConfigCache, getRpcClientConfig, loadConfig } from "../server/config.js";
+import { clearConfigCache, getRpcClientConfig, getRpcConfig, loadConfig } from "../server/config.js";
 import { attachToDevServer } from "../server/devServer.js";
 import { injectEnvToProcess, loadEnvFiles } from "../utils/envLoader.js";
 import { log } from "../utils/logger.js";
@@ -21,6 +21,7 @@ import { generateClientModule, generateEntryModule, generateServerManifest, gene
 export default function helium(): Plugin {
     let root = process.cwd();
     const serverDir = normalizeToPosix(SERVER_DIR);
+    const RESOLVED_VIRTUAL_SSR_SERVER_MODULE_ID = "\0heliumts:ssr-server";
     const RESOLVED_VIRTUAL_SSR_CLIENT_MODULE_ID = "\0heliumts:ssr-client";
     const RESOLVED_VIRTUAL_SSR_TRANSITIONS_MODULE_ID = "\0heliumts:ssr-transitions";
     const RESOLVED_VIRTUAL_SSR_PREFETCH_MODULE_ID = "\0heliumts:ssr-prefetch";
@@ -35,14 +36,14 @@ export default function helium(): Plugin {
             order: "pre",
             handler(html, _ctx) {
                 // Check if HTML already has a script tag for entry
-                if (html.includes("src/main.tsx") || html.includes("src/main.ts")) {
+                if (/<script\b[^>]*\bsrc\s*=\s*["'][^"']*src\/main\.[jt]sx?(?:[?#][^"']*)?["']/i.test(html)) {
                     return html; // User has their own entry, don't modify
                 }
 
                 // Ensure root div exists
                 let modifiedHtml = html;
-                if (!modifiedHtml.includes('id="root"')) {
-                    modifiedHtml = modifiedHtml.replace("<body>", '<body>\n    <div id="root"></div>');
+                if (!/<[a-z][^>]*\sid\s*=\s*["']root["']/i.test(modifiedHtml)) {
+                    modifiedHtml = modifiedHtml.replace(/<body\b[^>]*>/i, (body) => `${body}\n    <div id="root"></div>`);
                 }
 
                 // Generate physical entry file
@@ -51,24 +52,28 @@ export default function helium(): Plugin {
                     fs.mkdirSync(heliumDir, { recursive: true });
                 }
                 const entryPath = path.join(heliumDir, "entry.tsx");
-                fs.writeFileSync(entryPath, generateEntryModule());
+                fs.writeFileSync(entryPath, generateEntryModule(scanAppShell(root)));
 
                 // Return with tags to inject the entry (runtime config is fetched by the client)
-                return [
-                    {
-                        tag: "script",
-                        attrs: {
-                            type: "module",
-                            src: "/node_modules/.heliumts/entry.tsx",
+                return {
+                    html: modifiedHtml,
+                    tags: [
+                        {
+                            tag: "script",
+                            attrs: {
+                                type: "module",
+                                src: "/node_modules/.heliumts/entry.tsx",
+                            },
+                            injectTo: "body",
                         },
-                        injectTo: "body",
-                    },
-                ];
+                    ],
+                };
             },
         },
-        async config(config) {
-            // Load environment variables before config is finalized
-            const mode = config.mode || "development";
+        async config(config, env) {
+            // configResolved runs after this hook; honor an explicit Vite root now.
+            root = path.resolve(config.root || process.cwd());
+            const mode = env.mode;
             const envVars = loadEnvFiles({ root, mode });
 
             // Inject env vars into process.env so server-side code can access them
@@ -81,7 +86,7 @@ export default function helium(): Plugin {
 
             // Provide default index.html if none exists
             return {
-                appType: "spa",
+                appType: config.appType ?? "spa",
                 optimizeDeps: {
                     include: ["react-dom/client"],
                     // Exclude helium from pre-bundling since it's the framework itself
@@ -120,10 +125,11 @@ export default function helium(): Plugin {
                     },
                 },
                 define: {
-                    __HELIUM_DEV__: JSON.stringify(mode !== "production"),
+                    __HELIUM_DEV__: JSON.stringify(env.command === "serve"),
                     __HELIUM_RPC_TRANSPORT__: JSON.stringify(rpcClientConfig.transport),
                     __HELIUM_RPC_AUTO_HTTP_ON_MOBILE__: JSON.stringify(rpcClientConfig.autoHttpOnMobile),
                     __HELIUM_RPC_TOKEN_VALIDITY_MS__: JSON.stringify(rpcClientConfig.tokenValidityMs),
+                    __HELIUM_RPC_MAX_BATCH_SIZE__: JSON.stringify(getRpcConfig(heliumConfig).maxBatchSize),
                 },
             };
         },
@@ -138,10 +144,10 @@ export default function helium(): Plugin {
                 return RESOLVED_VIRTUAL_SSR_PREFETCH_MODULE_ID;
             }
             if (id === VIRTUAL_CLIENT_MODULE_ID) {
-                if (isServerModule(importer, root, serverDir)) {
+                if (importer === RESOLVED_VIRTUAL_SSR_SERVER_MODULE_ID || isServerModule(importer, root, serverDir) || /\.server\.[cm]?[jt]sx?(?:\?|$)/.test(importer || "")) {
                     return null;
                 }
-                return RESOLVED_VIRTUAL_CLIENT_MODULE_ID;
+                return options?.ssr ? RESOLVED_VIRTUAL_SSR_SERVER_MODULE_ID : RESOLVED_VIRTUAL_CLIENT_MODULE_ID;
             }
             if (id === VIRTUAL_SERVER_MANIFEST_ID) {
                 return RESOLVED_VIRTUAL_SERVER_MANIFEST_ID;
@@ -150,25 +156,23 @@ export default function helium(): Plugin {
                 // Add .tsx extension so Vite knows it contains JSX
                 return RESOLVED_VIRTUAL_ENTRY_MODULE_ID + ".tsx";
             }
-            // Intercept heliumts/server imports from client code
-            if (id === "heliumts/server") {
-                // If imported from server code, let it resolve normally
-                if (isServerModule(importer, root, serverDir)) {
-                    return null;
-                }
-                // For client code, redirect to virtual client module
-                return RESOLVED_VIRTUAL_CLIENT_MODULE_ID;
-            }
             return null;
         },
         transform(code, id, options) {
+            if (!options?.ssr && isServerModule(id, root, serverDir)) {
+                throw new Error(`Server-only module cannot be imported by client code: ${id}. Import RPC method stubs from 'heliumts/server' instead.`);
+            }
             // Prevent .server.ts/.server.js sidecar files from being bundled in client code.
             // These files contain server-only logic (e.g. DB queries) and must never run in the browser.
-            if (!options?.ssr && /\.server\.(ts|js|tsx|jsx|mts|mjs)$/.test(id)) {
+            if (!options?.ssr && /\.server\.(ts|js|tsx|jsx|mts|mjs)$/.test(id.split("?")[0])) {
                 return { code: "export default null;", map: null };
             }
         },
         load(id) {
+            if (id === RESOLVED_VIRTUAL_SSR_SERVER_MODULE_ID) {
+                const { methods } = scanServerExports(root);
+                return `export * from 'heliumts/server';\n${generateClientModule(methods)}`;
+            }
             if (id === RESOLVED_VIRTUAL_SSR_CLIENT_MODULE_ID) {
                 return generateSSRClientStubModule();
             }
@@ -190,7 +194,7 @@ export default function helium(): Plugin {
                 return generateServerManifest(methods, httpHandlers, seoMetadata, pageRoutePatterns, ssrPages, appShell, middleware, workers);
             }
             if (id === RESOLVED_VIRTUAL_ENTRY_MODULE_ID + ".tsx") {
-                return generateEntryModule();
+                return generateEntryModule(scanAppShell(root));
             }
         },
         buildStart() {
@@ -215,33 +219,7 @@ export default function helium(): Plugin {
             checkRouteCollisions(root);
         },
         configureServer(server) {
-            // Add middleware to handle HTML fallback for nested routes
-            // This ensures that routes like /docs/guides/auth properly serve index.html
-            // so the client-side router can handle them
-            server.middlewares.use((req, res, next) => {
-                const url = req.url || "";
-                const cleanUrl = url.split("?")[0];
-
-                // Skip if:
-                // - Has file extension (asset request)
-                // - Is an API/special endpoint
-                // - Is a dev server endpoint
-                if (
-                    path.extname(cleanUrl) !== "" ||
-                    cleanUrl.startsWith("/api") ||
-                    cleanUrl.startsWith("/webhooks") ||
-                    cleanUrl.startsWith("/@") ||
-                    cleanUrl.startsWith("/__helium__")
-                ) {
-                    return next();
-                }
-
-                // For all other routes (including nested paths like /docs/guides/auth),
-                // rewrite to index.html so Vite serves it and the client-side router handles routing
-                req.url = "/index.html";
-                next();
-            });
-
+            // Vite's SPA fallback runs after static/public assets and preserves request URLs.
             /**
              * Write type definitions only if content has changed.
              * This prevents unnecessary TypeScript recompilation.
@@ -312,12 +290,17 @@ export default function helium(): Plugin {
                 // Invalidate the virtual modules so they get regenerated
                 const clientModule = server.environments.client?.moduleGraph.getModuleById(RESOLVED_VIRTUAL_CLIENT_MODULE_ID);
                 const serverModule = server.environments.ssr?.moduleGraph.getModuleById(RESOLVED_VIRTUAL_SERVER_MANIFEST_ID);
+                const ssrRpcModule = server.environments.ssr?.moduleGraph.getModuleById(RESOLVED_VIRTUAL_SSR_SERVER_MODULE_ID);
 
                 if (clientModule) {
                     server.environments.client?.moduleGraph.invalidateModule(clientModule);
                 }
                 if (serverModule) {
                     server.environments.ssr?.moduleGraph.invalidateModule(serverModule);
+                }
+
+                if (ssrRpcModule) {
+                    server.environments.ssr?.moduleGraph.invalidateModule(ssrRpcModule);
                 }
 
                 // Reload the server manifest and re-register methods
@@ -366,9 +349,8 @@ export default function helium(): Plugin {
                 });
             };
 
-            // Watch server directory for changes
-            const serverPath = path.join(root, serverDir);
-            server.watcher.add(serverPath);
+            // Watch server and page directories: new SSR pages and sidecars change the manifest too.
+            server.watcher.add([path.join(root, serverDir), path.join(root, "src", "pages")]);
 
             // Watch config files for changes
             const configFiles = ["helium.config.ts", "helium.config.js", "helium.config.mjs"];
@@ -402,39 +384,34 @@ export default function helium(): Plugin {
                 }, DEBOUNCE_DELAY);
             };
 
+            const affectsManifest = (file: string): boolean => {
+                const normalized = normalizeToPosix(path.relative(root, file));
+                return (
+                    normalized.startsWith(`${serverDir}/`) || normalized.startsWith("src/pages/") || /^src\/[Aa]pp\.[jt]sx?$/.test(normalized) || configFiles.includes(normalized)
+                );
+            };
+
             server.watcher.on("change", (file) => {
-                const relative = path.relative(root, file);
-                const normalized = normalizeToPosix(relative);
-
-                // If a server file changed, regenerate everything
-                if (normalized.startsWith(`${serverDir}/`)) {
-                    debouncedHandleServerFileChange();
-                }
-
-                // If config file changed, reload config and regenerate
-                if (configFiles.some((cf) => normalized === cf)) {
-                    log("info", `Config file changed: ${normalized}`);
-                    debouncedHandleServerFileChange();
+                if (affectsManifest(file)) {
+                    debouncedHandleServerFileChange(true);
                 }
             });
 
             server.watcher.on("add", (file) => {
-                const relative = path.relative(root, file);
-                const normalized = normalizeToPosix(relative);
-
-                // If a server file was added, regenerate everything
-                if (normalized.startsWith(`${serverDir}/`)) {
+                if (affectsManifest(file)) {
                     debouncedHandleServerFileChange();
                 }
             });
 
             server.watcher.on("unlink", (file) => {
-                const relative = path.relative(root, file);
-                const normalized = normalizeToPosix(relative);
-
-                // If a server file was removed, regenerate (allow fewer methods)
-                if (normalized.startsWith(`${serverDir}/`)) {
+                if (affectsManifest(file)) {
                     debouncedHandleServerFileChange(true);
+                }
+            });
+
+            server.httpServer?.once("close", () => {
+                if (debounceTimer) {
+                    clearTimeout(debounceTimer);
                 }
             });
 
@@ -522,7 +499,7 @@ export function useRouter() {
 }
 
 export function Link(props) {
-    const { href = '#', children, ...rest } = props || {};
+    const { href = '#', children, prefetch, ...rest } = props || {};
     return React.createElement('a', { href, ...rest }, children);
 }
 
@@ -554,11 +531,15 @@ export function useFetch() {
 export class RpcError extends Error {}
 
 export function getPublicEnv() {
-    return {};
+    return Object.fromEntries(Object.entries(process.env).filter(([key, value]) => key.startsWith('HELIUM_PUBLIC_') && typeof value === 'string'));
 }
 
-export function getPublicEnvValue() {
-    return undefined;
+export function getPublicEnvValue(key) {
+    return getPublicEnv()[key];
+}
+
+export function isDevEnvironment() {
+    return false;
 }
 
 export function getRpcTransport() {
@@ -580,19 +561,22 @@ export function isSSR() {
 function generateSSRTransitionsStubModule(): string {
     return `
 import React from 'react';
+import { useRouter } from 'heliumts/client';
 
 export function useDeferredNavigation() {
+    const { path } = useRouter();
     return {
-        path: '/',
-        deferredPath: '/',
+        path,
+        deferredPath: path,
         isStale: false,
         isPending: false,
         isTransitioning: false,
     };
 }
 
-export function PageTransition({ children }) {
-    return React.createElement(React.Fragment, null, children);
+export function PageTransition({ children, fallback = null }) {
+    return React.createElement('div', { style: { opacity: 1, transition: 'opacity 150ms ease' } },
+        React.createElement(React.Suspense, { fallback }, children));
 }
 `;
 }

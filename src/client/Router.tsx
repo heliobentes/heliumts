@@ -9,6 +9,7 @@ import { isAutoHttpOnMobileEnabled, isMobileRpcDevice, rpcCallWithOptions } from
 
 type HeliumSSRBootstrap = {
     path: string;
+    search?: string;
     props: Record<string, unknown>;
 };
 
@@ -527,6 +528,24 @@ export type AppShellProps<TPageProps extends Record<string, unknown> = Record<st
     children?: React.ReactNode;
 };
 
+// Keep the component type and shared layout positions stable across router
+// updates, so loading page props or navigating does not discard local state.
+const PageRouteContext = React.createContext<RouteEntry | null>(null);
+
+function RoutedPage(pageProps: Record<string, unknown>) {
+    const route = React.useContext(PageRouteContext);
+    if (!route) {
+        return null;
+    }
+    const Page = route.Component as ComponentType<Record<string, unknown>>;
+    let content = <Page {...pageProps} />;
+    for (let i = route.layouts.length - 1; i >= 0; i--) {
+        const Layout = route.layouts[i];
+        content = <Layout>{content}</Layout>;
+    }
+    return content;
+}
+
 // Main router component
 export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps> }) {
     // useTransition for concurrent rendering - allows React to keep UI responsive during navigation
@@ -555,22 +574,19 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
     // Use useSyncExternalStore to subscribe to location changes
     // This ensures synchronous updates when location changes
     const state = useSyncExternalStore(subscribeToLocation, getLocationSnapshot, getServerSnapshot);
-    const [runtimeSSRProps, setRuntimeSSRProps] = React.useState<Record<string, unknown>>(() => {
+    const targetPath = `${state.path}${typeof window !== "undefined" ? window.location.search : ""}`;
+    const [runtimeSSRProps, setRuntimeSSRProps] = React.useState<{ path: string; props: Record<string, unknown> }>(() => {
         const payload = getInitialSSRBootstrap();
         if (!payload) {
-            return {};
+            return { path: targetPath, props: {} };
         }
 
-        if (payload.path === window.location.pathname) {
-            return payload.props;
-        }
-
-        return {};
+        const bootstrapPath = `${payload.path}${payload.search ?? window.location.search}`;
+        return { path: bootstrapPath, props: payload.props };
     });
-    const [hydrationDone, setHydrationDone] = React.useState(false);
+    const hydrationDoneRef = React.useRef(false);
 
     const match = useMemo(() => matchRoute(state.path, routes), [state.path, routes]);
-
     // Use matched params, or fall back to re-extracting from path using global routes during HMR
     const currentParams = match?.params ?? (isDevEnvironment() ? extractParamsFromPath(state.path) : {});
 
@@ -599,16 +615,14 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
     };
 
     React.useEffect(() => {
-        const targetPath = `${state.path}${window.location.search || ""}`;
-
-        // On first client render, if SSR payload already exists for this path, keep it.
-        if (!hydrationDone) {
+        // On first client render, keep the matching SSR payload. A ref avoids
+        // restarting this effect and remounting content just to mark hydration.
+        if (!hydrationDoneRef.current) {
+            hydrationDoneRef.current = true;
             const bootstrap = getInitialSSRBootstrap();
-            if (bootstrap && bootstrap.path === state.path) {
-                setHydrationDone(true);
+            if (bootstrap && `${bootstrap.path}${bootstrap.search ?? window.location.search}` === targetPath) {
                 return;
             }
-            setHydrationDone(true);
         }
 
         let cancelled = false;
@@ -635,11 +649,11 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
             }
 
             if (ssrPayload.kind === "props") {
-                setRuntimeSSRProps(ssrPayload.props);
+                setRuntimeSSRProps({ path: targetPath, props: ssrPayload.props });
                 return;
             }
 
-            setRuntimeSSRProps({});
+            setRuntimeSSRProps({ path: targetPath, props: {} });
         };
 
         void load();
@@ -647,7 +661,7 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
         return () => {
             cancelled = true;
         };
-    }, [state.path, currentSearchParams.toString(), hydrationDone]);
+    }, [targetPath]);
 
     React.useEffect(() => {
         const controller = new AbortController();
@@ -691,33 +705,25 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
         return <RouterContext.Provider value={routerValue}>{AppShell ? <AppShell Component={NotFoundComp} pageProps={{}} /> : content}</RouterContext.Provider>;
     }
 
-    const Page = match.route.Component as ComponentType<{ params: Record<string, string | string[]>; searchParams: URLSearchParams }>;
     const pageProps = {
-        ...runtimeSSRProps,
+        ...(runtimeSSRProps.path === targetPath ? runtimeSSRProps.props : {}),
         params: match.params,
         searchParams: currentSearchParams,
     };
 
-    // Create a wrapped component that includes all layouts
-    const WrappedPage = () => {
-        let content = <Page {...pageProps} />;
-        // Wrap page with layouts (from outer to inner)
-        for (let i = match.route.layouts.length - 1; i >= 0; i--) {
-            const Layout = match.route.layouts[i];
-            content = <Layout>{content}</Layout>;
-        }
-        return content;
-    };
-
     const finalContent = AppShell ? (
-        <AppShell Component={WrappedPage} pageProps={pageProps}>
-            <WrappedPage />
+        <AppShell Component={RoutedPage} pageProps={pageProps}>
+            <RoutedPage {...pageProps} />
         </AppShell>
     ) : (
-        <WrappedPage />
+        <RoutedPage {...pageProps} />
     );
 
-    return <RouterContext.Provider value={routerValue}>{finalContent}</RouterContext.Provider>;
+    return (
+        <RouterContext.Provider value={routerValue}>
+            <PageRouteContext.Provider value={match.route}>{finalContent}</PageRouteContext.Provider>
+        </RouterContext.Provider>
+    );
 }
 
 type ClientSocialMeta = {

@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { cac } from "cac";
-import { spawn } from "child_process";
+import { type ChildProcess, spawn } from "child_process";
 import { build as esbuild } from "esbuild";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import { build as viteBuild } from "vite";
 
+import { replaceHtmlRootContents } from "../utils/html.js";
 import { log } from "../utils/logger.js";
 import { scanAppShell, scanPageRoutePatterns, scanServerExports, scanSSRPages } from "../vite/scanner.js";
 import { generateStaticPages } from "../vite/ssg.js";
@@ -14,11 +16,25 @@ import { generateClientModule, generateServerManifest, generateTypeDefinitions }
 const cli = cac("helium");
 const root = process.cwd();
 
-cli.command("dev", "Start development server").action(async () => {
-    const vite = spawn("vite", [], { stdio: "inherit", shell: true });
-    vite.on("close", (code) => {
-        process.exit(code || 0);
+function monitorChild(child: ChildProcess) {
+    const onInterrupt = () => child.kill("SIGINT");
+    const onTerminate = () => child.kill("SIGTERM");
+    process.on("SIGINT", onInterrupt);
+    process.on("SIGTERM", onTerminate);
+    child.on("error", (error) => {
+        log("error", "Failed to start child process:", error);
+        process.exit(1);
     });
+    child.on("close", (code, signal) => {
+        process.off("SIGINT", onInterrupt);
+        process.off("SIGTERM", onTerminate);
+        process.exit(code ?? (signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : 1));
+    });
+}
+
+cli.command("dev", "Start development server").action(async () => {
+    const vitePackage = fileURLToPath(import.meta.resolve("vite/package.json"));
+    monitorChild(spawn(process.execPath, [path.join(path.dirname(vitePackage), "bin", "vite.js")], { stdio: "inherit" }));
 });
 
 cli.command("build", "Build for production").action(async () => {
@@ -88,7 +104,7 @@ cli.command("build", "Build for production").action(async () => {
                 htmlTemplate = htmlTemplate.replace(/<script>window\.HELIUM_CONNECTION_TOKEN = "build-time-placeholder";<\/script>/g, "");
 
                 // 2. Clear any existing content in root div from SPA build
-                htmlTemplate = htmlTemplate.replace(/<div\s+id="root"[^>]*>.*?<\/div>/s, '<div id="root"></div>');
+                htmlTemplate = replaceHtmlRootContents(htmlTemplate, "", { "data-ssg-page": null, "data-ssg-failed": null });
 
                 await generateStaticPages(null, root, htmlTemplate, distDir);
             } else {
@@ -153,12 +169,15 @@ export async function start() {
 // Load environment variables FIRST, before any other imports
 import './env-loader.js';
 // Now import and start the server (this ensures handlers load after env)
-import { start } from './server-module.js';
+const { start } = await import('./server-module.js');
 await start();
 `;
 
     const envLoaderCode = `
 import { loadEnvFiles, injectEnvToProcess, log } from 'heliumts/server';
+import { fileURLToPath } from 'node:url';
+process.env.HELIUM_CONFIG_DIR ??= fileURLToPath(new URL('.', import.meta.url));
+process.env.NODE_ENV ??= 'production';
 const envRoot = process.cwd();
 log('info', \`Loading .env files from: \${envRoot}\`);
 const envVars = loadEnvFiles({ mode: 'production' });
@@ -222,7 +241,7 @@ export function useRouter() {
 }
 
 export function Link(props: { href?: string; children?: React.ReactNode } & Record<string, unknown>) {
-    const { href = '#', children, ...rest } = props || {};
+    const { href = '#', children, prefetch: _prefetch, ...rest } = props || {};
     return React.createElement('a', { href, ...rest }, children);
 }
 
@@ -254,11 +273,15 @@ export function useFetch() {
 export class RpcError extends Error {}
 
 export function getPublicEnv() {
-    return {};
+    return Object.fromEntries(Object.entries(process.env).filter(([key, value]) => key.startsWith('HELIUM_PUBLIC_') && value !== undefined));
 }
 
-export function getPublicEnvValue() {
-    return undefined;
+export function getPublicEnvValue(key: string) {
+    return getPublicEnv()[key];
+}
+
+export function isDevEnvironment() {
+    return false;
 }
 
 export function getRpcTransport() {
@@ -278,19 +301,22 @@ export function isSSR() {
 
     const ssrTransitionsStubCode = `
 import React from 'react';
+import { useRouter } from 'heliumts/client';
 
 export function useDeferredNavigation() {
+    const { path } = useRouter();
     return {
-        path: '/',
-        deferredPath: '/',
+        path,
+        deferredPath: path,
         isStale: false,
         isPending: false,
         isTransitioning: false,
     };
 }
 
-export function PageTransition({ children }: { children?: React.ReactNode }) {
-    return React.createElement(React.Fragment, null, children);
+export function PageTransition({ children, fallback = null }: { children?: React.ReactNode; fallback?: React.ReactNode }) {
+    return React.createElement('div', { style: { opacity: 1, transition: 'opacity 150ms ease' } },
+        React.createElement(React.Suspense, { fallback }, children));
 }
 `;
 
@@ -307,7 +333,7 @@ export function clearPrefetchCache() {}
     // user-defined methods from 'heliumts/server' resolve correctly during
     // the esbuild server bundle (mirroring the Vite plugin's virtual module).
     const rpcClientStubPath = path.join(heliumDir, "rpc-client-stub.ts");
-    const rpcClientStubCode = generateClientModule(serverExports.methods);
+    const rpcClientStubCode = `export * from 'heliumts/server';\n${generateClientModule(serverExports.methods)}`;
     fs.writeFileSync(rpcClientStubPath, rpcClientStubCode);
 
     fs.writeFileSync(ssrClientStubPath, ssrClientStubCode);
@@ -357,6 +383,7 @@ export function clearPrefetchCache() {}
                 "sqlite3",
                 "better-sqlite3",
                 "redis",
+                "esbuild",
                 // Node.js built-ins are automatically external, but let's be explicit
                 "crypto",
                 "fs",
@@ -382,36 +409,19 @@ export function clearPrefetchCache() {}
 
         log("info", "Server build complete.");
 
-        // Transpile helium.config.ts to helium.config.js if it exists
-        const configTsPath = path.join(root, "helium.config.ts");
-        if (fs.existsSync(configTsPath)) {
-            log("info", "Transpiling helium.config.ts...");
-            try {
-                await esbuild({
-                    entryPoints: [configTsPath],
-                    outfile: path.join(root, "dist", "helium.config.js"),
-                    bundle: false,
-                    platform: "node",
-                    format: "esm",
-                    target: "node18",
-                });
-                log("info", "Config file transpiled to dist/helium.config.js");
-            } catch (e) {
-                log("warn", "Failed to transpile config file:", e);
-                log("warn", "You may need to manually rename helium.config.ts to helium.config.js");
-            }
-        } else {
-            // Check if .js or .mjs config exists and copy it to dist
-            const configJsPath = path.join(root, "helium.config.js");
-            const configMjsPath = path.join(root, "helium.config.mjs");
-
-            if (fs.existsSync(configJsPath)) {
-                fs.copyFileSync(configJsPath, path.join(root, "dist", "helium.config.js"));
-                log("info", "Copied helium.config.js to dist/");
-            } else if (fs.existsSync(configMjsPath)) {
-                fs.copyFileSync(configMjsPath, path.join(root, "dist", "helium.config.mjs"));
-                log("info", "Copied helium.config.mjs to dist/");
-            }
+        // Bundle config helpers so moving the config into dist preserves relative imports.
+        const configFile = ["helium.config.js", "helium.config.mjs", "helium.config.ts"].map((name) => path.join(root, name)).find((candidate) => fs.existsSync(candidate));
+        if (configFile) {
+            await esbuild({
+                entryPoints: [configFile],
+                outfile: path.join(root, "dist", "helium.config.js"),
+                bundle: true,
+                packages: "external",
+                platform: "node",
+                format: "esm",
+                target: "node20",
+            });
+            log("info", "Bundled Helium config to dist/helium.config.js");
         }
 
         log("info", "--------------------------------");
@@ -435,14 +445,11 @@ cli.command("start", "Start production server").action(async () => {
 
     // When running in production, look for config in dist directory first
     // This allows the transpiled config to be found
-    const server = spawn("node", [serverPath], {
+    const server = spawn(process.execPath, [serverPath], {
         stdio: "inherit",
-        shell: true,
-        env: { ...process.env, HELIUM_CONFIG_DIR: path.join(root, "dist") },
+        env: { ...process.env, NODE_ENV: process.env.NODE_ENV || "production", HELIUM_CONFIG_DIR: path.join(root, "dist") },
     });
-    server.on("close", (code) => {
-        process.exit(code || 0);
-    });
+    monitorChild(server);
 });
 
 cli.help();

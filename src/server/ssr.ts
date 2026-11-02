@@ -3,6 +3,8 @@ import type { ComponentType } from "react";
 import React from "react";
 import ReactDOMServer from "react-dom/server";
 
+import { compareRoutePatterns } from "../runtime/routeOrder.js";
+import { replaceHtmlRootContents } from "../utils/html.js";
 import type { HeliumContext } from "./context.js";
 import type { GetServerSideProps, ServerSidePropsRequest, ServerSidePropsResult, ServerSideRedirect, ServerSideRedirectResult } from "./defineServerSideProps.js";
 
@@ -71,14 +73,14 @@ function createMatcher(pattern: string): (path: string) => { params: Record<stri
                 }
 
                 if (seg.startsWith(":")) {
-                    params[seg.slice(1)] = decodeURIComponent(value);
+                    params[seg.slice(1)] = safeDecodeURIComponent(value);
                 } else if (seg !== value) {
                     return null;
                 }
             }
 
             const remainingSegments = pathSegments.slice(catchAllIndex);
-            params[catchAllParam] = remainingSegments.map((s) => decodeURIComponent(s));
+            params[catchAllParam] = remainingSegments.map((s) => safeDecodeURIComponent(s));
             return { params };
         }
 
@@ -91,7 +93,7 @@ function createMatcher(pattern: string): (path: string) => { params: Record<stri
             const value = pathSegments[i];
 
             if (seg.startsWith(":")) {
-                params[seg.slice(1)] = decodeURIComponent(value);
+                params[seg.slice(1)] = safeDecodeURIComponent(value);
             } else if (seg !== value) {
                 return null;
             }
@@ -101,8 +103,17 @@ function createMatcher(pattern: string): (path: string) => { params: Record<stri
     };
 }
 
+function safeDecodeURIComponent(value: string): string {
+    try {
+        return decodeURIComponent(value);
+    } catch {
+        return value;
+    }
+}
+
 export function matchSSRPage(pathname: string, pages: SSRPageDef[]): SSRMatch | null {
-    for (const page of pages) {
+    const orderedPages = [...pages].sort((a, b) => compareRoutePatterns(a.pathPattern, b.pathPattern));
+    for (const page of orderedPages) {
         const match = createMatcher(page.pathPattern)(pathname);
         if (match) {
             return { page, params: match.params };
@@ -164,14 +175,15 @@ export async function resolveServerSideProps(args: {
     params: Record<string, string | string[]>;
     page: SSRPageDef;
     ctx: HeliumContext;
+    search?: string;
 }): Promise<SSRPropsResolution> {
-    const { req, pathname, params, page, ctx } = args;
+    const { req, pathname, params, page, ctx, search } = args;
 
     if (!page.getServerSideProps) {
         return { kind: "props", props: {} };
     }
 
-    const request = createServerSidePropsRequest(req, pathname, params);
+    const request = createServerSidePropsRequest(req, pathname, params, search);
     const result = await page.getServerSideProps(request, ctx);
 
     if (isServerSideRedirectResult(result)) {
@@ -187,10 +199,10 @@ export async function resolveServerSideProps(args: {
     };
 }
 
-export function createServerSidePropsRequest(req: IncomingMessage, pathname: string, params: Record<string, string | string[]>): ServerSidePropsRequest {
+export function createServerSidePropsRequest(req: IncomingMessage, pathname: string, params: Record<string, string | string[]>, search?: string): ServerSidePropsRequest {
     const method = req.method || "GET";
     const headers = headersToRecord(req.headers);
-    const rawUrl = req.url || pathname;
+    const rawUrl = search === undefined ? req.url || pathname : `${pathname}${search}`;
 
     return {
         method,
@@ -219,6 +231,7 @@ export async function renderSSRHTML(args: {
         params,
         page,
         ctx,
+        search,
     });
 
     if (ssrResult.kind === "redirect") {
@@ -237,7 +250,7 @@ export async function renderSSRHTML(args: {
         searchParams: new URLSearchParams(search),
     };
 
-    const renderTree = (includeLayouts: boolean): string => {
+    const renderTree = (): string => {
         const globalState = globalThis as SSRGlobalState;
         const previousRouterState = globalState.__HELIUM_SSR_ROUTER__;
         globalState.__HELIUM_SSR_ROUTER__ = {
@@ -249,11 +262,9 @@ export async function renderSSRHTML(args: {
         const WrappedPage: ComponentType<Record<string, unknown>> = () => {
             let content = React.createElement(PageComponent, pageProps);
 
-            if (includeLayouts) {
-                for (let i = layouts.length - 1; i >= 0; i--) {
-                    const Layout = layouts[i];
-                    content = React.createElement(Layout, { children: content });
-                }
+            for (let i = layouts.length - 1; i >= 0; i--) {
+                const Layout = layouts[i];
+                content = React.createElement(Layout, { children: content });
             }
 
             return content;
@@ -278,29 +289,18 @@ export async function renderSSRHTML(args: {
         }
     };
 
-    let markup: string;
-    try {
-        markup = renderTree(true);
-    } catch (error) {
-        // Some app-level layout trees can fail on SSR due to circular imports or browser-only paths.
-        // Fallback to page-only SSR so we still return HTML instead of an empty shell.
-        try {
-            markup = renderTree(false);
-        } catch {
-            throw error;
-        }
-    }
-    const serializedPayload = JSON.stringify({ path: pathname, props: ssrProps })
+    const markup = renderTree();
+    const serializedPayload = JSON.stringify({ path: pathname, search, props: ssrProps })
         .replace(/</g, "\\u003c")
         .replace(/\u2028/g, "\\u2028")
         .replace(/\u2029/g, "\\u2029");
 
-    const htmlWithRoot = htmlTemplate.replace(/<div\s+id="root"[^>]*>(.*?)<\/div>/s, `<div id="root">${markup}</div>`);
+    const htmlWithRoot = replaceHtmlRootContents(htmlTemplate, markup);
     const scriptTag = `<script>window.__HELIUM_SSR_DATA__=${serializedPayload};</script>`;
 
-    if (htmlWithRoot.includes("</body>")) {
+    if (/<\/body\s*>/i.test(htmlWithRoot)) {
         return {
-            html: htmlWithRoot.replace("</body>", `${scriptTag}\n</body>`),
+            html: htmlWithRoot.replace(/<\/body\s*>/i, (closingBody) => `${scriptTag}\n${closingBody}`),
             pageProps: ssrProps,
         };
     }

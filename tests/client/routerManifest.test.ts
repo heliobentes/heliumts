@@ -80,6 +80,11 @@ describe("routerManifest", () => {
             expect(matcher("/search/hello%20world")).toEqual({ params: { query: "hello world" } });
         });
 
+        it("preserves malformed percent encoding without crashing route matching", () => {
+            expect(createMatcher("/users/:id")("/users/%E0%A4%A")).toEqual({ params: { id: "%E0%A4%A" } });
+            expect(createMatcher("/files/*path")("/files/ok/%invalid")).toEqual({ params: { path: ["ok", "%invalid"] } });
+        });
+
         it("should strip query strings and hashes", () => {
             const matcher = createMatcher("/about");
             expect(matcher("/about?foo=bar")).toEqual({ params: {} });

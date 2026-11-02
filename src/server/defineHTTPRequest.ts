@@ -1,6 +1,6 @@
 import type { HeliumContext } from "./context.js";
 
-export type HTTPMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "ALL";
+export type HTTPMethod = "GET" | "HEAD" | "POST" | "PUT" | "DELETE" | "PATCH" | "OPTIONS" | "ALL";
 
 export interface HTTPRequest {
     method: string;

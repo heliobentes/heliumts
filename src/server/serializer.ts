@@ -19,12 +19,6 @@ function prepareForMsgpackInner(value: unknown, stack: WeakSet<object>): unknown
         return value;
     }
 
-    // Security: circular reference detection (only true cycles, not shared refs)
-    if (stack.has(value as object)) {
-        return null;
-    }
-    stack.add(value as object);
-
     // Preserve MessagePack supported types
     if (value instanceof Date) {
         return value;
@@ -32,6 +26,12 @@ function prepareForMsgpackInner(value: unknown, stack: WeakSet<object>): unknown
     if (value instanceof Uint8Array) {
         return value;
     }
+
+    // Security: circular reference detection (only true cycles, not shared refs)
+    if (stack.has(value as object)) {
+        return null;
+    }
+    stack.add(value as object);
 
     // Handle toJSON (e.g. Mongoose documents, custom classes)
     const valueWithToJson = value as { toJSON?: () => unknown };
@@ -53,7 +53,12 @@ function prepareForMsgpackInner(value: unknown, stack: WeakSet<object>): unknown
     const newObj: Record<string, unknown> = {};
     for (const key in value) {
         if (Object.prototype.hasOwnProperty.call(value, key)) {
-            newObj[key] = prepareForMsgpackInner((value as Record<string, unknown>)[key], stack);
+            Object.defineProperty(newObj, key, {
+                value: prepareForMsgpackInner((value as Record<string, unknown>)[key], stack),
+                enumerable: true,
+                writable: true,
+                configurable: true,
+            });
         }
     }
     stack.delete(value as object);

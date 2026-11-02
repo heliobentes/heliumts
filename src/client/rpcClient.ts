@@ -33,6 +33,7 @@ export type RpcTransport = "http" | "websocket" | "auto";
 declare const __HELIUM_RPC_TRANSPORT__: RpcTransport;
 declare const __HELIUM_RPC_AUTO_HTTP_ON_MOBILE__: boolean;
 declare const __HELIUM_RPC_TOKEN_VALIDITY_MS__: number;
+declare const __HELIUM_RPC_MAX_BATCH_SIZE__: number;
 
 // Read build-time config with fallback defaults
 const configuredTransport: RpcTransport = typeof __HELIUM_RPC_TRANSPORT__ !== "undefined" ? __HELIUM_RPC_TRANSPORT__ : "websocket";
@@ -41,6 +42,11 @@ const configuredTokenValidityMs: number =
     typeof __HELIUM_RPC_TOKEN_VALIDITY_MS__ !== "undefined" && Number.isFinite(__HELIUM_RPC_TOKEN_VALIDITY_MS__) && __HELIUM_RPC_TOKEN_VALIDITY_MS__ > 0
         ? __HELIUM_RPC_TOKEN_VALIDITY_MS__
         : 30_000;
+
+const configuredMaxBatchSize =
+    typeof __HELIUM_RPC_MAX_BATCH_SIZE__ !== "undefined" && Number.isInteger(__HELIUM_RPC_MAX_BATCH_SIZE__) && __HELIUM_RPC_MAX_BATCH_SIZE__ > 0
+        ? __HELIUM_RPC_MAX_BATCH_SIZE__
+        : 20;
 
 /**
  * Get the configured RPC transport mode (from helium.config.js).
@@ -165,100 +171,85 @@ function scheduleBatch() {
     });
 }
 
-async function flushBatch() {
+function flushBatch() {
     const batch = pendingBatch;
     pendingBatch = [];
 
-    if (batch.length === 0) {
-        return;
-    }
-
-    try {
-        if (shouldUseHttpTransport()) {
-            await sendBatchHttp(batch);
-        } else {
-            await sendBatchWebSocket(batch);
-        }
-    } catch (err) {
-        // Transport error, fail all
-        for (const item of batch) {
-            item.reject(err);
-        }
+    // Keep each HTTP envelope within the same cap enforced by the server.
+    // Groups run concurrently and a transport failure rejects only its own calls.
+    for (let offset = 0; offset < batch.length; offset += configuredMaxBatchSize) {
+        const group = batch.slice(offset, offset + configuredMaxBatchSize);
+        void sendBatchHttp(group).catch((error) => {
+            for (const item of group) {
+                item.reject(error);
+            }
+        });
     }
 }
 
 async function sendBatchHttp(batch: PendingRequest[]) {
-    const requests = batch.map((b) => b.req);
-    const encoded = msgpackEncode(requests);
-
-    const sendWithToken = async (token: string | undefined) => {
-        const headers: Record<string, string> = {
-            "Content-Type": "application/msgpack",
-            Accept: "application/msgpack",
-        };
-        if (token) {
-            headers["X-Helium-Token"] = token;
-        }
-
-        return fetch("/__helium__/rpc", {
-            method: "POST",
-            headers,
-            body: encoded as unknown as BodyInit,
-        });
-    };
-
-    let response = await sendWithToken(await fetchFreshToken());
-
-    if (response.status === 401) {
-        const refreshedToken = await fetchFreshToken(true);
-        if (refreshedToken) {
-            response = await sendWithToken(refreshedToken);
-        }
-    }
-
-    handleBlockedResponse(response.status, "rpc-http");
-    if (!response.ok) {
-        throw new Error(`HTTP RPC failed: ${response.status}`);
-    }
-
-    const responseBuffer = await response.arrayBuffer();
-    const msg = msgpackDecode(new Uint8Array(responseBuffer)) as RpcResponse | RpcResponse[];
-
-    const responses = Array.isArray(msg) ? msg : [msg];
-    const responseMap = new Map(responses.map((r) => [r.id, r]));
-
-    for (const item of batch) {
-        const res = responseMap.get(item.req.id);
-        if (res) {
-            if (res.ok) {
-                item.resolve({ data: res.result, stats: res.stats });
-            } else {
-                item.reject(new RpcError(res.error, res.stats));
-            }
-        } else {
-            item.reject(new RpcError("No response for request"));
-        }
-    }
-}
-
-async function sendBatchWebSocket(batch: PendingRequest[]) {
-    const ws = await ensureSocketReady();
-    const requests = batch.map((b) => b.req);
-
-    // Register pending promises with timeout safeguards
-    batch.forEach((item) => {
-        trackPending(item.req.id, (v: unknown) => item.resolve(v as RpcResult<any>), item.reject);
-    });
-
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
-        // Always use msgpack encoding
+        const requests = batch.map((b) => b.req);
         const encoded = msgpackEncode(requests);
-        ws.send(toArrayBuffer(encoded));
-    } catch (err) {
-        batch.forEach((item) => {
-            removePending(item.req.id);
-            item.reject(err);
-        });
+
+        const sendWithToken = async (token: string | undefined) => {
+            const headers: Record<string, string> = {
+                "Content-Type": "application/msgpack",
+                Accept: "application/msgpack",
+            };
+            if (token) {
+                headers["X-Helium-Token"] = token;
+            }
+
+            return fetch("/__helium__/rpc", {
+                method: "POST",
+                headers,
+                body: encoded as unknown as BodyInit,
+                signal: controller.signal,
+            });
+        };
+
+        let response = await sendWithToken(await fetchFreshToken(false, controller.signal));
+
+        if (response.status === 401) {
+            const refreshedToken = await fetchFreshToken(true, controller.signal);
+            if (refreshedToken) {
+                response = await sendWithToken(refreshedToken);
+            }
+        }
+
+        handleBlockedResponse(response.status, "rpc-http");
+        if (!response.ok) {
+            throw new Error(`HTTP RPC failed: ${response.status}`);
+        }
+
+        const responseBuffer = await response.arrayBuffer();
+        const msg = msgpackDecode(new Uint8Array(responseBuffer)) as RpcResponse | RpcResponse[];
+
+        const responses = Array.isArray(msg) ? msg : [msg];
+        const responseMap = new Map(responses.map((r) => [r.id, r]));
+
+        for (const item of batch) {
+            const res = responseMap.get(item.req.id);
+            if (res) {
+                if (res.ok) {
+                    item.resolve({ data: res.result, stats: res.stats });
+                } else {
+                    item.reject(new RpcError(res.error, res.stats));
+                }
+            } else {
+                item.reject(new RpcError("No response for request"));
+            }
+        }
+    } catch (error) {
+        if (controller.signal.aborted) {
+            throw new RpcError("Request timed out");
+        }
+        throw error;
+    } finally {
+        clearTimeout(timeout);
     }
 }
 
@@ -593,17 +584,20 @@ function setCachedToken(token: string | undefined): void {
     scheduleTokenRefreshFromToken(token);
 }
 
-async function fetchFreshToken(forceRefresh = false): Promise<string | undefined> {
+async function fetchFreshToken(forceRefresh = false, signal?: AbortSignal): Promise<string | undefined> {
     if (!forceRefresh && hasCachedToken()) {
         return cachedAuthToken;
     }
 
+    const controller = signal ? undefined : new AbortController();
+    const timeout = controller ? setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS) : undefined;
     try {
         const response = await fetch("/__helium__/refresh-token", {
             method: "POST",
             headers: {
                 "X-Requested-With": "HeliumRPC",
             },
+            signal: signal ?? controller?.signal,
         });
         handleBlockedResponse(response.status, "refresh-token");
         if (!response.ok) {
@@ -619,6 +613,10 @@ async function fetchFreshToken(forceRefresh = false): Promise<string | undefined
         console.warn("Error fetching fresh token:", error);
         setCachedToken(undefined);
         return undefined;
+    } finally {
+        if (timeout !== undefined) {
+            clearTimeout(timeout);
+        }
     }
 }
 

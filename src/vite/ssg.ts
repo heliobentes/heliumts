@@ -1,8 +1,9 @@
 import fs from "fs";
 import path from "path";
 
+import { replaceHtmlRootContents } from "../utils/html.js";
 import { log } from "../utils/logger.js";
-import { scanServerExports } from "./scanner.js";
+import { isPageFile, scanAppShell, scanServerExports } from "./scanner.js";
 import { generateClientModule } from "./virtualServerModule.js";
 
 /**
@@ -115,7 +116,7 @@ export function scanSSGPages(root: string): SSGPage[] {
 
             if (stat.isDirectory()) {
                 walkDirectory(fullPath);
-            } else if (/\.(tsx|jsx|ts|js)$/.test(item)) {
+            } else if (isPageFile(item)) {
                 const content = fs.readFileSync(fullPath, "utf-8");
 
                 // Check for "use ssg"; directive at the top of the file
@@ -166,7 +167,10 @@ export function scanSSGPages(root: string): SSGPage[] {
  */
 export function filePathToUrlPath(relativePath: string): string {
     // Remove 'pages/' prefix and file extension
-    let urlPath = relativePath.replace(/^pages\//, "").replace(/\.(tsx|jsx|ts|js)$/, "");
+    let urlPath = relativePath
+        .replace(/\\/g, "/")
+        .replace(/^pages\//, "")
+        .replace(/\.(tsx|jsx|ts|js)$/, "");
 
     // Remove route groups (folders in parentheses)
     // E.g., (website)/contact -> /contact
@@ -221,19 +225,11 @@ export function findLayoutPathsForPage(pagePath: string, root: string): string[]
 
     const layoutPaths: string[] = [];
 
-    // Check for _layout.tsx from root to leaf (maintains nesting order)
-    // Start with root layout
-    const rootLayoutPath = path.join(pagesDir, "_layout.tsx");
-    if (fs.existsSync(rootLayoutPath)) {
-        layoutPaths.push(rootLayoutPath);
-    }
-
-    // Then check nested layouts
-    for (let i = 1; i <= pathParts.length; i++) {
+    const layoutNames = ["_layout.tsx", "_layout.jsx", "_layout.ts", "_layout.js"];
+    for (let i = 0; i <= pathParts.length; i++) {
         const dirPath = path.join(pagesDir, ...pathParts.slice(0, i));
-        const layoutPath = path.join(dirPath, "_layout.tsx");
-
-        if (fs.existsSync(layoutPath)) {
+        const layoutPath = layoutNames.map((name) => path.join(dirPath, name)).find((candidate) => fs.existsSync(candidate));
+        if (layoutPath) {
             layoutPaths.push(layoutPath);
         }
     }
@@ -266,10 +262,11 @@ async function findLayoutsForPage(pagePath: string, root: string, viteServer: an
 /**
  * Render a page component to static HTML using Vite SSR with timeout
  */
-async function renderPageToHTML(page: SSGPage, root: string, htmlTemplate: string, viteServer: any, timeout: number = 10000): Promise<string> {
+export async function renderPageToHTML(page: SSGPage, root: string, htmlTemplate: string, viteServer: any, timeout: number = 10000): Promise<string> {
     // Create timeout promise
+    let timeoutId: ReturnType<typeof setTimeout>;
     const timeoutPromise = new Promise<string>((_, reject) => {
-        setTimeout(() => {
+        timeoutId = setTimeout(() => {
             reject(new Error(`Rendering timeout after ${timeout}ms - page may contain hooks or async operations`));
         }, timeout);
     });
@@ -293,12 +290,20 @@ async function renderPageToHTML(page: SSGPage, root: string, htmlTemplate: strin
             const layouts = await findLayoutsForPage(page.filePath, root, viteServer);
 
             // Build the component tree: layouts wrap the page, innermost to outermost
-            let element: any = React.createElement(PageComponent);
-
-            // Wrap with layouts from innermost to outermost (reverse order)
-            for (let i = layouts.length - 1; i >= 0; i--) {
-                element = React.createElement(layouts[i], { children: element } as any);
-            }
+            const pageProps = { params: {}, searchParams: new URLSearchParams() };
+            const WrappedPage = () => {
+                let content: any = React.createElement(PageComponent, pageProps);
+                for (let i = layouts.length - 1; i >= 0; i--) {
+                    content = React.createElement(layouts[i], { children: content });
+                }
+                return content;
+            };
+            const appShellPath = scanAppShell(root);
+            const appShellModule = appShellPath ? await viteServer.ssrLoadModule(appShellPath) : null;
+            const AppShell = appShellModule ? (appShellModule.default ?? appShellModule.App ?? appShellModule.app) : null;
+            let element: any = AppShell
+                ? React.createElement(AppShell, { Component: WrappedPage, pageProps, children: React.createElement(WrappedPage) })
+                : React.createElement(WrappedPage);
 
             // Load RouterContext from our stub
             const heliumClient = await viteServer.ssrLoadModule("heliumts/client");
@@ -324,7 +329,7 @@ async function renderPageToHTML(page: SSGPage, root: string, htmlTemplate: strin
             const markup = ReactDOMServer.renderToString(element);
 
             // Inject the markup into the HTML template with the SSG marker
-            const finalHtml = htmlTemplate.replace(/<div\s+id="root"[^>]*>(.*?)<\/div>/s, `<div id="root" data-ssg-page="${page.urlPath}">${markup}</div>`);
+            const finalHtml = replaceHtmlRootContents(htmlTemplate, markup, { "data-ssg-page": page.urlPath, "data-ssg-failed": null });
 
             return finalHtml;
         } catch (error) {
@@ -334,7 +339,11 @@ async function renderPageToHTML(page: SSGPage, root: string, htmlTemplate: strin
     })();
 
     // Race between timeout and render
-    return Promise.race([renderPromise, timeoutPromise]);
+    try {
+        return await Promise.race([renderPromise, timeoutPromise]);
+    } finally {
+        clearTimeout(timeoutId!);
+    }
 }
 
 /**
@@ -423,17 +432,22 @@ export function Redirect({ to, replace }) {
 
 // Mock useCall hook
 export function useCall(serverFn) {
-    return async (...args) => {
-        console.warn('useCall called during SSG - this will not execute');
-        return null;
-    };
+    return { call: async () => null, isCalling: false, error: null };
 }
 
 // Mock useFetch hook
 export function useFetch(serverFn, ...args) {
     console.warn('useFetch called during SSG - returning null');
-    return { data: null, loading: false, error: null, refetch: async () => {} };
+    return { data: null, isLoading: false, error: null, refetch: async () => {} };
 }
+
+export function isSSR() { return true; }
+export function getPublicEnv() {
+    return Object.fromEntries(Object.entries(process.env).filter(([key, value]) => key.startsWith('HELIUM_PUBLIC_') && typeof value === 'string'));
+}
+export function getPublicEnvValue(key) { return getPublicEnv()[key]; }
+export function isDevEnvironment() { return false; }
+export class RpcError extends Error {}
 
 // Re-export cache (mock)
 export const cache = {
@@ -445,17 +459,19 @@ export const cache = {
 
 // Mock PageTransition and useDeferredNavigation (also available from heliumts/client/transitions)
 export function useDeferredNavigation() {
+    const { path } = useRouter();
     return {
-        path: '/',
-        deferredPath: '/',
+        path,
+        deferredPath: path,
         isStale: false,
         isPending: false,
         isTransitioning: false,
     };
 }
 
-export function PageTransition({ children, loadingClassName, loadingStyle, fallback }) {
-    return React.createElement('div', null, children);
+export function PageTransition({ children, fallback = null }) {
+    return React.createElement('div', { style: { opacity: 1, transition: 'opacity 150ms ease' } },
+        React.createElement(React.Suspense, { fallback }, children));
 }
 `;
 
@@ -463,12 +479,14 @@ export function PageTransition({ children, loadingClassName, loadingStyle, fallb
     const transitionsStubCode = `
 // Auto-generated SSG transitions stub
 import React from 'react';
+import { useRouter } from 'heliumts/client';
 
 // Mock useDeferredNavigation hook - returns static values for SSG
 export function useDeferredNavigation() {
+    const { path } = useRouter();
     return {
-        path: '/',
-        deferredPath: '/',
+        path,
+        deferredPath: path,
         isStale: false,
         isPending: false,
         isTransitioning: false,
@@ -476,9 +494,9 @@ export function useDeferredNavigation() {
 }
 
 // Mock PageTransition component - renders children without transition logic
-export function PageTransition({ children, loadingClassName, loadingStyle, fallback }) {
-    // During SSG, just render the children without any transition logic
-    return React.createElement('div', null, children);
+export function PageTransition({ children, fallback = null }) {
+    return React.createElement('div', { style: { opacity: 1, transition: 'opacity 150ms ease' } },
+        React.createElement(React.Suspense, { fallback }, children));
 }
 
 export default {
@@ -519,6 +537,7 @@ export function clearPrefetchCache() {
 
     const viteServer = await createServer({
         root,
+        mode: "production",
         server: { middlewareMode: true },
         appType: "custom",
         logLevel: "error",
@@ -598,7 +617,7 @@ export function clearPrefetchCache() {
                     fs.mkdirSync(outputDir, { recursive: true });
                 }
 
-                const fallbackHtml = htmlTemplate.replace(/<div\s+id="root"[^>]*>.*?<\/div>/s, `<div id="root" data-ssg-failed="${page.urlPath}"></div>`);
+                const fallbackHtml = replaceHtmlRootContents(htmlTemplate, "", { "data-ssg-page": null, "data-ssg-failed": page.urlPath });
                 fs.writeFileSync(fullOutputPath, fallbackHtml, "utf-8");
 
                 failureCount++;
@@ -619,7 +638,7 @@ export function clearPrefetchCache() {
             }
 
             // Create a blank index.html as the SPA fallback
-            const blankIndexHtml = htmlTemplate.replace(/<div\s+id="root"[^>]*>.*?<\/div>/s, '<div id="root"></div>');
+            const blankIndexHtml = replaceHtmlRootContents(htmlTemplate, "", { "data-ssg-page": null, "data-ssg-failed": null });
             fs.writeFileSync(indexPath, blankIndexHtml, "utf-8");
 
             log("info", `  ${"index.ssg.html".padEnd(maxPathLength)} (SSG root page)`);

@@ -1,4 +1,4 @@
-import { encode as msgpackEncode } from "@msgpack/msgpack";
+import { decode as msgpackDecode, encode as msgpackEncode } from "@msgpack/msgpack";
 import fs from "fs";
 import http from "http";
 import path from "path";
@@ -20,6 +20,7 @@ import { startWorker, stopAllWorkers } from "./defineWorker.js";
 import { HTTPRouter } from "./httpRouter.js";
 import { injectSocialMetaIntoHtml, loadDefaultSocialMetaFromHtmlFile } from "./meta.js";
 import { RateLimiter } from "./rateLimiter.js";
+import { withRequestErrorHandling } from "./requestHandler.js";
 import { RpcRegistry } from "./rpcRegistry.js";
 import { generateConnectionToken, initializeSecurity, verifyConnectionToken } from "./security.js";
 import { SEOMetadataRouter } from "./seoMetadataRouter.js";
@@ -115,17 +116,10 @@ export function startProdServer(options: ProdServerOptions) {
     });
 
     // Create HTTP server
-    const server = http.createServer(async (req, res) => {
+    const handleRequest = withRequestErrorHandling(async (req: any, res: any) => {
         // Apply security headers to all responses
         setSecurityHeaders(res, config);
 
-        // Handle CORS preflight
-        if (req.method === "OPTIONS") {
-            handleCorsHeaders(req, res, config);
-            res.writeHead(204);
-            res.end();
-            return;
-        }
         handleCorsHeaders(req, res, config);
 
         // Handle token refresh endpoint
@@ -159,6 +153,7 @@ export function startProdServer(options: ProdServerOptions) {
                 const ssrResult = await resolveServerSideProps({
                     req,
                     pathname: targetPathname,
+                    search: targetUrl.search,
                     params: ssrMatch.params,
                     page: ssrMatch.page,
                     ctx: httpCtx,
@@ -181,7 +176,7 @@ export function startProdServer(options: ProdServerOptions) {
             return;
         }
 
-        if (req.url === "/__helium__/refresh-token") {
+        if (requestPathname === "/__helium__/refresh-token") {
             // Security: only allow POST to prevent CSRF via <img>/<script> tags
             if (req.method !== "POST") {
                 res.writeHead(405, { "Content-Type": "application/json" });
@@ -195,13 +190,13 @@ export function startProdServer(options: ProdServerOptions) {
                 return;
             }
             const token = generateConnectionToken();
-            res.writeHead(200, { "Content-Type": "application/json" });
+            res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
             res.end(JSON.stringify({ token }));
             return;
         }
 
         // Handle HTTP-based RPC endpoint (alternative to WebSocket for mobile networks)
-        if (req.url === "/__helium__/rpc" && req.method === "POST") {
+        if (requestPathname === "/__helium__/rpc" && req.method === "POST") {
             // Security: verify connection token for HTTP RPC
             const authToken = req.headers["x-helium-token"] as string | undefined;
             if (!authToken || !verifyConnectionToken(authToken)) {
@@ -221,11 +216,16 @@ export function startProdServer(options: ProdServerOptions) {
             const chunks: Buffer[] = [];
             let totalSize = 0;
             let aborted = false;
+            req.on("error", () => {
+                aborted = true;
+            });
             req.on("data", (chunk: Buffer) => {
+                if (aborted) {
+                    return;
+                }
                 totalSize += chunk.length;
                 if (totalSize > maxBodySize) {
                     aborted = true;
-                    req.destroy();
                     res.writeHead(413, { "Content-Type": "application/json" });
                     res.end(JSON.stringify({ ok: false, error: "Request entity too large" }));
                     return;
@@ -280,17 +280,46 @@ export function startProdServer(options: ProdServerOptions) {
             return;
         }
 
+        // Let explicit OPTIONS handlers run before the generic CORS response.
+        if (req.method === "OPTIONS") {
+            res.writeHead(204);
+            res.end();
+            return;
+        }
+
+        if (req.method !== "GET" && req.method !== "HEAD") {
+            res.writeHead(405, { Allow: "GET, HEAD", "Content-Type": "text/plain" });
+            res.end("Method not allowed");
+            return;
+        }
+
         // Serve static files
-        const url = req.url || "/";
+        let url: string;
+        try {
+            url = decodeURIComponent(requestPathname);
+        } catch {
+            res.writeHead(400, { "Content-Type": "text/plain" });
+            res.end("Invalid URL");
+            return;
+        }
+        if (url.includes("\0") || url.includes("\\")) {
+            res.writeHead(400, { "Content-Type": "text/plain" });
+            res.end("Invalid URL");
+            return;
+        }
 
         // Block access to sensitive configuration and server files
         const blockedFiles = ["helium.config.js", "helium.config.mjs", "helium.config.ts", "server.js", ".env", ".env.local", ".env.production"];
 
-        const requestedFile = path.basename(url.split("?")[0]);
+        const requestedFile = path.basename(url).toLowerCase();
         let filePath: string = path.join(staticDir, "index.html");
         let is404 = false;
 
-        if (blockedFiles.some((blocked) => requestedFile === blocked || requestedFile.startsWith(".env"))) {
+        if (
+            blockedFiles.some((blocked) => requestedFile === blocked || requestedFile.startsWith(".env")) ||
+            requestedFile === "server.js.map" ||
+            url.split("/").some((part) => part.toLowerCase() === ".git" || part.toLowerCase().startsWith(".env"))
+        ) {
             // Serve index.html so the SPA router can render the 404 page
             filePath = path.join(staticDir, "index.html");
             is404 = true;
@@ -375,9 +404,17 @@ export function startProdServer(options: ProdServerOptions) {
         }
 
         // Check if file exists (should always exist now since we fallback to index.html)
-        if (!fs.existsSync(filePath)) {
+        if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
             // This should rarely happen - only if index.html itself is missing
             res.writeHead(404, { "Content-Type": "text/html" });
+            res.end("Not found");
+            return;
+        }
+
+        const realStaticDir = fs.realpathSync(staticDir);
+        const realFilePath = fs.realpathSync(filePath);
+        if (!realFilePath.startsWith(realStaticDir + path.sep)) {
+            res.writeHead(404, { "Content-Type": "text/plain" });
             res.end("Not found");
             return;
         }
@@ -387,6 +424,7 @@ export function startProdServer(options: ProdServerOptions) {
         const contentTypes: Record<string, string> = {
             ".html": "text/html",
             ".js": "application/javascript",
+            ".mjs": "application/javascript",
             ".css": "text/css",
             ".json": "application/json",
             ".png": "image/png",
@@ -399,6 +437,13 @@ export function startProdServer(options: ProdServerOptions) {
             ".woff2": "font/woff2",
             ".ttf": "font/ttf",
             ".eot": "application/vnd.ms-fontobject",
+            ".webp": "image/webp",
+            ".avif": "image/avif",
+            ".mp4": "video/mp4",
+            ".webm": "video/webm",
+            ".txt": "text/plain",
+            ".xml": "application/xml",
+            ".wasm": "application/wasm",
         };
         const contentType = contentTypes[ext] || "application/octet-stream";
 
@@ -457,6 +502,7 @@ export function startProdServer(options: ProdServerOptions) {
                             );
                         } else {
                             log("error", `Failed to render SSR page for ${cleanedPathname}:`, error);
+                            throw error;
                         }
                     }
                 }
@@ -473,14 +519,15 @@ export function startProdServer(options: ProdServerOptions) {
 
             // Set status code to 404 if serving the 404 page
             const statusCode = is404 ? 404 : 200;
-            res.writeHead(statusCode, { "Content-Type": contentType });
-            res.end(responseBody);
+            res.writeHead(statusCode, { "Content-Type": contentType, ...(contentType === "text/html" ? { "Cache-Control": "no-store" } : {}) });
+            res.end(req.method === "HEAD" ? undefined : responseBody);
         } catch (error) {
             log("error", "Error serving file:", error);
             res.writeHead(500, { "Content-Type": "text/plain" });
             res.end("Internal server error");
         }
     });
+    const server = http.createServer(handleRequest);
 
     // Setup WebSocket server for RPC
     const wss = new WebSocketServer({
@@ -530,7 +577,6 @@ export function startProdServer(options: ProdServerOptions) {
                     let req: any;
                     // Always expect MessagePack
                     const buffer = Buffer.isBuffer(msg) ? msg : Buffer.from(msg as any);
-                    const { decode: msgpackDecode } = require("@msgpack/msgpack");
                     req = msgpackDecode(buffer);
 
                     const stats = rateLimiter.getConnectionStats(socket);
@@ -563,13 +609,15 @@ export function startProdServer(options: ProdServerOptions) {
                 return;
             }
 
-            registry.handleMessage(socket, Buffer.isBuffer(msg) ? msg : Buffer.from(msg as any));
+            void registry.handleMessage(socket, Buffer.isBuffer(msg) ? msg : Buffer.from(msg as any)).catch((error) => {
+                log("error", "WebSocket RPC error:", error);
+            });
         });
     });
 
     // Handle WebSocket upgrade requests
     server.on("upgrade", (req, socket, head) => {
-        if (req.url?.startsWith("/rpc")) {
+        if (req.url?.split("?")[0] === "/rpc") {
             // Security: read token from Sec-WebSocket-Protocol header instead of query string
             const protocols = req.headers["sec-websocket-protocol"];
             const token =
@@ -645,6 +693,10 @@ export function startProdServer(options: ProdServerOptions) {
     const shutdown = async () => {
         log("info", "Shutting down...");
         await stopAllWorkers();
+        for (const socket of wss.clients) {
+            socket.terminate();
+        }
+        wss.close();
         server.close(() => {
             log("info", "Server closed");
             process.exit(0);
@@ -653,6 +705,14 @@ export function startProdServer(options: ProdServerOptions) {
 
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
+    server.once("close", () => {
+        process.off("SIGINT", shutdown);
+        process.off("SIGTERM", shutdown);
+        for (const socket of wss.clients) {
+            socket.terminate();
+        }
+        wss.close();
+    });
 
     return server;
 }
@@ -731,7 +791,7 @@ function handleCorsHeaders(req: http.IncomingMessage, res: http.ServerResponse, 
     const isAllowed = allowedOrigins.includes("*") || allowedOrigins.includes(origin);
     if (isAllowed) {
         res.setHeader("Access-Control-Allow-Origin", allowedOrigins.includes("*") ? "*" : origin);
-        res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS");
         res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Requested-With, X-Helium-Token");
         res.setHeader("Access-Control-Max-Age", "86400");
 

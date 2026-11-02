@@ -129,17 +129,14 @@ export function subscribeInvalidations(listener: (methodId: string) => void) {
 
 export function invalidateAll() {
     const methodIds = new Set<string>();
-    for (const key of store.keys()) {
-        try {
-            const parsed = JSON.parse(key);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-                methodIds.add(parsed[0]);
-            }
-        } catch {
-            // Ignore malformed keys
+    for (const key of [...store.keys(), ...pendingFetches.keys()]) {
+        const methodId = methodIdFromKey(key);
+        if (methodId !== undefined) {
+            methodIds.add(methodId);
         }
     }
     store.clear();
+    pendingFetches.clear();
     for (const methodId of methodIds) {
         for (const listener of listeners) {
             listener(methodId);
@@ -171,10 +168,14 @@ export function setPendingFetch<T>(key: string, promise: Promise<T>): Promise<T>
         return existing as Promise<T>;
     }
     pendingFetches.set(key, promise);
-    // Clean up when done
-    promise.finally(() => {
-        pendingFetches.delete(key);
-    });
+    // Do not let an invalidated request remove its replacement. Handle both
+    // outcomes so cleanup does not create an unhandled rejected promise.
+    const cleanup = () => {
+        if (pendingFetches.get(key) === promise) {
+            pendingFetches.delete(key);
+        }
+    };
+    void promise.then(cleanup, cleanup);
     return promise;
 }
 

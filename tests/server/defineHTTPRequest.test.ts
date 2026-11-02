@@ -27,7 +27,7 @@ describe("defineHTTPRequest", () => {
         });
 
         it("should support all HTTP methods", () => {
-            const methods: HTTPMethod[] = ["GET", "POST", "PUT", "DELETE", "PATCH", "ALL"];
+            const methods: HTTPMethod[] = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "ALL"];
 
             for (const method of methods) {
                 const handler = defineHTTPRequest(method, "/test", async (_req, _ctx) => ({}));

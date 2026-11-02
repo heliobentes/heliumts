@@ -123,7 +123,7 @@ export function injectHeliumEnvIntoHtml(html: string, prefix: string = "HELIUM_P
     // Inject at the start of <head> so it runs before module scripts
     const headMatch = html.match(/<head[^>]*>/i);
     if (headMatch) {
-        return html.replace(headMatch[0], `${headMatch[0]}\n${script}`);
+        return html.replace(headMatch[0], () => `${headMatch[0]}\n${script}`);
     }
 
     // Fallback: prepend to HTML

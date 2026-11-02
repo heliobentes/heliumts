@@ -71,7 +71,7 @@ interface WorkerOptions {
     restartDelayMs?: number;
 
     /**
-     * Maximum number of restart attempts before giving up.
+     * Maximum number of restart attempts after the initial run before giving up.
      * Set to 0 for unlimited restarts.
      * Default: 0 (unlimited)
      */
@@ -363,6 +363,8 @@ export const contextExample = defineWorker(
     { name: "contextExample" }
 );
 ```
+
+`maxRestarts` counts retries after the initial run. For example, `maxRestarts: 1` permits the initial attempt and one restart. Stopping a worker cancels any pending restart delay; cleanup returned or registered after asynchronous setup finishes is still executed.
 
 ## Error Handling
 

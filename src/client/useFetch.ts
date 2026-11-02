@@ -133,6 +133,14 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
 
     // Track if component is mounted
     const isMountedRef = useRef(true);
+    const requestIdRef = useRef(0);
+    const identityRef = useRef({ key, enabled });
+    if (identityRef.current.key !== key || identityRef.current.enabled !== enabled) {
+        requestIdRef.current++;
+        queuedRefetchRef.current = false;
+        queuedRefetchShowLoaderRef.current = false;
+        identityRef.current = { key, enabled };
+    }
 
     const [data, setData] = useState<TResult | undefined>(() => (has(key) ? get<TResult>(key) : undefined));
     const [isLoading, setLoading] = useState(!has(key) && enabled);
@@ -151,82 +159,61 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
             return undefined;
         }
 
+        const currentKey = keyRef.current;
+        const requestId = ++requestIdRef.current;
+        const canUpdate = () => isMountedRef.current && keyRef.current === currentKey && requestIdRef.current === requestId;
+
         const replayQueuedRefetch = () => {
-            if (!queuedRefetchRef.current || !isMountedRef.current || !enabledRef.current) {
+            if (!queuedRefetchRef.current || !canUpdate() || !enabledRef.current) {
                 return;
             }
             const nextShowLoader = queuedRefetchShowLoaderRef.current;
             queuedRefetchRef.current = false;
             queuedRefetchShowLoaderRef.current = false;
-            clearPendingFetch(keyRef.current);
+            clearPendingFetch(currentKey);
             queueMicrotask(() => {
-                if (!isMountedRef.current || !enabledRef.current) {
-                    return;
+                if (canUpdate() && enabledRef.current) {
+                    void doFetch(nextShowLoader);
                 }
-                void doFetch(nextShowLoader);
             });
         };
-
-        const currentKey = keyRef.current;
-
-        // Check if there's already a pending fetch for this key (global deduplication)
-        const existingFetch = getPendingFetch<{ data: TResult; stats: RpcStats }>(currentKey);
-        if (existingFetch) {
-            // Wait for the existing fetch and use its result
-            if (showLoader) {
-                setLoading(true);
-            }
-            try {
-                const result = await existingFetch;
-                if (isMountedRef.current) {
-                    setData(result.data);
-                    setStats(result.stats);
-                    setError(null);
-                }
-                return result.data;
-            } catch (err: unknown) {
-                if (isMountedRef.current) {
-                    const rpcError = err instanceof RpcError ? err : new RpcError(err instanceof Error ? err.message : "Unknown error");
-                    setError(rpcError.message);
-                    setStats(rpcError.stats);
-                }
-                return undefined;
-            } finally {
-                if (isMountedRef.current && showLoader) {
-                    setLoading(false);
-                }
-                replayQueuedRefetch();
-            }
-        }
 
         if (showLoader) {
             setLoading(true);
         }
         setError(null);
 
-        // Create the fetch promise and register it globally
-        const fetchPromise = rpcCall<TResult, TArgs>(methodIdRef.current, argsRef.current as TArgs);
-        const dedupedPromise = setPendingFetch(currentKey, fetchPromise);
+        let fetchPromise = getPendingFetch<{ data: TResult; stats: RpcStats }>(currentKey);
+        if (!fetchPromise) {
+            const currentTtl = ttlRef.current;
+            // Cache before pending cleanup runs, and only while this request is
+            // still registered. An invalidated response must not restore stale data.
+            const request = rpcCall<TResult, TArgs>(methodIdRef.current, argsRef.current as TArgs).then((result) => {
+                if (getPendingFetch(currentKey) === fetchPromise) {
+                    set(currentKey, result.data, currentTtl);
+                }
+                return result;
+            });
+            fetchPromise = setPendingFetch(currentKey, request);
+        }
 
         try {
-            const result = await dedupedPromise;
-            if (!isMountedRef.current) {
-                return undefined;
+            const result = await fetchPromise;
+            if (canUpdate()) {
+                setData(result.data);
+                setStats(result.stats);
+                setError(null);
             }
-            set(currentKey, result.data, ttlRef.current);
-            setData(result.data);
-            setStats(result.stats);
             return result.data;
         } catch (err: unknown) {
-            if (!isMountedRef.current) {
-                return undefined;
+            if (canUpdate()) {
+                const rpcError = err instanceof RpcError ? err : new RpcError(err instanceof Error ? err.message : "Unknown error");
+                setError(rpcError.message);
+                setStats(rpcError.stats);
             }
-            const rpcError = err instanceof RpcError ? err : new RpcError(err instanceof Error ? err.message : "Unknown error");
-            setError(rpcError.message);
-            setStats(rpcError.stats);
             return undefined;
         } finally {
-            if (isMountedRef.current && showLoader) {
+            if (canUpdate()) {
                 setLoading(false);
             }
             replayQueuedRefetch();
@@ -238,56 +225,26 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
         isMountedRef.current = true;
         return () => {
             isMountedRef.current = false;
+            requestIdRef.current++;
         };
     }, []);
 
-    // Sync data from cache when key changes
+    // Reset result state when the query changes, including cached undefined values.
     useEffect(() => {
-        if (has(key)) {
-            const cachedData = get<TResult>(key);
-            if (cachedData !== undefined) {
-                setData(cachedData);
-                setLoading(false);
-            }
-        }
-    }, [key]);
+        setData(get<TResult>(key));
+        setError(null);
+        setStats(null);
+        setLoading(enabled && !has(key));
+    }, [key, enabled]);
 
-    // Initial fetch on mount or when key/enabled changes
+    // Joining a pending request goes through the same guarded path as a new fetch.
     useEffect(() => {
         if (!enabled) {
             setLoading(false);
             return;
         }
-
-        // Only fetch if not in cache and not already pending globally
-        if (!has(key) && !isPending(key)) {
-            doFetch(true);
-        } else if (isPending(key)) {
-            // There's a pending fetch - wait for it
-            setLoading(true);
-            const pendingFetch = getPendingFetch<{ data: TResult; stats: RpcStats }>(key);
-            if (pendingFetch) {
-                pendingFetch
-                    .then((result) => {
-                        if (isMountedRef.current) {
-                            setData(result.data);
-                            setStats(result.stats);
-                            setError(null);
-                        }
-                    })
-                    .catch((err: unknown) => {
-                        if (isMountedRef.current) {
-                            const rpcError = err instanceof RpcError ? err : new RpcError(err instanceof Error ? err.message : "Unknown error");
-                            setError(rpcError.message);
-                            setStats(rpcError.stats);
-                        }
-                    })
-                    .finally(() => {
-                        if (isMountedRef.current) {
-                            setLoading(false);
-                        }
-                    });
-            }
+        if (!has(key) || isPending(key)) {
+            void doFetch(true);
         }
     }, [key, enabled, doFetch]);
 

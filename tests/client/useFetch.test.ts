@@ -26,7 +26,7 @@ vi.mock("../../src/client/cache", () => ({
 }));
 
 describe("useFetch", () => {
-    const mockMethod = { __id: "testMethod" } as { __id: string };
+    const mockMethod = { __kind: "method" as const, __id: "testMethod", handler: (_args: unknown) => undefined };
     const mockRpcCall = rpcCall as ReturnType<typeof vi.fn>;
     const mockHas = has as ReturnType<typeof vi.fn>;
     const mockGet = get as ReturnType<typeof vi.fn>;
@@ -40,6 +40,18 @@ describe("useFetch", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mockHas.mockReturnValue(false);
+        const pendingFetches = new Map<string, Promise<unknown>>();
+        mockGetPendingFetch.mockImplementation((key: string) => pendingFetches.get(key));
+        mockSetPendingFetch.mockImplementation((key: string, promise: Promise<unknown>) => {
+            pendingFetches.set(key, promise);
+            const cleanup = () => {
+                if (pendingFetches.get(key) === promise) {
+                    pendingFetches.delete(key);
+                }
+            };
+            void promise.then(cleanup, cleanup);
+            return promise;
+        });
     });
 
     afterEach(() => {
@@ -370,8 +382,10 @@ describe("useFetch", () => {
 
         const { cacheKey: mockCacheKey } = await import("../../src/client/cache");
 
-        renderHook(() => useFetch(mockMethod, { id: 1 }));
-        renderHook(() => useFetch(mockMethod, { id: 2 }));
+        await act(async () => {
+            renderHook(() => useFetch(mockMethod, { id: 1 }));
+            renderHook(() => useFetch(mockMethod, { id: 2 }));
+        });
 
         expect(mockCacheKey).toHaveBeenCalledWith("testMethod", { id: 1 });
         expect(mockCacheKey).toHaveBeenCalledWith("testMethod", { id: 2 });
@@ -426,9 +440,7 @@ describe("useFetch", () => {
         mockIsPending.mockImplementation(() => pending);
         mockGetPendingFetch.mockImplementation(() => (pending ? currentPendingPromise : undefined));
 
-        mockRpcCall
-            .mockImplementationOnce(() => firstFetchPromise)
-            .mockResolvedValue({ data: { result: "replayed" }, stats: {} });
+        mockRpcCall.mockImplementationOnce(() => firstFetchPromise).mockResolvedValue({ data: { result: "replayed" }, stats: {} });
 
         const { result } = renderHook(() => useFetch(mockMethod));
 
@@ -494,9 +506,7 @@ describe("useFetch", () => {
         mockIsPending.mockImplementation(() => pending);
         mockGetPendingFetch.mockImplementation(() => (pending ? currentPendingPromise : undefined));
 
-        mockRpcCall
-            .mockImplementationOnce(() => firstFetchPromise)
-            .mockResolvedValueOnce({ data: { result: "replayed" }, stats: {} });
+        mockRpcCall.mockImplementationOnce(() => firstFetchPromise).mockResolvedValueOnce({ data: { result: "replayed" }, stats: {} });
 
         const { result } = renderHook(() => {
             const header = useFetch(mockMethod);
@@ -565,9 +575,7 @@ describe("useFetch", () => {
         mockIsPending.mockImplementation(() => pending);
         mockGetPendingFetch.mockImplementation(() => (pending ? currentPendingPromise : undefined));
 
-        mockRpcCall
-            .mockImplementationOnce(() => firstFetchPromise)
-            .mockResolvedValue({ data: { result: "replayed-many" }, stats: {} });
+        mockRpcCall.mockImplementationOnce(() => firstFetchPromise).mockResolvedValue({ data: { result: "replayed-many" }, stats: {} });
 
         const { result } = renderHook(() => {
             const one = useFetch(mockMethod);

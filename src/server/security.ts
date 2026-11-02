@@ -14,7 +14,10 @@ export function initializeSecurity(config: Required<HeliumRpcSecurityConfig>): v
         if (!envSecret) {
             SERVER_SECRET = crypto.randomBytes(32).toString("hex");
             if (process.env.NODE_ENV === "production") {
-                log("warn", "HELIUM_SECRET is not set. A random secret was generated. Tokens will NOT verify across cluster instances or restarts. Set HELIUM_SECRET for production.");
+                log(
+                    "warn",
+                    "HELIUM_SECRET is not set. A random secret was generated. Tokens will NOT verify across cluster instances or restarts. Set HELIUM_SECRET for production."
+                );
             }
         } else {
             SERVER_SECRET = envSecret;
@@ -39,11 +42,12 @@ export function verifyConnectionToken(token: string): boolean {
         return false;
     }
 
-    const [timestamp, signature] = token.split(".");
-    if (!timestamp || !signature) {
+    const match = /^(\d+)\.([a-f0-9]{64})$/.exec(token);
+    if (!match) {
         log("warn", "Invalid token format");
         return false;
     }
+    const [, timestamp, signature] = match;
 
     // Check if token is expired
     const ts = parseInt(timestamp, 10);

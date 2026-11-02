@@ -211,24 +211,9 @@ describe("config", () => {
             expect(result1).toBe(result2);
         });
 
-        it("should handle .ts config file error in production", async () => {
-            const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-            // Mock existsSync to return true for helium.config.ts
-            existsSyncSpy.mockImplementation((filePath: fs.PathLike) => {
-                return String(filePath).endsWith("helium.config.ts");
-            });
-
-            // The import will fail in production for .ts files
-            // We can't easily mock dynamic imports, but we can verify the function
-            // handles the case when no valid config is found
-            clearConfigCache();
-            const result = await loadConfig("/test/project");
-
-            // Should return empty config after failing to load .ts file
-            expect(result).toEqual({});
-
-            warnSpy.mockRestore();
+        it("rejects a config that exists but cannot be loaded instead of silently defaulting", async () => {
+            existsSyncSpy.mockImplementation((filePath: fs.PathLike) => String(filePath).endsWith("helium.config.ts"));
+            await expect(loadConfig("/test/project")).rejects.toThrow("Failed to load Helium config");
         });
 
         it("should search HELIUM_CONFIG_DIR first when set", async () => {
@@ -269,6 +254,21 @@ describe("config", () => {
             expect(checkedFiles).toContain("helium.config.mjs");
             expect(checkedFiles).toContain("helium.config.ts");
         });
+    });
+
+    it("keeps caches separate for different project roots and config directories", async () => {
+        existsSyncSpy.mockReturnValue(false);
+        const first = await loadConfig("/first/project");
+        existsSyncSpy.mockClear();
+        const second = await loadConfig("/second/project");
+        expect(second).not.toBe(first);
+        expect(existsSyncSpy).toHaveBeenCalled();
+        vi.stubEnv("HELIUM_CONFIG_DIR", "/another/config");
+        try {
+            expect(await loadConfig("/first/project")).not.toBe(first);
+        } finally {
+            vi.unstubAllEnvs();
+        }
     });
 
     describe("clearConfigCache", () => {

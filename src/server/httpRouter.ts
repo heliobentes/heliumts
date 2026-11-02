@@ -82,7 +82,7 @@ export class HTTPRouter {
                         }
                     }
                 }
-                const httpRequest = await createHTTPRequest(req, query, params, this.maxBodySize);
+                const httpRequest = await createHTTPRequest(req, query, params, this.maxBodySize, this.trustProxyDepth);
 
                 let result: any;
                 // Build context with request metadata
@@ -139,19 +139,16 @@ export class HTTPRouter {
                         res.setHeader("set-cookie", cookies);
                     }
 
-                    if (result.body && typeof result.body.getReader === "function") {
-                        const reader = result.body.getReader();
-                        try {
-                            while (true) {
-                                const { done, value } = await reader.read();
-                                if (done) {
-                                    break;
-                                }
-                                res.write(value);
-                            }
-                        } finally {
-                            res.end();
+                    if (method === "HEAD") {
+                        if (result.body && typeof result.body.cancel === "function") {
+                            void result.body.cancel().catch(() => {});
                         }
+                        res.end();
+                        return true;
+                    }
+
+                    if (result.body && typeof result.body.getReader === "function") {
+                        await streamResponseBody(result.body, res);
                     } else if (result.body) {
                         const arrayBuf = await result.arrayBuffer();
                         res.end(Buffer.from(arrayBuf));
@@ -162,13 +159,22 @@ export class HTTPRouter {
                 }
 
                 // Send response
+                const responseBody = JSON.stringify(result);
                 res.writeHead(200, { "Content-Type": "application/json" });
-                res.end(JSON.stringify(result));
+                res.end(responseBody);
                 return true;
             } catch (error) {
                 log("error", "Error handling request:", error);
-                res.writeHead(500, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ error: "Internal server error" }));
+                if (res.headersSent || res.destroyed || res.writableEnded) {
+                    if (!res.destroyed) {
+                        res.destroy();
+                    }
+                    return true;
+                }
+                const status = error instanceof HTTPRequestError ? error.status : 500;
+                res.removeHeader?.("content-length");
+                res.writeHead(status, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: error instanceof HTTPRequestError ? error.message : "Internal server error" }));
                 return true;
             }
         }
@@ -179,17 +185,23 @@ export class HTTPRouter {
 
 function pathToRegex(path: string): { pattern: RegExp; keys: string[] } {
     const keys: string[] = [];
-    const multiSegmentToken = "__WILDCARD_MULTI__";
     const pattern = path
-        .replace(/\/\*\*/g, `/${multiSegmentToken}`)
-        .replace(/\/:([^/]+)/g, (_, key) => {
-            keys.push(key);
-            return "/([^/]+)";
+        .split("/")
+        .map((segment) => {
+            if (segment.startsWith(":") && segment.length > 1) {
+                keys.push(segment.slice(1));
+                return "([^/]+)";
+            }
+            if (segment === "**") {
+                return ".*";
+            }
+            return segment
+                .split("*")
+                .map((literal) => literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+                .join("[^/]*");
         })
         // * matches a single path segment, /** matches across segments.
-        .replace(/\*/g, "[^/]*")
-        .replace(new RegExp(multiSegmentToken, "g"), ".*")
-        .replace(/\//g, "\\/");
+        .join("/");
 
     return {
         pattern: new RegExp(`^${pattern}$`),
@@ -197,7 +209,13 @@ function pathToRegex(path: string): { pattern: RegExp; keys: string[] } {
     };
 }
 
-async function createHTTPRequest(req: IncomingMessage, query: Record<string, string | string[]>, params: Record<string, string>, maxBodySize: number): Promise<HTTPRequest> {
+async function createHTTPRequest(
+    req: IncomingMessage,
+    query: Record<string, string | string[]>,
+    params: Record<string, string>,
+    maxBodySize: number,
+    trustProxyDepth: number
+): Promise<HTTPRequest> {
     const headers: Record<string, string | string[] | undefined> = {};
     for (const [key, value] of Object.entries(req.headers)) {
         headers[key.toLowerCase()] = value;
@@ -211,12 +229,10 @@ async function createHTTPRequest(req: IncomingMessage, query: Record<string, str
         normalizedQuery[key] = Array.isArray(value) ? value[0] : value;
     }
 
-    let bodyBuffer: Buffer | null = null;
-    const getBody = async (): Promise<Buffer> => {
-        if (bodyBuffer === null) {
-            bodyBuffer = await readBody(req, maxBodySize);
-        }
-        return bodyBuffer;
+    let bodyPromise: Promise<Buffer> | undefined;
+    const getBody = (): Promise<Buffer> => {
+        bodyPromise ??= readBody(req, maxBodySize);
+        return bodyPromise;
     };
 
     return {
@@ -231,7 +247,7 @@ async function createHTTPRequest(req: IncomingMessage, query: Record<string, str
             try {
                 return JSON.parse(body.toString("utf-8"));
             } catch {
-                throw new Error("Invalid JSON in request body");
+                throw new HTTPRequestError(400, "Invalid JSON in request body");
             }
         },
         text: async () => {
@@ -248,9 +264,18 @@ async function createHTTPRequest(req: IncomingMessage, query: Record<string, str
          * Fetch Request API (for example third-party handlers or libraries).
          */
         toWebRequest: async () => {
-            const protocol = (req.headers["x-forwarded-proto"] as string) || "http";
+            let protocol = (req.socket as { encrypted?: boolean }).encrypted ? "https" : "http";
+            const forwardedProto = req.headers["x-forwarded-proto"];
+            if (Number.isInteger(trustProxyDepth) && trustProxyDepth > 0 && typeof forwardedProto === "string") {
+                const protocols = forwardedProto.split(",").map((value) => value.trim().toLowerCase());
+                const trustedProtocol = protocols.length === 1 ? protocols[0] : protocols[protocols.length - trustProxyDepth];
+                if (trustedProtocol === "https" || trustedProtocol === "http") {
+                    protocol = trustedProtocol;
+                }
+            }
             const host = (req.headers["host"] as string) || "localhost";
-            const url = `${protocol}://${host}${req.url || "/"}`;
+            const requestPath = parseUrl(req.url || "/").path || "/";
+            const url = `${protocol}://${host}${requestPath}`;
 
             const webHeaders = new Headers();
             for (const [key, value] of Object.entries(headers)) {
@@ -278,21 +303,44 @@ async function createHTTPRequest(req: IncomingMessage, query: Record<string, str
     };
 }
 
+class HTTPRequestError extends Error {
+    constructor(
+        readonly status: number,
+        message: string
+    ) {
+        super(message);
+    }
+}
+
 function readBody(req: IncomingMessage, maxBytes: number = 1_048_576): Promise<Buffer> {
     return new Promise((resolve, reject) => {
         const chunks: Buffer[] = [];
         let totalSize = 0;
+        let failed = false;
+        const fail = (error: Error) => {
+            failed = true;
+            chunks.length = 0;
+            reject(error);
+        };
         req.on("data", (chunk) => {
-            totalSize += chunk.length;
-            if (totalSize > maxBytes) {
-                req.destroy();
-                reject(new Error("Request entity too large"));
+            if (failed) {
                 return;
             }
-            chunks.push(chunk);
+            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            totalSize += buffer.length;
+            if (totalSize > maxBytes) {
+                fail(new HTTPRequestError(413, "Request entity too large"));
+                return;
+            }
+            chunks.push(buffer);
         });
-        req.on("end", () => resolve(Buffer.concat(chunks)));
-        req.on("error", reject);
+        req.on("end", () => {
+            if (!failed) {
+                resolve(Buffer.concat(chunks));
+            }
+        });
+        req.on("error", fail);
+        req.on("aborted", () => fail(new HTTPRequestError(400, "Request body was aborted")));
     });
 }
 
@@ -304,8 +352,13 @@ function parseCookies(cookieHeader: string): Record<string, string> {
 
     const pairs = cookieHeader.split(";");
     for (const pair of pairs) {
-        const [key, value] = pair.split("=").map((s) => s.trim());
-        if (key && value) {
+        const separator = pair.indexOf("=");
+        if (separator === -1) {
+            continue;
+        }
+        const key = pair.slice(0, separator).trim();
+        const value = pair.slice(separator + 1).trim();
+        if (key) {
             try {
                 cookies[key] = decodeURIComponent(value);
             } catch {
@@ -315,6 +368,58 @@ function parseCookies(cookieHeader: string): Record<string, string> {
         }
     }
     return cookies;
+}
+
+async function streamResponseBody(body: ReadableStream<Uint8Array>, res: ServerResponse): Promise<void> {
+    const reader = body.getReader();
+    let closed = res.destroyed;
+    const onClose = () => {
+        closed = true;
+        void reader.cancel().catch(() => {});
+    };
+    res.on?.("close", onClose);
+    res.on?.("error", onClose);
+    try {
+        if (closed) {
+            await reader.cancel();
+        }
+        while (!closed) {
+            const { done, value } = await reader.read();
+            if (done || closed) {
+                break;
+            }
+            if (res.write(value) === false) {
+                await new Promise<void>((resolve, reject) => {
+                    const cleanup = () => {
+                        res.off("drain", onDrain);
+                        res.off("close", onDrain);
+                        res.off("error", onError);
+                    };
+                    const onDrain = () => {
+                        cleanup();
+                        resolve();
+                    };
+                    const onError = (error: Error) => {
+                        cleanup();
+                        reject(error);
+                    };
+                    res.once("drain", onDrain);
+                    res.once("close", onDrain);
+                    res.once("error", onError);
+                });
+            }
+        }
+        if (!closed) {
+            res.end();
+        }
+    } catch (error) {
+        await reader.cancel().catch(() => {});
+        throw error;
+    } finally {
+        res.off?.("close", onClose);
+        res.off?.("error", onClose);
+        reader.releaseLock();
+    }
 }
 
 /**

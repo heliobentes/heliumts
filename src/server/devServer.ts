@@ -1,4 +1,4 @@
-import { encode as msgpackEncode } from "@msgpack/msgpack";
+import { decode as msgpackDecode, encode as msgpackEncode } from "@msgpack/msgpack";
 import type http from "http";
 import type http2 from "http2";
 import type https from "https";
@@ -21,6 +21,7 @@ import { startWorker, stopAllWorkers } from "./defineWorker.js";
 import { HTTPRouter } from "./httpRouter.js";
 import { injectSocialMetaIntoHtml, loadDefaultSocialMetaFromHtmlFile } from "./meta.js";
 import { RateLimiter } from "./rateLimiter.js";
+import { withRequestErrorHandling } from "./requestHandler.js";
 import { RpcRegistry } from "./rpcRegistry.js";
 import { initializeSecurity, verifyConnectionToken } from "./security.js";
 import { SEOMetadataRouter } from "./seoMetadataRouter.js";
@@ -51,6 +52,10 @@ let rateLimiter: RateLimiter | null = null;
 let currentWorkers: WorkerEntry[] = [];
 let cachedDefaultMeta: Awaited<ReturnType<typeof loadDefaultSocialMetaFromHtmlFile>> | undefined;
 let workerReloadPromise: Promise<void> = Promise.resolve();
+const originalRequestListeners = new WeakMap<HttpServer, Function[]>();
+const socketRequests = new WeakMap<WebSocket, http.IncomingMessage>();
+let currentTrustProxyDepth = 0;
+let currentMaxConnectionsPerIP = 10;
 
 function createWorkerContext(): HeliumContext {
     return {
@@ -113,10 +118,13 @@ export function attachToDevServer(
     const rpcSecurity = getRpcSecurityConfig(config);
     const rpcConfig = getRpcConfig(config);
     const compressionConfig = rpcConfig.compression;
+    currentTrustProxyDepth = trustProxyDepth;
+    currentMaxConnectionsPerIP = rpcSecurity.maxConnectionsPerIP;
     initializeSecurity(rpcSecurity);
 
-    // Re-initialize rate limiter with new config (always recreate in dev mode to pick up config changes)
-    rateLimiter = new RateLimiter(rpcSecurity.maxMessagesPerWindow, rpcSecurity.rateLimitWindowMs, rpcSecurity.maxConnectionsPerIP);
+    // Keep live connections tracked across handler reloads.
+    rateLimiter ??= new RateLimiter(rpcSecurity.maxMessagesPerWindow, rpcSecurity.rateLimitWindowMs, rpcSecurity.maxConnectionsPerIP);
+    rateLimiter.configure(rpcSecurity.maxMessagesPerWindow, rpcSecurity.rateLimitWindowMs, rpcSecurity.maxConnectionsPerIP);
 
     const registry = new RpcRegistry();
     const httpRouter = new HTTPRouter({ maxBodySize: rpcConfig.maxBodySize });
@@ -131,6 +139,12 @@ export function attachToDevServer(
     currentSSRPages = ssrPages;
     currentAppShell = appShell;
     cachedDefaultMeta = undefined;
+    for (const socket of wss?.clients ?? []) {
+        const req = socketRequests.get(socket);
+        if (req) {
+            registry.setSocketMetadata(socket, extractClientIP(req, trustProxyDepth), req);
+        }
+    }
 
     const getDefaultMeta = async () => {
         if (cachedDefaultMeta !== undefined) {
@@ -182,8 +196,9 @@ export function attachToDevServer(
         });
 
         wss.on("connection", (socket: WebSocket, req: http.IncomingMessage) => {
+            socketRequests.set(socket, req);
             // Extract client IP with proxy configuration
-            const ip = extractClientIP(req, trustProxyDepth);
+            const ip = extractClientIP(req, currentTrustProxyDepth);
 
             // Store connection metadata for RPC context
             if (currentRegistry) {
@@ -212,7 +227,6 @@ export function attachToDevServer(
                         let req: any;
                         // Always expect MessagePack
                         const buffer = Buffer.isBuffer(msg) ? msg : Buffer.from(msg as any);
-                        const { decode: msgpackDecode } = require("@msgpack/msgpack");
                         req = msgpackDecode(buffer);
 
                         const stats = rateLimiter.getConnectionStats(socket);
@@ -246,14 +260,16 @@ export function attachToDevServer(
 
                 // Always use the current registry (may have been updated)
                 if (currentRegistry) {
-                    currentRegistry.handleMessage(socket, Buffer.isBuffer(msg) ? msg : Buffer.from(msg as any));
+                    void currentRegistry.handleMessage(socket, Buffer.isBuffer(msg) ? msg : Buffer.from(msg as any)).catch((error) => {
+                        log("error", "WebSocket RPC error:", error);
+                    });
                 }
             });
         });
 
         // Handle WebSocket upgrade requests
         httpServer.on("upgrade", (req, socket, head) => {
-            if (req.url?.startsWith("/rpc")) {
+            if (req.url?.split("?")[0] === "/rpc") {
                 // Security: read token from Sec-WebSocket-Protocol header instead of query string
                 const protocols = req.headers["sec-websocket-protocol"];
                 const token =
@@ -272,10 +288,10 @@ export function attachToDevServer(
                 }
 
                 // Check IP connection limit before upgrading
-                const ip = extractClientIP(req, trustProxyDepth);
-                if (rateLimiter && rpcSecurity.maxConnectionsPerIP > 0) {
+                const ip = extractClientIP(req, currentTrustProxyDepth);
+                if (rateLimiter && currentMaxConnectionsPerIP > 0) {
                     const currentConnections = rateLimiter.getIPConnectionCount(ip);
-                    if (currentConnections >= rpcSecurity.maxConnectionsPerIP) {
+                    if (currentConnections >= currentMaxConnectionsPerIP) {
                         log("warn", `WebSocket connection rejected - IP ${ip} has ${currentConnections} connections`);
                         socket.write("HTTP/1.1 429 Too Many Requests\r\n\r\n");
                         socket.destroy();
@@ -290,6 +306,18 @@ export function attachToDevServer(
         });
 
         log("info", "WebSocket RPC attached to dev server at /rpc");
+        const attachedWss = wss;
+        httpServer.once("close", () => {
+            for (const socket of attachedWss.clients) {
+                socket.terminate();
+            }
+            attachedWss.close();
+            if (wss === attachedWss) {
+                wss = null;
+                rateLimiter = null;
+            }
+            workerReloadPromise = workerReloadPromise.then(() => stopAllWorkers());
+        });
     }
 
     // Security: max body size for HTTP requests
@@ -297,10 +325,11 @@ export function attachToDevServer(
 
     // Attach HTTP request handler
     // We need to intercept requests before Vite handles them
-    const originalListeners = httpServer.listeners("request").slice();
+    const originalListeners = originalRequestListeners.get(httpServer) ?? httpServer.listeners("request").slice();
+    originalRequestListeners.set(httpServer, originalListeners);
     httpServer.removeAllListeners("request");
 
-    httpServer.on("request", async (req: any, res: any) => {
+    const handleRequest = withRequestErrorHandling(async (req: any, res: any) => {
         const reqUrl = new URL(req.url || "/", "http://localhost");
         const pathname = reqUrl.pathname;
         const search = reqUrl.search;
@@ -332,6 +361,7 @@ export function attachToDevServer(
                 const ssrResult = await resolveServerSideProps({
                     req,
                     pathname: targetPathname,
+                    search: targetUrl.search,
                     params: ssrMatch.params,
                     page: ssrMatch.page,
                     ctx: httpCtx,
@@ -355,7 +385,7 @@ export function attachToDevServer(
         }
 
         // Handle token refresh endpoint
-        if (req.url === "/__helium__/refresh-token") {
+        if (pathname === "/__helium__/refresh-token") {
             // Security: only allow POST to prevent CSRF via <img>/<script> tags
             if (req.method !== "POST") {
                 res.writeHead(405, { "Content-Type": "application/json" });
@@ -370,13 +400,13 @@ export function attachToDevServer(
             }
             const { generateConnectionToken } = await import("./security.js");
             const token = generateConnectionToken();
-            res.writeHead(200, { "Content-Type": "application/json" });
+            res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
             res.end(JSON.stringify({ token }));
             return;
         }
 
         // Handle HTTP-based RPC endpoint (alternative to WebSocket for mobile networks)
-        if (req.url === "/__helium__/rpc" && req.method === "POST") {
+        if (pathname === "/__helium__/rpc" && req.method === "POST") {
             // Security: verify connection token for HTTP RPC
             const authToken = req.headers["x-helium-token"] as string | undefined;
             if (!authToken || !verifyConnectionToken(authToken)) {
@@ -396,11 +426,16 @@ export function attachToDevServer(
             const chunks: Buffer[] = [];
             let totalSize = 0;
             let aborted = false;
+            req.on("error", () => {
+                aborted = true;
+            });
             req.on("data", (chunk: Buffer) => {
+                if (aborted) {
+                    return;
+                }
                 totalSize += chunk.length;
                 if (totalSize > maxBodySize) {
                     aborted = true;
-                    req.destroy();
                     res.writeHead(413, { "Content-Type": "application/json" });
                     res.end(JSON.stringify({ ok: false, error: "Request entity too large" }));
                     return;
@@ -635,6 +670,7 @@ export function attachToDevServer(
                                 );
                             } else {
                                 log("error", `Failed to render SSR page for ${pathname}:`, error);
+                                throw error;
                             }
                         }
                     }
@@ -649,7 +685,15 @@ export function attachToDevServer(
                     originalEnd(Buffer.from(html, "utf-8"));
                 };
 
-                void finalize();
+                void finalize().catch((error) => {
+                    log("error", "Failed to finalize dev response:", error);
+                    if (!res.headersSent) {
+                        originalWriteHead(500, { "Content-Type": "text/plain" });
+                    }
+                    if (!res.writableEnded) {
+                        originalEnd("Internal server error");
+                    }
+                });
                 return true;
             };
         }
@@ -659,6 +703,7 @@ export function attachToDevServer(
             (listener as any)(req, res);
         }
     });
+    httpServer.on("request", handleRequest);
 }
 
 function toBuffer(chunk: unknown, encoding?: BufferEncoding): Buffer {

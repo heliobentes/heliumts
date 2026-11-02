@@ -25,10 +25,12 @@ export const myEndpoint = defineHTTPRequest("GET", "/api/hello", async (req, ctx
 ### Supported HTTP Methods
 
 - `GET` - Retrieve data
+- `HEAD` - Retrieve response headers
 - `POST` - Create resources
 - `PUT` - Update resources
 - `PATCH` - Partial updates
 - `DELETE` - Delete resources
+- `OPTIONS` - Describe endpoint capabilities or handle CORS preflight
 - `ALL` - Match any HTTP method
 
 ```typescript

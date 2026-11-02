@@ -38,6 +38,7 @@ export function useCall<TArgs, TResult>(method: MethodStub<TArgs, TResult>, opti
     // Use refs to store latest values without causing callback recreation
     const methodIdRef = useRef(method.__id);
     const optionsRef = useRef(options);
+    const pendingCallsRef = useRef(0);
 
     // Update refs on each render
     methodIdRef.current = method.__id;
@@ -45,6 +46,7 @@ export function useCall<TArgs, TResult>(method: MethodStub<TArgs, TResult>, opti
 
     // Memoized call function - stable reference across renders
     const call = useCallback(async (args: TArgs): Promise<TResult | undefined> => {
+        pendingCallsRef.current++;
         setCalling(true);
         setError(null);
         try {
@@ -61,7 +63,8 @@ export function useCall<TArgs, TResult>(method: MethodStub<TArgs, TResult>, opti
             optionsRef.current.onError?.(rpcError.message);
             throw rpcError;
         } finally {
-            setCalling(false);
+            pendingCallsRef.current--;
+            setCalling(pendingCallsRef.current > 0);
         }
     }, []); // Empty deps - uses refs for latest values
 

@@ -42,11 +42,16 @@ SSG pages are output with the following structure:
 
 ```
 dist/
-├── index.html          # src/pages/index.tsx with "use ssg"
+├── index.ssg.html      # pre-rendered src/pages/index.tsx, served for /
+├── index.html          # empty SPA fallback for other routes
 ├── about.html          # src/pages/about.tsx with "use ssg"
 ├── contact.html        # src/pages/contact.tsx with "use ssg"
 └── ...other static pages
 ```
+
+SSG uses the same optional app shell and layouts as client rendering. App shells can use the supported `src/App.*`, `src/app.*`, or `src/pages/_app.*` names; layouts can use `.tsx`, `.jsx`, `.ts`, or `.js`. Static page components receive `params: {}` and an empty `URLSearchParams` as `searchParams`. Query-dependent content should render on the client or use SSR.
+
+Server sidecar files (`*.server.*`) and TypeScript declaration files are excluded from page discovery.
 
 ## File Structure Examples
 

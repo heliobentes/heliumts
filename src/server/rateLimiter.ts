@@ -9,11 +9,19 @@ interface ConnectionInfo {
 export class RateLimiter {
     private connections = new WeakMap<WebSocket, ConnectionInfo>();
     private ipConnections = new Map<string, Set<WebSocket>>();
+    private httpRequests = new Map<string, { messageCount: number; windowStart: number }>();
+    private lastHttpCleanup = 0;
     private maxMessagesPerWindow: number;
     private rateLimitWindowMs: number;
     private maxConnectionsPerIP: number;
 
     constructor(maxMessagesPerWindow: number, rateLimitWindowMs: number, maxConnectionsPerIP: number) {
+        this.maxMessagesPerWindow = maxMessagesPerWindow;
+        this.rateLimitWindowMs = rateLimitWindowMs;
+        this.maxConnectionsPerIP = maxConnectionsPerIP;
+    }
+
+    configure(maxMessagesPerWindow: number, rateLimitWindowMs: number, maxConnectionsPerIP: number): void {
         this.maxMessagesPerWindow = maxMessagesPerWindow;
         this.rateLimitWindowMs = rateLimitWindowMs;
         this.maxConnectionsPerIP = maxConnectionsPerIP;
@@ -137,5 +145,46 @@ export class RateLimiter {
      */
     getIPConnectionCount(ip: string): number {
         return this.ipConnections.get(ip)?.size ?? 0;
+    }
+
+    /** HTTP requests have no persistent socket, so share a window per client IP. */
+    checkHttpRateLimit(ip: string): boolean {
+        if (this.maxMessagesPerWindow === 0) {
+            return true;
+        }
+        const now = Date.now();
+        if (now - this.lastHttpCleanup >= this.rateLimitWindowMs) {
+            for (const [key, info] of this.httpRequests) {
+                if (now - info.windowStart >= this.rateLimitWindowMs) {
+                    this.httpRequests.delete(key);
+                }
+            }
+            this.lastHttpCleanup = now;
+        }
+        let info = this.httpRequests.get(ip);
+        if (!info || now - info.windowStart >= this.rateLimitWindowMs) {
+            info = { messageCount: 0, windowStart: now };
+            this.httpRequests.set(ip, info);
+        }
+        if (info.messageCount >= this.maxMessagesPerWindow) {
+            return false;
+        }
+        info.messageCount++;
+        return true;
+    }
+
+    getHttpStats(ip: string): { remainingRequests: number; resetInSeconds: number } {
+        const info = this.httpRequests.get(ip);
+        const now = Date.now();
+        if (this.maxMessagesPerWindow === 0) {
+            return { remainingRequests: Infinity, resetInSeconds: 0 };
+        }
+        if (!info || now - info.windowStart >= this.rateLimitWindowMs) {
+            return { remainingRequests: this.maxMessagesPerWindow, resetInSeconds: 0 };
+        }
+        return {
+            remainingRequests: Math.max(0, this.maxMessagesPerWindow - info.messageCount),
+            resetInSeconds: Math.max(0, Math.ceil((info.windowStart + this.rateLimitWindowMs - now) / 1000)),
+        };
     }
 }

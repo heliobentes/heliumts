@@ -187,6 +187,10 @@ export function scanServerExports(root: string): ServerExports {
     return { methods, httpHandlers, seoMetadata, middleware, workers };
 }
 
+export function isPageFile(fileName: string): boolean {
+    return /\.(tsx|jsx|ts|js)$/.test(fileName) && !/\.d\.ts$/.test(fileName) && !fileName.includes(".server.") && !/^_(?:layout|app)\./.test(fileName);
+}
+
 function hasUseSSRDirective(content: string): boolean {
     // Directive can be single or double quoted and may omit semicolon.
     return /^\s*["']use ssr["']\s*;?/m.test(content);
@@ -259,11 +263,7 @@ export function scanSSRPages(root: string): SSRPageExport[] {
                 continue;
             }
 
-            if (!/\.(tsx|jsx|ts|js)$/.test(item)) {
-                continue;
-            }
-
-            if (item.includes("_layout.") || item.includes(".server.")) {
+            if (!isPageFile(item)) {
                 continue;
             }
 
@@ -296,7 +296,13 @@ export function scanSSRPages(root: string): SSRPageExport[] {
 function pathFromFile(file: string, root: string): string {
     // Remove root/src/pages prefix and file extension
     const pagesDir = path.join(root, "src", "pages");
-    const withoutPrefix = file.replace(pagesDir, "").replace(/\.(tsx|jsx|ts|js)$/, "");
+    const withoutPrefix =
+        "/" +
+        path
+            .relative(pagesDir, file)
+            .split(path.sep)
+            .join("/")
+            .replace(/\.(tsx|jsx|ts|js)$/, "");
 
     // Handle special files
     if (withoutPrefix === "/404") {
@@ -341,11 +347,7 @@ export function scanPageRoutePatterns(root: string): string[] {
                 continue;
             }
 
-            if (!/\.(tsx|jsx|ts|js)$/.test(item)) {
-                continue;
-            }
-
-            if (item.includes("_layout.")) {
+            if (!isPageFile(item)) {
                 continue;
             }
 
@@ -385,12 +387,7 @@ export function scanPageRoutes(root: string): { collisions: RouteCollision[]; to
 
             if (stat.isDirectory()) {
                 walkPages(fullPath);
-            } else if (/\.(tsx|jsx|ts|js)$/.test(item)) {
-                // Skip layout files
-                if (item.includes("_layout.")) {
-                    continue;
-                }
-
+            } else if (isPageFile(item)) {
                 const pathPattern = pathFromFile(fullPath, root);
 
                 // Skip special pages

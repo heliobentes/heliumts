@@ -2,6 +2,17 @@ import path from "path";
 
 import { HTTPHandlerExport, MethodExport, MiddlewareExport, SEOMetadataExport, SSRPageExport, WorkerExport } from "./scanner.js";
 
+function moduleSpecifier(filePath: string): string {
+    // Vite expects POSIX import paths, including on Windows.
+    return `'${filePath
+        .replace(/\\/g, "/")
+        .replace(/'/g, "\\'")
+        .replace(/\r/g, "\\r")
+        .replace(/\n/g, "\\n")
+        .replace(/\u2028/g, "\\u2028")
+        .replace(/\u2029/g, "\\u2029")}'`;
+}
+
 export function generateServerManifest(
     methods: MethodExport[],
     httpHandlers: HTTPHandlerExport[],
@@ -12,11 +23,13 @@ export function generateServerManifest(
     middleware?: MiddlewareExport,
     workers: WorkerExport[] = []
 ): string {
-    const methodImports = methods.map((m, i) => `import { ${m.name} as method_${i} } from '${m.filePath}';`).join("\n");
-    const httpImports = httpHandlers.map((h, i) => `import { ${h.name} as http_${i} } from '${h.filePath}';`).join("\n");
-    const seoImports = seoMetadata.map((s, i) => `import { ${s.name} as seo_${i} } from '${s.filePath}';`).join("\n");
-    const workerImports = workers.map((w, i) => `import { ${w.name} as worker_${i} } from '${w.filePath}';`).join("\n");
-    const middlewareImport = middleware ? `import ${middleware.name === "default" ? "middleware" : `{ ${middleware.name} as middleware }`} from '${middleware.filePath}';` : "";
+    const methodImports = methods.map((m, i) => `import { ${m.name} as method_${i} } from ${moduleSpecifier(m.filePath)};`).join("\n");
+    const httpImports = httpHandlers.map((h, i) => `import { ${h.name} as http_${i} } from ${moduleSpecifier(h.filePath)};`).join("\n");
+    const seoImports = seoMetadata.map((s, i) => `import { ${s.name} as seo_${i} } from ${moduleSpecifier(s.filePath)};`).join("\n");
+    const workerImports = workers.map((w, i) => `import { ${w.name} as worker_${i} } from ${moduleSpecifier(w.filePath)};`).join("\n");
+    const middlewareImport = middleware
+        ? `import ${middleware.name === "default" ? "middleware" : `{ ${middleware.name} as middleware }`} from ${moduleSpecifier(middleware.filePath)};`
+        : "";
 
     const methodRegistrations = methods.map((m, i) => `  registry.register('${m.name}', method_${i});`).join("\n");
 
@@ -26,11 +39,11 @@ export function generateServerManifest(
     const workerExports = workers.map((w, i) => `  { name: '${w.name}', worker: worker_${i} },`).join("\n");
 
     const ssrPageExports = ssrPages
-        .map((s, i) => {
+        .map((s) => {
             const loadLayoutsBody = s.layoutFilePaths
                 .map(
                     (layoutPath, layoutIndex) => `        {
-            const mod_${layoutIndex} = await import('${layoutPath}');
+            const mod_${layoutIndex} = await import(${moduleSpecifier(layoutPath)});
             if (mod_${layoutIndex}.default) {
                 layouts.push(mod_${layoutIndex}.default);
             }
@@ -40,7 +53,7 @@ export function generateServerManifest(
 
             const sidecarCheck = s.serverFilePath
                 ? `        {
-            const sidecar = await import('${s.serverFilePath}');
+            const sidecar = await import(${moduleSpecifier(s.serverFilePath)});
             if (typeof sidecar.getServerSideProps === 'function') {
                 return sidecar.getServerSideProps(req, ctx);
             }
@@ -49,9 +62,9 @@ export function generateServerManifest(
                 : "";
 
             return `  {
-    pathPattern: '${s.pathPattern}',
+    pathPattern: ${JSON.stringify(s.pathPattern)},
     loadComponent: async () => {
-        const page = await import('${s.pageFilePath}');
+        const page = await import(${moduleSpecifier(s.pageFilePath)});
         return page.default;
     },
     loadLayouts: async () => {
@@ -60,7 +73,7 @@ ${loadLayoutsBody}
         return layouts;
     },
     getServerSideProps: async (req, ctx) => {
-${sidecarCheck}        const page = await import('${s.pageFilePath}');
+${sidecarCheck}        const page = await import(${moduleSpecifier(s.pageFilePath)});
         if (typeof page.getServerSideProps === 'function') {
             return page.getServerSideProps(req, ctx);
         }
@@ -98,7 +111,7 @@ ${ssrPageExports}
 export const appShell = ${
         appShellFilePath
             ? `async () => {
-    const mod = await import('${appShellFilePath}');
+    const mod = await import(${moduleSpecifier(appShellFilePath)});
     return mod.default ?? mod.App ?? mod.app ?? null;
 }`
             : "null"
@@ -137,7 +150,7 @@ export function generateTypeDefinitions(methods: MethodExport[], root: string): 
 
     const imports = methodsWithRelativePath
         .map((m, index) => {
-            return `import type { ${m.name} as __helium_method_${index} } from '${m.relPath}';`;
+            return `import type { ${m.name} as __helium_method_${index} } from ${moduleSpecifier(m.relPath)};`;
         })
         .join("\n");
 
@@ -185,12 +198,12 @@ ${methodExports}
 `;
 }
 
-export function generateEntryModule(): string {
+export function generateEntryModule(appShellFilePath: string | null = "/src/App"): string {
     return `
 import React from 'react';
 import { createRoot, hydrateRoot } from 'react-dom/client';
 import { AppRouter } from 'heliumts/client';
-import App from '/src/App';
+${appShellFilePath ? `import App from ${moduleSpecifier(appShellFilePath)};` : ""}
 
 const rootEl = document.getElementById('root');
 if (!rootEl) {
@@ -199,7 +212,7 @@ if (!rootEl) {
 
 const app = (
     <React.StrictMode>
-        <AppRouter AppShell={App} />
+        <AppRouter${appShellFilePath ? " AppShell={App}" : ""} />
     </React.StrictMode>
 );
 

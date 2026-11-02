@@ -61,60 +61,84 @@ export interface WorkerInstance {
     stop: () => Promise<void>;
 }
 
-// Map to track running worker instances
-const runningWorkers = new Map<
-    string,
-    {
-        abortController: AbortController;
-        promise: Promise<void>;
-        instance: WorkerInstance;
-        cleanupHandlers: Array<() => Promise<void> | void>;
-        cleanupPromise: Promise<void> | null;
+interface WorkerState {
+    abortController: AbortController;
+    promise: Promise<void>;
+    instance: WorkerInstance;
+    cleanupHandlers: Array<() => Promise<void> | void>;
+    cleanupPromise: Promise<void> | null;
+    cleanupRequested: boolean;
+}
+
+const runningWorkers = new Map<string, WorkerState>();
+
+function removeWorker(name: string, workerState: WorkerState): void {
+    if (runningWorkers.get(name) === workerState) {
+        runningWorkers.delete(name);
     }
->();
+}
 
 function isCleanupHandler(cleanup: WorkerCleanup): cleanup is () => Promise<void> | void {
     return typeof cleanup === "function";
 }
 
-function registerCleanup(
-    workerState: {
-        cleanupHandlers: Array<() => Promise<void> | void>;
-    },
-    cleanup: WorkerCleanup
-) {
+function registerCleanup(name: string, workerState: WorkerState, cleanup: WorkerCleanup) {
     if (!isCleanupHandler(cleanup)) {
         return;
     }
 
     workerState.cleanupHandlers.push(cleanup);
+    // Async setup may finish after stop() has returned. Dispose its resources too.
+    if (workerState.cleanupRequested) {
+        void runWorkerCleanup(name, workerState);
+    }
 }
 
-async function runWorkerCleanup(
-    name: string,
-    workerState: {
-        cleanupHandlers: Array<() => Promise<void> | void>;
-        cleanupPromise: Promise<void> | null;
-    }
-): Promise<void> {
+async function runWorkerCleanup(name: string, workerState: WorkerState): Promise<void> {
+    workerState.cleanupRequested = true;
     if (workerState.cleanupPromise) {
         await workerState.cleanupPromise;
+        if (workerState.cleanupHandlers.length > 0) {
+            await runWorkerCleanup(name, workerState);
+        }
         return;
     }
 
-    workerState.cleanupPromise = (async () => {
-        const cleanupHandlers = workerState.cleanupHandlers.splice(0).reverse();
-
-        for (const cleanup of cleanupHandlers) {
-            try {
-                await cleanup();
-            } catch (error) {
-                log("error", `Worker '${name}' cleanup failed:`, error);
+    const cleanupPromise = (async () => {
+        while (workerState.cleanupHandlers.length > 0) {
+            const cleanupHandlers = workerState.cleanupHandlers.splice(0).reverse();
+            for (const cleanup of cleanupHandlers) {
+                try {
+                    await cleanup();
+                } catch (error) {
+                    log("error", `Worker '${name}' cleanup failed:`, error);
+                }
             }
         }
     })();
+    workerState.cleanupPromise = cleanupPromise;
+    try {
+        await cleanupPromise;
+    } finally {
+        if (workerState.cleanupPromise === cleanupPromise) {
+            workerState.cleanupPromise = null;
+        }
+    }
+}
 
-    await workerState.cleanupPromise;
+function waitForRestart(signal: AbortSignal, delay: number): Promise<void> {
+    if (signal.aborted) {
+        return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+        const done = () => {
+            clearTimeout(timer);
+            signal.removeEventListener("abort", done);
+            resolve();
+        };
+        const timer = setTimeout(done, delay);
+        signal.addEventListener("abort", done, { once: true });
+    });
 }
 
 function waitForAbort(signal: AbortSignal): Promise<void> {
@@ -217,6 +241,7 @@ export async function startWorker(worker: HeliumWorkerDef, createContext: () => 
         instance: undefined as unknown as WorkerInstance,
         cleanupHandlers: [] as Array<() => Promise<void> | void>,
         cleanupPromise: null as Promise<void> | null,
+        cleanupRequested: false,
     };
 
     const instance: WorkerInstance = {
@@ -229,7 +254,7 @@ export async function startWorker(worker: HeliumWorkerDef, createContext: () => 
             abortController.abort();
             instance.status = "stopped";
             await runWorkerCleanup(name, workerState);
-            runningWorkers.delete(name);
+            removeWorker(name, workerState);
             log("info", `Worker '${name}' stopped`);
         },
     };
@@ -238,6 +263,7 @@ export async function startWorker(worker: HeliumWorkerDef, createContext: () => 
     const runWorker = async (): Promise<void> => {
         while (!abortController.signal.aborted) {
             try {
+                workerState.cleanupRequested = false;
                 instance.status = "running";
                 instance.startedAt = new Date();
                 log("info", `Starting worker '${name}'`);
@@ -246,11 +272,11 @@ export async function startWorker(worker: HeliumWorkerDef, createContext: () => 
                 const lifecycle: WorkerLifecycle = {
                     signal: abortController.signal,
                     onCleanup: (cleanup) => {
-                        registerCleanup(workerState, cleanup);
+                        registerCleanup(name, workerState, cleanup);
                     },
                 };
                 const cleanup = await handler(ctx, lifecycle);
-                registerCleanup(workerState, cleanup);
+                registerCleanup(name, workerState, cleanup);
 
                 if (isCleanupHandler(cleanup) && !abortController.signal.aborted) {
                     await waitForAbort(abortController.signal);
@@ -261,7 +287,9 @@ export async function startWorker(worker: HeliumWorkerDef, createContext: () => 
                     await runWorkerCleanup(name, workerState);
                     log("info", `Worker '${name}' completed successfully`);
                     instance.status = "stopped";
-                    runningWorkers.delete(name);
+                    removeWorker(name, workerState);
+                } else {
+                    await runWorkerCleanup(name, workerState);
                 }
                 break;
             } catch (error) {
@@ -271,42 +299,42 @@ export async function startWorker(worker: HeliumWorkerDef, createContext: () => 
                 }
 
                 await runWorkerCleanup(name, workerState);
-                workerState.cleanupPromise = null;
+                if (abortController.signal.aborted) {
+                    break;
+                }
 
                 instance.lastError = error instanceof Error ? error : new Error(String(error));
                 instance.status = "crashed";
-                restartCount++;
-                instance.restartCount = restartCount;
-
                 log("error", `Worker '${name}' crashed:`, error);
 
                 // Check if we should restart
                 if (options.autoRestart) {
                     if (options.maxRestarts > 0 && restartCount >= options.maxRestarts) {
                         log("error", `Worker '${name}' exceeded max restarts (${options.maxRestarts}), giving up`);
-                        runningWorkers.delete(name);
+                        removeWorker(name, workerState);
                         break;
                     }
 
+                    restartCount++;
+                    instance.restartCount = restartCount;
                     instance.status = "restarting";
                     log(
                         "info",
                         `Worker '${name}' will restart in ${options.restartDelayMs}ms (attempt ${restartCount}${options.maxRestarts > 0 ? `/${options.maxRestarts}` : ""})`
                     );
 
-                    await new Promise((resolve) => setTimeout(resolve, options.restartDelayMs));
+                    await waitForRestart(abortController.signal, options.restartDelayMs);
                 } else {
-                    runningWorkers.delete(name);
+                    removeWorker(name, workerState);
                     break;
                 }
             }
         }
     };
 
-    const promise = runWorker();
-    workerState.promise = promise;
-
+    // Publish state before invoking user code, including synchronous handlers.
     runningWorkers.set(name, workerState);
+    workerState.promise = runWorker();
 
     return instance;
 }
@@ -317,14 +345,7 @@ export async function startWorker(worker: HeliumWorkerDef, createContext: () => 
 export function stopWorker(name: string): boolean {
     const worker = runningWorkers.get(name);
     if (worker) {
-        worker.abortController.abort();
-        worker.instance.status = "stopped";
-        void runWorkerCleanup(name, worker)
-            .catch(() => {})
-            .finally(() => {
-                runningWorkers.delete(name);
-                log("info", `Worker '${name}' stopped`);
-            });
+        void worker.instance.stop();
         return true;
     }
     return false;
@@ -335,12 +356,7 @@ export function stopWorker(name: string): boolean {
  */
 export async function stopAllWorkers(): Promise<void> {
     const workers = Array.from(runningWorkers.values());
-    for (const worker of workers) {
-        worker.abortController.abort();
-        worker.instance.status = "stopped";
-    }
-    await Promise.all(workers.map(async (worker) => runWorkerCleanup(worker.instance.name, worker)));
-    runningWorkers.clear();
+    await Promise.all(workers.map((worker) => worker.instance.stop()));
     log("info", `Stopped ${workers.length} worker(s)`);
 }
 

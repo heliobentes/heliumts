@@ -1,6 +1,7 @@
 import type { ComponentType, LazyExoticComponent } from "react";
 import React from "react";
 
+import { compareRoutePatterns } from "../runtime/routeOrder.js";
 import { log } from "../utils/logger.js";
 
 export type LayoutProps = {
@@ -59,6 +60,13 @@ export function pathFromFile(file: string): string {
  * @internal Exported for testing
  */
 export function createMatcher(pattern: string) {
+    const decodeSegment = (value: string) => {
+        try {
+            return decodeURIComponent(value);
+        } catch {
+            return value;
+        }
+    };
     const segments = pattern.split("/").filter(Boolean);
 
     return (path: string) => {
@@ -96,7 +104,7 @@ export function createMatcher(pattern: string) {
                 } // Not enough path segments
 
                 if (seg.startsWith(":")) {
-                    params[seg.slice(1)] = decodeURIComponent(value);
+                    params[seg.slice(1)] = decodeSegment(value);
                 } else if (seg !== value) {
                     return null; // Static segment must match
                 }
@@ -104,7 +112,7 @@ export function createMatcher(pattern: string) {
 
             // Collect remaining path segments into catch-all param as an array
             const remainingSegments = pathSegments.slice(catchAllIndex);
-            params[catchAllParam] = remainingSegments.map((s) => decodeURIComponent(s));
+            params[catchAllParam] = remainingSegments.map(decodeSegment);
 
             return { params };
         }
@@ -121,7 +129,7 @@ export function createMatcher(pattern: string) {
 
             if (seg.startsWith(":")) {
                 // Dynamic segment
-                params[seg.slice(1)] = decodeURIComponent(value);
+                params[seg.slice(1)] = decodeSegment(value);
             } else if (seg !== value) {
                 // Static segment must match exactly
                 return null;
@@ -161,13 +169,17 @@ export function buildRoutes(): {
 
     // Eagerly load all page components (for initial render and layouts)
     // Exclude .server.* sidecar files — they contain server-only code (e.g. DB access)
-    // and must never be bundled into the client.
-    const eagerPages = import.meta.glob(["/src/pages/**/*.{tsx,jsx,ts,js}", "!**/*.server.*"], {
+    // and must never be bundled into the client. App shells are loaded by the
+    // generated entry and are not routable pages; declarations have no runtime.
+    const eagerPages = import.meta.glob(["/src/pages/**/*.{tsx,jsx,ts,js}", "!**/*.server.*", "!**/*.d.ts", "!**/_app.*"], {
         eager: true,
     }) as Record<string, { default: ComponentType<unknown> }>;
 
     // Lazy load all page components (for Suspense support)
-    const lazyPages = import.meta.glob(["/src/pages/**/*.{tsx,jsx,ts,js}", "!**/*.server.*"]) as Record<string, () => Promise<{ default: ComponentType<unknown> }>>;
+    const lazyPages = import.meta.glob(["/src/pages/**/*.{tsx,jsx,ts,js}", "!**/*.server.*", "!**/*.d.ts", "!**/_app.*"]) as Record<
+        string,
+        () => Promise<{ default: ComponentType<unknown> }>
+    >;
 
     // Debug mode: set localStorage.setItem('helium_debug_routes', 'true') to enable
     const debugRoutes = typeof localStorage !== "undefined" && localStorage.getItem("helium_debug_routes") === "true";
@@ -269,32 +281,8 @@ export function buildRoutes(): {
         });
     }
 
-    // Sort routes by specificity (static > dynamic > catch-all)
-    routes.sort((a, b) => {
-        const aHasCatchAll = a.pathPattern.includes("*");
-        const bHasCatchAll = b.pathPattern.includes("*");
-        const aHasDynamic = a.pathPattern.includes(":");
-        const bHasDynamic = b.pathPattern.includes(":");
-
-        // Catch-all routes should be last (least specific)
-        if (aHasCatchAll && !bHasCatchAll) {
-            return 1;
-        }
-        if (!aHasCatchAll && bHasCatchAll) {
-            return -1;
-        }
-
-        // Dynamic routes come after static routes
-        if (aHasDynamic && !bHasDynamic) {
-            return 1;
-        }
-        if (!aHasDynamic && bHasDynamic) {
-            return -1;
-        }
-
-        // Longer paths first (more specific)
-        return b.pathPattern.length - a.pathPattern.length;
-    });
+    // Compare specificity segment by segment so /users/:id beats /:section/edit.
+    routes.sort((a, b) => compareRoutePatterns(a.pathPattern, b.pathPattern));
 
     if (debugRoutes) {
         console.group("[Helium Router] Final route order:");

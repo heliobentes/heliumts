@@ -17,7 +17,7 @@ vi.mock("../../src/client/cache", () => ({
 }));
 
 describe("useCall", () => {
-    const mockMethod = { __id: "testMethod" } as { __id: string };
+    const mockMethod = { __kind: "method" as const, __id: "testMethod", handler: (_args: unknown) => undefined };
     const mockRpcCall = rpcCall as ReturnType<typeof vi.fn>;
     const mockInvalidate = invalidateByMethod as ReturnType<typeof vi.fn>;
 
@@ -115,8 +115,8 @@ describe("useCall", () => {
     });
 
     it("should invalidate specified methods on success", async () => {
-        const invalidateMethod1 = { __id: "method1" };
-        const invalidateMethod2 = { __id: "method2" };
+        const invalidateMethod1 = { ...mockMethod, __id: "method1" };
+        const invalidateMethod2 = { ...mockMethod, __id: "method2" };
 
         mockRpcCall.mockResolvedValueOnce({
             data: {},
@@ -125,7 +125,7 @@ describe("useCall", () => {
 
         const { result } = renderHook(() =>
             useCall(mockMethod, {
-                invalidate: [invalidateMethod1 as { __id: string }, invalidateMethod2 as { __id: string }],
+                invalidate: [invalidateMethod1, invalidateMethod2],
             })
         );
 
@@ -181,5 +181,29 @@ describe("useCall", () => {
         await act(async () => {
             await expect(result.current.call({})).rejects.toThrow("Error");
         });
+    });
+    it("keeps isCalling true until all overlapping calls settle", async () => {
+        let resolveFirst!: (result: unknown) => void;
+        let resolveSecond!: (result: unknown) => void;
+        mockRpcCall
+            .mockReturnValueOnce(
+                new Promise((resolve) => {
+                    resolveFirst = resolve;
+                })
+            )
+            .mockReturnValueOnce(
+                new Promise((resolve) => {
+                    resolveSecond = resolve;
+                })
+            );
+        const { result } = renderHook(() => useCall(mockMethod));
+        act(() => {
+            void result.current.call({ id: 1 });
+            void result.current.call({ id: 2 });
+        });
+        await act(async () => resolveFirst({ data: "first", stats: {} }));
+        expect(result.current.isCalling).toBe(true);
+        await act(async () => resolveSecond({ data: "second", stats: {} }));
+        expect(result.current.isCalling).toBe(false);
     });
 });

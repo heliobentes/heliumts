@@ -309,3 +309,15 @@ describe("envLoader", () => {
         });
     });
 });
+
+describe("literal bootstrap values", () => {
+    it("preserves replacement tokens in public environment values", () => {
+        process.env.HELIUM_PUBLIC_LITERAL = "$& $$ $' $`";
+        try {
+            const result = injectHeliumEnvIntoHtml("<html><head></head><body></body></html>");
+            expect(result).toContain(JSON.stringify(process.env.HELIUM_PUBLIC_LITERAL));
+        } finally {
+            delete process.env.HELIUM_PUBLIC_LITERAL;
+        }
+    });
+});

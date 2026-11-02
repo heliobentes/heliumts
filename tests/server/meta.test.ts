@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildSocialMetaTags, escapeHtml, injectSocialMetaIntoHtml } from "../../src/server/meta";
+import { buildSocialMetaTags, escapeHtml, extractSocialMetaFromHtml, injectSocialMetaIntoHtml } from "../../src/server/meta";
 
 describe("meta", () => {
     it("should escape unsafe HTML characters", () => {
@@ -60,5 +60,33 @@ describe("meta", () => {
         const output = injectSocialMetaIntoHtml(html, { title: "No head" });
         expect(output.startsWith("<title>No head</title>\n")).toBe(true);
         expect(output).toContain('<div id="root"></div>');
+    });
+
+    it("should preserve dollar replacement tokens in metadata", () => {
+        const html = "<html><head><title>Old</title></head><body>body</body></html>";
+        const output = injectSocialMetaIntoHtml(html, { title: "Price $$ and $& and $` and $'" });
+        expect(output).toContain("<title>Price $$ and $&amp; and $` and $&#39;</title>");
+        expect(output.match(/<head>/g)).toHaveLength(1);
+        expect(output.match(/<body>/g)).toHaveLength(1);
+    });
+
+    it("should extract social metadata regardless of attribute order or quote style", () => {
+        const html = `<head data-theme="dark">
+            <title>Site</title>
+            <meta content="What's new &amp; useful" data-id="description" name = "description">
+            <meta content='https://example.com/image.png' property=og:image>
+            <link href="https://example.com/canonical" rel="canonical">
+        </head>`;
+        expect(extractSocialMetaFromHtml(html)).toMatchObject({
+            title: "Site",
+            description: "What's new & useful",
+            image: "https://example.com/image.png",
+            canonicalUrl: "https://example.com/canonical",
+        });
+        const output = injectSocialMetaIntoHtml(html, { title: "Updated", description: "Fresh", canonicalUrl: "https://new.example.com" });
+        expect(output).toContain('<head data-theme="dark">');
+        expect(output).not.toContain("What's new");
+        expect(output).not.toContain("https://example.com/canonical");
+        expect(output.match(/name="description"/g)).toHaveLength(1);
     });
 });

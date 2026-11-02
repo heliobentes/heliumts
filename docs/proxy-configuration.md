@@ -1,265 +1,56 @@
-# Proxy Configuration for IP Detection
+# Proxy configuration
 
-## Overview
+Set `trustProxyDepth` to the number of trusted proxies between the client and the Helium server. It defaults to `0`, which ignores forwarding headers and uses the direct socket address and protocol.
 
-When deploying behind proxies (like Vercel, Cloudflare, AWS ALB, etc.), accurate client IP detection is crucial for rate limiting and connection limits. Without proper proxy configuration, the system might identify the proxy server's IP instead of the real client IP, causing issues like:
-
-- Rate limiting the proxy instead of individual users
-- Connection limits blocking legitimate traffic
-- Inaccurate analytics and logging
-
-## Configuration
-
-Use the `trustProxyDepth` setting in your `helium.config.ts`:
-
-```typescript
+```ts
 import type { HeliumConfig } from "heliumts/server";
 
-const config: HeliumConfig = {
-    trustProxyDepth: 1, // Set based on your deployment
-};
-
-export default config;
+export default {
+    trustProxyDepth: 1,
+} satisfies HeliumConfig;
 ```
 
-## How It Works
+With forwarding enabled, Helium reads `X-Forwarded-For` from the right. The direct socket counts as the first trusted hop. This prevents client-supplied prefixes from replacing the IP used by rate limits and request context.
 
-Helium checks multiple headers to extract the client IP, in order of reliability:
+| Request topology | Header received by Helium | Depth | Selected client IP |
+| --- | --- | --- | --- |
+| Client → proxy → Helium | `203.0.113.8` | 1 | `203.0.113.8` |
+| Client with spoofed prefix → proxy → Helium | `1.1.1.1, 203.0.113.8` | 1 | `203.0.113.8` |
+| Client → edge → proxy → Helium | `203.0.113.8, 10.0.0.1` | 2 | `203.0.113.8` |
 
-1. **CF-Connecting-IP** - Cloudflare's guaranteed client IP (most reliable when using Cloudflare)
-2. **True-Client-IP** - Cloudflare Enterprise and Akamai
-3. **X-Real-IP** - Set by Nginx and other proxies
-4. **X-Forwarded-For** - Standard header containing IP chain: `clientIP, proxy1, proxy2, ..., lastProxy`
-5. **req.socket.remoteAddress** - Direct connection IP (fallback)
+The immediate peer does not appear in `X-Forwarded-For`; its address comes from the socket. If the configured depth exceeds the available chain or the selected address is invalid, Helium uses the socket address.
 
-The `trustProxyDepth` setting tells Helium how many proxy levels to trust:
+When `X-Forwarded-For` is absent, a positive trust depth also permits a valid `CF-Connecting-IP`, `True-Client-IP`, or `X-Real-IP`, in that order. The trusted proxy must overwrite these values. When `X-Forwarded-For` is present, these fallback headers cannot override it.
 
-- **0**: Don't trust proxies, use direct connection IP (default, safest for local dev)
-- **1**: Trust 1 proxy level (most common for production)
-- **2+**: Trust multiple proxy levels (complex deployments)
+`extractClientIP` and `extractClientIPFromRight` use the same depth-based behavior:
 
-## Common Deployment Scenarios
-
-### Vercel / Netlify / Railway
-
-```typescript
-trustProxyDepth: 1
-```
-
-These platforms add one proxy layer. The `X-Forwarded-For` header will look like:
-
-```
-X-Forwarded-For: 203.0.113.1, 198.51.100.1
-```
-
-- `203.0.113.1`: Real client IP ✓
-- `198.51.100.1`: Platform's proxy
-
-### Cloudflare → Your Server
-
-```typescript
-trustProxyDepth: 1
-```
-
-**Note**: When using Cloudflare, Helium automatically uses the `CF-Connecting-IP` header, which is more reliable than parsing `X-Forwarded-For`.
-
-### AWS ALB → EC2
-
-```typescript
-trustProxyDepth: 1
-```
-
-### Nginx → Node.js
-
-```typescript
-trustProxyDepth: 1
-```
-
-**Note**: Helium automatically uses Nginx's `X-Real-IP` header when available.
-
-### Cloudflare → Nginx → Node.js
-
-```typescript
-trustProxyDepth: 2
-```
-
-With two proxy layers:
-
-```
-X-Forwarded-For: 203.0.113.1, 198.51.100.1, 192.0.2.1
-```
-
-- `203.0.113.1`: Real client IP ✓
-- `198.51.100.1`: Nginx proxy
-- `192.0.2.1`: Cloudflare proxy
-
-### Local Development
-
-```typescript
-trustProxyDepth: 0 // Default - don't trust any proxies
-```
-
-No proxies in local development, so use the direct connection IP.
-
-## Security Considerations
-
-### Setting trustProxyDepth Too Low
-
-If you set it to 0 when behind a proxy:
-
-- ❌ Rate limiting will apply to the proxy IP
-- ❌ All users behind the proxy share the same limits
-- ❌ Example: All Vercel users would be treated as one client
-
-### Setting trustProxyDepth Too High
-
-If you set it higher than your actual proxy depth:
-
-- ⚠️ The system might use an incorrect IP
-- ⚠️ Potential security risk if `X-Forwarded-For` is spoofed
-
-### Best Practice
-
-**Always set `trustProxyDepth` to match your exact proxy configuration.**
-
-## Verifying Your Configuration
-
-### 1. Check Your Deployment Architecture
-
-Count the number of proxies between your users and your Node.js application:
-
-- User → Vercel → Your app = 1 proxy
-- User → Cloudflare → Vercel → Your app = 2 proxies
-- User → ALB → Your app = 1 proxy
-
-### 2. Test IP Detection
-
-Add temporary logging to verify the detected IP:
-
-```typescript
-import { defineMethod } from "heliumts/server";
-
-export const testIP = defineMethod(async (_args, ctx) => {
-    // This will log the detected IP with your current config
-    console.log("Detected IP:", ctx.req.ip);
-    console.log("User-Agent:", ctx.req.headers["user-agent"]);
-    return {
-        ip: ctx.req.ip,
-        headers: ctx.req.headers,
-    };
-});
-```
-
-### 3. Expected Results
-
-- In production: Should see your real IP, not the proxy's
-- In local dev: Should see `::1` or `127.0.0.1`
-
-## Advanced: Custom IP Extraction
-
-If you need custom IP extraction logic, you can import the utility functions:
-
-```typescript
+```ts
 import { extractClientIP, extractClientIPFromRight } from "heliumts/server";
 
-// In your HTTP handler
-const clientIP = extractClientIP(req, 1);
+// X-Forwarded-For: "1.1.1.1, 203.0.113.8, 10.0.0.1"
+extractClientIP(req, 1);          // "10.0.0.1"
+extractClientIP(req, 2);          // "203.0.113.8"
+extractClientIPFromRight(req, 2); // "203.0.113.8"
 ```
 
-### Available Functions
+## Request protocol
 
-#### `extractClientIP(req, trustProxyDepth)`
+`HTTPRequest.toWebRequest()` uses HTTPS for an encrypted socket. It accepts `X-Forwarded-Proto` only when proxy trust is enabled, and only accepts `http` or `https`. A comma-separated protocol chain is selected from the right using the same trusted depth; a single overwritten protocol value is also supported.
 
-Extracts the client IP by checking headers in order of reliability:
+## Deployment checks
 
-1. CF-Connecting-IP (Cloudflare)
-2. True-Client-IP (Cloudflare Enterprise, Akamai)
-3. X-Real-IP (Nginx)
-4. X-Forwarded-For (Standard)
-5. req.socket.remoteAddress (Direct connection)
+Count the actual proxy hops in your deployment. Configure the proxy to append the connection IP to `X-Forwarded-For`, overwrite provider-specific IP headers and `X-Forwarded-Proto`, and prevent clients from reaching Helium directly when proxy headers are trusted. Check both the normal proxy path and any shorter path before enabling trust.
 
-```typescript
-// When using Cloudflare:
-// CF-Connecting-IP: "203.0.113.1"
-extractClientIP(req, 1); // → "203.0.113.1"
+A depth that is too low can identify a proxy as the client, sharing limits between users. A depth that is too high can trust an address supplied by the client. Do not increase the depth merely to change the logged address.
 
-// When using X-Forwarded-For:
-// X-Forwarded-For: "203.0.113.1, 198.51.100.1, 192.0.2.1"
-extractClientIP(req, 1); // → "203.0.113.1"
-extractClientIP(req, 2); // → "203.0.113.1"
+To inspect the current result in a development environment:
+
+```ts
+import { defineMethod } from "heliumts/server";
+
+export const inspectClientIP = defineMethod(async (_args, ctx) => ({
+    ip: ctx.req.ip,
+}));
 ```
 
-#### `extractClientIPFromRight(req, trustProxyDepth)`
-
-Alternative method that skips the rightmost N trusted proxies (only for X-Forwarded-For):
-
-```typescript
-// X-Forwarded-For: "203.0.113.1, 198.51.100.1, 192.0.2.1"
-extractClientIPFromRight(req, 1); // → "198.51.100.1" (skip last 1)
-extractClientIPFromRight(req, 2); // → "203.0.113.1" (skip last 2)
-
-// Note: CF-Connecting-IP, True-Client-IP, and X-Real-IP are still checked first
-```
-
-## Troubleshooting
-
-### Rate Limiting Not Working Correctly
-
-**Symptom**: All users share the same rate limit
-**Solution**: Set `trustProxyDepth` to match your proxy setup
-
-### Wrong IP in Logs
-
-**Symptom**: Seeing proxy IPs instead of client IPs
-**Solution**: Increase `trustProxyDepth` by 1
-
-### Rate Limiting Too Aggressive
-
-**Symptom**: Legitimate users getting blocked
-**Solution**: Verify `trustProxyDepth` is not set too low
-
-### All Connections from "unknown"
-
-**Symptom**: IP detection returning "unknown"
-**Solution**: Check if your proxy is setting the `X-Forwarded-For` header correctly
-
-## Reference
-
-### Supported Headers
-
-Helium checks headers in this order:
-
-| Header                   | Set By                        | Type      | Notes                          |
-| ------------------------ | ----------------------------- | --------- | ------------------------------ |
-| CF-Connecting-IP         | Cloudflare                    | Single IP | Most reliable for Cloudflare   |
-| True-Client-IP           | Cloudflare Enterprise, Akamai | Single IP | Requires special configuration |
-| X-Real-IP                | Nginx, other proxies          | Single IP | Common with Nginx              |
-| X-Forwarded-For          | Most proxies                  | IP chain  | Standard but can be spoofed    |
-| req.socket.remoteAddress | Direct connection             | Single IP | Fallback                       |
-
-### X-Forwarded-For Header Format
-
-```
-X-Forwarded-For: client, proxy1, proxy2, ..., lastProxy
-```
-
-### Trust Model
-
-Helium trusts the **leftmost N IPs** where N = chain length - trustProxyDepth
-
-Example with `trustProxyDepth: 1`:
-
-```
-X-Forwarded-For: 203.0.113.1, 198.51.100.1
-Chain length: 2
-Trusted IPs: 2 - 1 = 1 (the first one)
-Result: 203.0.113.1 ✓
-```
-
-### Header Priority
-
-Single-value headers (CF-Connecting-IP, True-Client-IP, X-Real-IP) always take precedence over X-Forwarded-For because:
-
-- They cannot be easily spoofed
-- They represent a single, trusted value
-- They are set by trusted infrastructure (Cloudflare, Nginx, etc.)
+Both HTTP RPC and WebSocket RPC use the extracted IP. HTTP limits share a window per IP; WebSocket message windows are per connection, with a separate concurrent-connection limit per IP. `rpc.security.maxMessagesPerWindow: 0` disables message rate limits for both transports.

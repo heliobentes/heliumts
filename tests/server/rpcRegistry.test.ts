@@ -234,6 +234,8 @@ describe("RpcRegistry", () => {
     describe("setRateLimiter", () => {
         it("should track rate limit stats in response", async () => {
             const mockRateLimiter = {
+                checkHttpRateLimit: vi.fn().mockReturnValue(true),
+                getHttpStats: vi.fn().mockReturnValue({ remainingRequests: 95, resetInSeconds: 60 }),
                 getConnectionStats: vi.fn().mockReturnValue({
                     remainingMessages: 95,
                     resetTimeMs: Date.now() + 60000,
@@ -248,8 +250,7 @@ describe("RpcRegistry", () => {
             registry.register("limitedMethod", method);
             registry.setRateLimiter(mockRateLimiter as unknown as Parameters<typeof registry.setRateLimiter>[0]);
 
-            // For HTTP, we use handleHttpRequest which doesn't use socket-based rate limiting
-            // but the response should include stats
+            // HTTP requests use the per-IP limiter and report its window.
             const { encode } = await import("@msgpack/msgpack");
             const reqBody = Buffer.from(encode({ id: 1, method: "limitedMethod", args: {} }));
             const httpReq = createMockRequest();
@@ -258,8 +259,8 @@ describe("RpcRegistry", () => {
 
             const response = result.response as { stats: { remainingRequests: number; resetInSeconds: number } };
             expect(response.stats).toBeDefined();
-            // HTTP requests don't go through rate limiter, so stats are default
-            expect(response.stats.remainingRequests).toBe(Infinity);
+            expect(mockRateLimiter.checkHttpRateLimit).toHaveBeenCalledWith("127.0.0.1");
+            expect(response.stats.remainingRequests).toBe(95);
         });
     });
 
@@ -586,5 +587,26 @@ describe("RpcRegistry", () => {
             expect(response.stats.remainingRequests).toBe(0);
             expect(response.stats.resetInSeconds).toBe(0);
         });
+    });
+});
+
+describe("malformed RPC messages", () => {
+    it.each([null, false, 42, "method", {}, { id: "x" }, { id: "x", method: 42 }, { method: "echo" }])("rejects malformed envelope %j over both transports", async (value) => {
+        const { encode, decode } = await import("@msgpack/msgpack");
+        const registry = new RpcRegistry();
+        const body = Buffer.from(encode(value));
+        const result = await registry.handleHttpRequest(body, "127.0.0.1", createMockRequest());
+        expect(result.response).toMatchObject({ ok: false, error: "Invalid request format" });
+        const socket = createMockSocket();
+        await registry.handleMessage(socket, body);
+        expect(decode(socket.sentMessages[0])).toMatchObject({ ok: false, error: "Invalid request format" });
+    });
+
+    it("isolates a malformed batch entry from valid calls", async () => {
+        const { encode } = await import("@msgpack/msgpack");
+        const registry = new RpcRegistry();
+        registry.register("echo", { __kind: "method", __id: "echo", handler: async (value) => value });
+        const result = await registry.handleHttpRequest(Buffer.from(encode([null, { id: 2, method: "echo", args: "ok" }])), "127.0.0.1", createMockRequest());
+        expect(result.response).toMatchObject([{ ok: false }, { id: 2, ok: true, result: "ok" }]);
     });
 });

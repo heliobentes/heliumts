@@ -78,7 +78,11 @@ export class RpcRegistry {
         };
     }
 
-    private async processRequest(req: RpcRequest, socket: WebSocket): Promise<RpcResponse> {
+    private async processRequest(value: unknown, socket: WebSocket): Promise<RpcResponse> {
+        if (!isRpcRequest(value)) {
+            return invalidRequest(value, this.getStats(socket));
+        }
+        const req = value;
         const def = this.methods.get(req.method);
         if (!def) {
             return {
@@ -188,13 +192,17 @@ export class RpcRegistry {
         }
     }
 
-    private async processRequestHttp(req: RpcRequest, ip: string, httpReq: http.IncomingMessage): Promise<RpcResponse> {
+    private async processRequestHttp(value: unknown, ip: string, httpReq: http.IncomingMessage): Promise<RpcResponse> {
+        if (!isRpcRequest(value)) {
+            return invalidRequest(value, { remainingRequests: 0, resetInSeconds: 0 });
+        }
+        const req = value;
         const def = this.methods.get(req.method);
         if (!def) {
             return {
                 id: req.id,
                 ok: false,
-                stats: { remainingRequests: Infinity, resetInSeconds: 0 },
+                stats: this.rateLimiter?.getHttpStats(ip) ?? { remainingRequests: Infinity, resetInSeconds: 0 },
                 error: `Unknown method ${req.method}`,
             };
         }
@@ -231,7 +239,7 @@ export class RpcRegistry {
                     return {
                         id: req.id,
                         ok: false,
-                        stats: { remainingRequests: Infinity, resetInSeconds: 0 },
+                        stats: this.rateLimiter?.getHttpStats(ip) ?? { remainingRequests: Infinity, resetInSeconds: 0 },
                         error: "Request blocked by middleware",
                     };
                 }
@@ -242,7 +250,7 @@ export class RpcRegistry {
             return {
                 id: req.id,
                 ok: true,
-                stats: { remainingRequests: Infinity, resetInSeconds: 0 },
+                stats: this.rateLimiter?.getHttpStats(ip) ?? { remainingRequests: Infinity, resetInSeconds: 0 },
                 result,
             };
         } catch (err: unknown) {
@@ -250,7 +258,7 @@ export class RpcRegistry {
             return {
                 id: req.id,
                 ok: false,
-                stats: { remainingRequests: Infinity, resetInSeconds: 0 },
+                stats: this.rateLimiter?.getHttpStats(ip) ?? { remainingRequests: Infinity, resetInSeconds: 0 },
                 error: sanitizeErrorMessage(err),
             };
         }
@@ -280,6 +288,17 @@ export class RpcRegistry {
             };
         }
 
+        if (this.rateLimiter && !this.rateLimiter.checkHttpRateLimit(ip)) {
+            const stats = this.rateLimiter.getHttpStats(ip);
+            const reject = (value: unknown): RpcResponse => ({
+                id: requestId(value),
+                ok: false,
+                stats,
+                error: "Rate limit exceeded",
+            });
+            return { response: Array.isArray(req) ? req.slice(0, this.maxBatchSize).map(reject) : reject(req) };
+        }
+
         let response: RpcResponse | RpcResponse[];
         if (Array.isArray(req)) {
             // Security: cap batch size
@@ -299,6 +318,33 @@ export class RpcRegistry {
 
         return { response };
     }
+}
+
+function requestId(value: unknown): string | number {
+    if (value && typeof value === "object" && "id" in value) {
+        const id = value.id;
+        if (typeof id === "string" || (typeof id === "number" && Number.isFinite(id))) {
+            return id;
+        }
+    }
+    return "unknown";
+}
+
+function isRpcRequest(value: unknown): value is RpcRequest {
+    return (
+        value !== null &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        "id" in value &&
+        (typeof value.id === "string" || (typeof value.id === "number" && Number.isFinite(value.id))) &&
+        "method" in value &&
+        typeof value.method === "string" &&
+        value.method.length > 0
+    );
+}
+
+function invalidRequest(value: unknown, stats: RpcStats): RpcResponse {
+    return { id: requestId(value), ok: false, stats, error: "Invalid request format" };
 }
 
 /**

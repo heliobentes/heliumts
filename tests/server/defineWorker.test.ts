@@ -319,6 +319,112 @@ describe("defineWorker", () => {
         });
     });
 
+    describe("worker lifecycle regressions", () => {
+        const createContext = (): HeliumContext => ({
+            req: { ip: "127.0.0.1", headers: {}, raw: {} as HeliumContext["req"]["raw"] },
+        });
+
+        it("runs cleanup returned by asynchronous setup after the worker was stopped", async () => {
+            const cleanup = vi.fn();
+            let finishSetup!: (cleanup: () => void) => void;
+            const setup = new Promise<() => void>((resolve) => {
+                finishSetup = resolve;
+            });
+            const instance = await startWorker(
+                defineWorker(() => setup, { name: "lateSetup" }),
+                createContext
+            );
+            await instance.stop();
+            finishSetup(cleanup);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(cleanup).toHaveBeenCalledTimes(1);
+            expect(getWorkerById("lateSetup")).toBeUndefined();
+        });
+
+        it("runs cleanup registered after stopping without waiting for an uncooperative handler", async () => {
+            const cleanup = vi.fn();
+            let onCleanup!: (handler: () => void) => void;
+            const instance = await startWorker(
+                defineWorker(
+                    (_ctx, lifecycle) => {
+                        onCleanup = lifecycle.onCleanup;
+                        return new Promise(() => {});
+                    },
+                    { name: "lateRegistration" }
+                ),
+                createContext
+            );
+            await instance.stop();
+            onCleanup(cleanup);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(cleanup).toHaveBeenCalledTimes(1);
+        });
+
+        it("cancels a pending restart timer when stopped", async () => {
+            const handler = vi.fn(() => {
+                throw new Error("failed");
+            });
+            const instance = await startWorker(defineWorker(handler, { name: "cancelRestart", restartDelayMs: 60_000 }), createContext);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(instance.status).toBe("restarting");
+            expect(vi.getTimerCount()).toBe(1);
+            await instance.stop();
+            expect(vi.getTimerCount()).toBe(0);
+            await vi.advanceTimersByTimeAsync(60_000);
+            expect(handler).toHaveBeenCalledTimes(1);
+        });
+
+        it("keeps a replacement registered when an old instance is stopped again", async () => {
+            const worker = defineWorker(() => new Promise(() => {}), { name: "replacement" });
+            const oldInstance = await startWorker(worker, createContext);
+            await oldInstance.stop();
+            const replacement = await startWorker(worker, createContext);
+            await oldInstance.stop();
+            expect(getWorkerById("replacement")).toBe(replacement);
+            expect(replacement.status).toBe("running");
+        });
+
+        it("keeps workers started while stopAllWorkers is awaiting another cleanup", async () => {
+            let finishCleanup!: () => void;
+            const pendingCleanup = new Promise<void>((resolve) => {
+                finishCleanup = resolve;
+            });
+            await startWorker(
+                defineWorker(() => () => pendingCleanup, { name: "slowStop" }),
+                createContext
+            );
+            await vi.advanceTimersByTimeAsync(0);
+            const stopping = stopAllWorkers();
+            const newWorker = await startWorker(
+                defineWorker(() => new Promise(() => {}), { name: "newWorker" }),
+                createContext
+            );
+            finishCleanup();
+            await stopping;
+            expect(getWorkerById("newWorker")).toBe(newWorker);
+        });
+
+        it("removes synchronously completed or crashed workers from the registry", async () => {
+            const completed = await startWorker(
+                defineWorker(() => {}, { name: "synchronousComplete" }),
+                createContext
+            );
+            const crashed = await startWorker(
+                defineWorker(
+                    () => {
+                        throw new Error("failed");
+                    },
+                    { name: "synchronousCrash", autoRestart: false }
+                ),
+                createContext
+            );
+            await vi.advanceTimersByTimeAsync(0);
+            expect(completed.status).toBe("stopped");
+            expect(crashed.status).toBe("crashed");
+            expect(getWorkerStatus()).toEqual([]);
+        });
+    });
+
     describe("maxRestarts limit", () => {
         it("should stop after max restarts exceeded", async () => {
             let attempts = 0;
@@ -351,7 +457,7 @@ describe("defineWorker", () => {
             await vi.advanceTimersByTimeAsync(50);
             await vi.advanceTimersByTimeAsync(0);
 
-            expect(attempts).toBe(2); // Only 2 attempts (maxRestarts)
+            expect(attempts).toBe(3); // Initial attempt plus two permitted restarts
         });
     });
 });

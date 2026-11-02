@@ -142,6 +142,14 @@ describe("security", () => {
             expect(verifyConnectionToken("invalid.format.extra")).toBe(false);
         });
 
+        it("should reject Unicode signatures without throwing", () => {
+            expect(verifyConnectionToken(`${Date.now()}.${"é".repeat(64)}`)).toBe(false);
+        });
+
+        it("should reject a valid token with trailing components", () => {
+            expect(verifyConnectionToken(`${generateConnectionToken()}.extra`)).toBe(false);
+        });
+
         it("should reject expired token", () => {
             vi.useFakeTimers();
 
