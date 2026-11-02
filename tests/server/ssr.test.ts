@@ -16,6 +16,7 @@ function createMockIncomingMessage(url: string): http.IncomingMessage {
 
 function createMockContext(req: http.IncomingMessage): HeliumContext {
     return {
+        signal: new AbortController().signal,
         req: {
             ip: "127.0.0.1",
             headers: req.headers,

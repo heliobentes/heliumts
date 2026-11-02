@@ -1,25 +1,13 @@
-import { decode as msgpackDecode, encode as msgpackEncode } from "@msgpack/msgpack";
+import { decode as msgpackDecode } from "@msgpack/msgpack";
 import type http from "http";
-import { promisify } from "util";
-import WebSocket from "ws";
-import { gzip } from "zlib";
 
 import type { RpcRequest, RpcResponse, RpcStats } from "../runtime/protocol.js";
 import { log } from "../utils/logger.js";
-import type { HeliumCompressionConfig } from "./config.js";
-import { getCompressionConfig } from "./config.js";
 import type { HeliumContext } from "./context.js";
 import type { HeliumMethodDef } from "./defineMethod.js";
 import type { HeliumMiddleware } from "./middleware.js";
 import type { RateLimiter } from "./rateLimiter.js";
-import { prepareForMsgpack } from "./serializer.js";
-
-const gzipAsync = promisify(gzip);
-
-interface SocketMetadata {
-    ip: string;
-    req: http.IncomingMessage;
-}
+import { trackRequestCleanup } from "./requestSignal.js";
 
 export interface HttpRpcResult {
     response: RpcResponse | RpcResponse[];
@@ -29,312 +17,244 @@ export class PublicError extends Error {
     public readonly public = true;
 }
 
+export function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
+    return value !== null && (typeof value === "object" || typeof value === "function") && typeof (value as AsyncIterable<unknown>)[Symbol.asyncIterator] === "function";
+}
+
+/** Reject promptly on disconnect even when provider work has not settled yet. */
+export function abortable<T>(value: PromiseLike<T> | T, signal: AbortSignal): Promise<T> {
+    const promise = Promise.resolve(value);
+    if (signal.aborted) {
+        void promise.catch(() => {});
+        return Promise.reject(signal.reason ?? new Error("Request aborted"));
+    }
+    return new Promise((resolve, reject) => {
+        const onAbort = () => {
+            cleanup();
+            reject(signal.reason ?? new Error("Request aborted"));
+        };
+        const cleanup = () => signal.removeEventListener("abort", onAbort);
+        signal.addEventListener("abort", onAbort, { once: true });
+        promise.then(
+            (result) => {
+                cleanup();
+                resolve(result);
+            },
+            (error) => {
+                cleanup();
+                reject(error);
+            }
+        );
+    });
+}
+
 export class RpcRegistry {
     private methods = new Map<string, HeliumMethodDef<any, any>>();
     private middleware: HeliumMiddleware | null = null;
     private rateLimiter: RateLimiter | null = null;
-    private socketMetadata = new WeakMap<WebSocket, SocketMetadata>();
-    private maxBatchSize: number = 20;
-    private compression = getCompressionConfig();
+    private maxBatchSize = 20;
 
     register(id: string, def: HeliumMethodDef<any, any>) {
         def.__id = id;
         this.methods.set(id, def);
     }
-
     setMiddleware(middleware: HeliumMiddleware) {
         this.middleware = middleware;
     }
-
     setRateLimiter(rateLimiter: RateLimiter) {
         this.rateLimiter = rateLimiter;
     }
-
     setMaxBatchSize(size: number) {
         this.maxBatchSize = size;
     }
-
-    setCompressionConfig(config: HeliumCompressionConfig) {
-        this.compression = getCompressionConfig({ rpc: { compression: config } });
+    getStats(ip: string): RpcStats {
+        return this.rateLimiter?.getHttpStats(ip) ?? { remainingRequests: Infinity, resetInSeconds: 0 };
     }
 
-    /**
-     * Store metadata about a WebSocket connection.
-     * Should be called when a new connection is established.
-     */
-    setSocketMetadata(socket: WebSocket, ip: string, req: http.IncomingMessage) {
-        this.socketMetadata.set(socket, { ip, req });
-    }
-
-    private getStats(socket: WebSocket): RpcStats {
-        if (!this.rateLimiter) {
-            return { remainingRequests: Infinity, resetInSeconds: 0 };
+    private async invoke(
+        request: RpcRequest,
+        ip: string,
+        req: http.IncomingMessage,
+        signal: AbortSignal,
+        consume: (result: unknown, signal: AbortSignal) => Promise<void>
+    ): Promise<void> {
+        signal.throwIfAborted();
+        const def = this.methods.get(request.method);
+        if (!def) {
+            throw new PublicError(`Unknown method ${request.method}`);
         }
-
-        const stats = this.rateLimiter.getConnectionStats(socket);
-        if (!stats) {
-            return { remainingRequests: 0, resetInSeconds: 0 };
+        // A method can also stop when middleware fails while next() is running.
+        // Keep the response signal alive long enough to deliver a terminal error.
+        const controller = new AbortController();
+        const abort = () => controller.abort(signal.reason);
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) {
+            abort();
         }
-
-        const now = Date.now();
-        const resetInSeconds = Math.ceil((stats.resetTimeMs - now) / 1000);
-
-        return {
-            remainingRequests: stats.remainingMessages,
-            resetInSeconds: Math.max(0, resetInSeconds),
+        const activeSignal = controller.signal;
+        const ctx: HeliumContext = { signal: activeSignal, req: { ip, headers: req.headers, url: req.url, method: req.method, raw: req } };
+        let called = false;
+        let work: Promise<void> | undefined;
+        const next = (): Promise<void> => {
+            if (called) {
+                const error = new PublicError("Middleware next() may only be called once");
+                controller.abort(error);
+                const rejected = Promise.reject(error);
+                void rejected.catch(() => {});
+                return rejected;
+            }
+            called = true;
+            work = (async () => {
+                activeSignal.throwIfAborted();
+                const pending = Promise.resolve(def.handler(request.args, ctx));
+                let result: unknown;
+                try {
+                    result = await abortable(pending, activeSignal);
+                } catch (error) {
+                    if (activeSignal.aborted) {
+                        void pending
+                            .then(async (late) => {
+                                if (isAsyncIterable(late)) {
+                                    await trackRequestCleanup(req, late[Symbol.asyncIterator]().return?.());
+                                }
+                            })
+                            .catch(() => {});
+                    }
+                    throw error;
+                }
+                await consume(result, activeSignal);
+            })();
+            // Middleware may call next() without returning/awaiting it. Observe
+            // failures immediately, and still await the original work below.
+            void work.catch(() => {});
+            return work;
         };
-    }
-
-    private async processRequest(value: unknown, socket: WebSocket): Promise<RpcResponse> {
-        if (!isRpcRequest(value)) {
-            return invalidRequest(value, this.getStats(socket));
-        }
-        const req = value;
-        const def = this.methods.get(req.method);
-        if (!def) {
-            return {
-                id: req.id,
-                ok: false,
-                stats: this.getStats(socket),
-                error: `Unknown method ${req.method}`,
-            };
-        }
-
         try {
-            // Build context with request metadata
-            const metadata = this.socketMetadata.get(socket);
-            const ctx: HeliumContext = {
-                req: {
-                    ip: metadata?.ip || "unknown",
-                    headers: metadata?.req.headers || {},
-                    url: metadata?.req.url,
-                    method: metadata?.req.method,
-                    raw: metadata?.req as http.IncomingMessage,
-                },
-            };
-            let result: any;
-
-            // Execute middleware if present
+            activeSignal.throwIfAborted();
             if (this.middleware) {
-                let nextCalled = false;
-                await this.middleware.handler(
-                    {
-                        ctx,
-                        type: "method",
-                        methodName: req.method,
-                    },
-                    async () => {
-                        nextCalled = true;
-                        result = await def.handler(req.args, ctx);
-                    }
-                );
-
-                // If next() was not called, the middleware blocked the request
-                if (!nextCalled) {
-                    return {
-                        id: req.id,
-                        ok: false,
-                        stats: this.getStats(socket),
-                        error: "Request blocked by middleware",
-                    };
+                await abortable(this.middleware.handler({ ctx, type: "method", methodName: request.method }, next), activeSignal);
+                if (!called) {
+                    throw new PublicError("Request blocked by middleware");
                 }
             } else {
-                // No middleware, execute handler directly
-                result = await def.handler(req.args, ctx);
+                next();
             }
-
-            return {
-                id: req.id,
-                ok: true,
-                stats: this.getStats(socket),
-                result,
-            };
-        } catch (err: any) {
-            log("error", `RPC method '${req.method}' failed:`, err);
-            return {
-                id: req.id,
-                ok: false,
-                stats: this.getStats(socket),
-                error: sanitizeErrorMessage(err),
-            };
-        }
-    }
-
-    async handleMessage(socket: WebSocket, raw: string | Buffer) {
-        let req: RpcRequest | RpcRequest[];
-        try {
-            // Always expect MessagePack
-            const buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-            req = msgpackDecode(buffer) as RpcRequest | RpcRequest[];
-        } catch {
-            return;
-        }
-
-        // Security: cap batch size
-        if (Array.isArray(req) && req.length > this.maxBatchSize) {
-            const errorResponse: RpcResponse = {
-                id: "batch",
-                ok: false,
-                stats: this.getStats(socket),
-                error: `Batch size ${req.length} exceeds maximum of ${this.maxBatchSize}`,
-            };
-            await this.sendResponse(socket, errorResponse);
-            return;
-        }
-
-        let response: RpcResponse | RpcResponse[];
-        if (Array.isArray(req)) {
-            response = await Promise.all(req.map((r) => this.processRequest(r, socket)));
-        } else {
-            response = await this.processRequest(req, socket);
-        }
-
-        await this.sendResponse(socket, response);
-    }
-
-    private async sendResponse(socket: WebSocket, response: RpcResponse | RpcResponse[]): Promise<void> {
-        const encoded = msgpackEncode(prepareForMsgpack(response));
-        const compress = this.compression.enabled && encoded.length > this.compression.threshold;
-        const body = compress ? await gzipAsync(encoded) : encoded;
-        // With context takeover, ws ignores its threshold option. Make the
-        // per-message choice explicit so both compression layers honor it.
-        socket.send(body, { compress });
-    }
-
-    private async processRequestHttp(value: unknown, ip: string, httpReq: http.IncomingMessage): Promise<RpcResponse> {
-        if (!isRpcRequest(value)) {
-            return invalidRequest(value, { remainingRequests: 0, resetInSeconds: 0 });
-        }
-        const req = value;
-        const def = this.methods.get(req.method);
-        if (!def) {
-            return {
-                id: req.id,
-                ok: false,
-                stats: this.rateLimiter?.getHttpStats(ip) ?? { remainingRequests: Infinity, resetInSeconds: 0 },
-                error: `Unknown method ${req.method}`,
-            };
-        }
-
-        try {
-            // Build context with request metadata
-            const ctx: HeliumContext = {
-                req: {
-                    ip,
-                    headers: httpReq.headers,
-                    url: httpReq.url,
-                    method: httpReq.method,
-                    raw: httpReq,
-                },
-            };
-            let result: unknown;
-
-            // Execute middleware if present
-            if (this.middleware) {
-                let nextCalled = false;
-                await this.middleware.handler(
-                    {
-                        ctx,
-                        type: "method",
-                        methodName: req.method,
-                    },
-                    async () => {
-                        nextCalled = true;
-                        result = await def.handler(req.args, ctx);
-                    }
-                );
-
-                if (!nextCalled) {
-                    return {
-                        id: req.id,
-                        ok: false,
-                        stats: this.rateLimiter?.getHttpStats(ip) ?? { remainingRequests: Infinity, resetInSeconds: 0 },
-                        error: "Request blocked by middleware",
-                    };
-                }
-            } else {
-                result = await def.handler(req.args, ctx);
+            if (work) {
+                await abortable(work, activeSignal);
             }
-
-            return {
-                id: req.id,
-                ok: true,
-                stats: this.rateLimiter?.getHttpStats(ip) ?? { remainingRequests: Infinity, resetInSeconds: 0 },
-                result,
-            };
-        } catch (err: unknown) {
-            log("error", `HTTP RPC method '${req.method}' failed:`, err);
-            return {
-                id: req.id,
-                ok: false,
-                stats: this.rateLimiter?.getHttpStats(ip) ?? { remainingRequests: Infinity, resetInSeconds: 0 },
-                error: sanitizeErrorMessage(err),
-            };
+        } catch (error) {
+            controller.abort(error);
+            throw error;
+        } finally {
+            signal.removeEventListener("abort", abort);
         }
     }
 
-    /**
-     * Handle an HTTP-based RPC request.
-     * This is an alternative to WebSocket for environments where HTTP performs better
-     * (e.g., mobile networks with high latency where HTTP/2 multiplexing helps).
-     */
-    async handleHttpRequest(reqBody: Buffer | string, ip: string, httpReq: http.IncomingMessage): Promise<HttpRpcResult> {
-        let req: RpcRequest | RpcRequest[];
-
-        try {
-            // Always expect MessagePack
-            const buffer = Buffer.isBuffer(reqBody) ? reqBody : Buffer.from(reqBody);
-            req = msgpackDecode(buffer) as RpcRequest | RpcRequest[];
-        } catch {
-            const errorResponse: RpcResponse = {
-                id: "unknown",
-                ok: false,
-                stats: { remainingRequests: 0, resetInSeconds: 0 },
-                error: "Invalid request format",
-            };
-            return {
-                response: errorResponse,
-            };
-        }
-
+    private checkRateLimit(ip: string): void {
         if (this.rateLimiter && !this.rateLimiter.checkHttpRateLimit(ip)) {
-            const stats = this.rateLimiter.getHttpStats(ip);
-            const reject = (value: unknown): RpcResponse => ({
-                id: requestId(value),
-                ok: false,
-                stats,
-                error: "Rate limit exceeded",
-            });
-            return { response: Array.isArray(req) ? req.slice(0, this.maxBatchSize).map(reject) : reject(req) };
+            throw new PublicError("Rate limit exceeded");
         }
+    }
 
-        let response: RpcResponse | RpcResponse[];
-        if (Array.isArray(req)) {
-            // Security: cap batch size
-            if (req.length > this.maxBatchSize) {
-                const errorResponse: RpcResponse = {
-                    id: "batch",
-                    ok: false,
-                    stats: { remainingRequests: 0, resetInSeconds: 0 },
-                    error: `Batch size ${req.length} exceeds maximum of ${this.maxBatchSize}`,
-                };
-                return { response: errorResponse };
+    async handleHttpRequest(body: Buffer | string, ip: string, req: http.IncomingMessage, signal: AbortSignal = new AbortController().signal): Promise<HttpRpcResult> {
+        let value: unknown;
+        try {
+            value = msgpackDecode(Buffer.isBuffer(body) ? body : Buffer.from(body));
+        } catch {
+            return { response: { id: "unknown", ok: false, stats: this.getStats(ip), error: "Invalid request format" } };
+        }
+        const errorResponse = (input: unknown, error: string): RpcResponse => ({ id: requestId(input), ok: false, stats: this.getStats(ip), error });
+        try {
+            this.checkRateLimit(ip);
+        } catch (error) {
+            return {
+                response: Array.isArray(value)
+                    ? value.slice(0, this.maxBatchSize).map((item) => errorResponse(item, sanitizeErrorMessage(error)))
+                    : errorResponse(value, sanitizeErrorMessage(error)),
+            };
+        }
+        if (Array.isArray(value) && value.length > this.maxBatchSize) {
+            return { response: { id: "batch", ok: false, stats: this.getStats(ip), error: `Batch size ${value.length} exceeds maximum of ${this.maxBatchSize}` } };
+        }
+        const process = async (input: unknown): Promise<RpcResponse> => {
+            if (!isRpcRequest(input)) {
+                return errorResponse(input, "Invalid request format");
             }
-            response = await Promise.all(req.map((r) => this.processRequestHttp(r, ip, httpReq)));
-        } else {
-            response = await this.processRequestHttp(req as RpcRequest, ip, httpReq);
-        }
+            try {
+                let result: unknown;
+                await this.invoke(input, ip, req, signal, async (value) => {
+                    if (isAsyncIterable(value)) {
+                        const iterator = value[Symbol.asyncIterator]();
+                        void trackRequestCleanup(req, iterator.return?.()).catch(() => {});
+                        throw new PublicError("This method returns a stream. Use useStreaming() instead of a unary RPC call.");
+                    }
+                    result = value;
+                });
+                return { id: input.id, ok: true, stats: this.getStats(ip), result };
+            } catch (error) {
+                if (!signal.aborted) {
+                    log("error", `RPC method '${input.method}' failed:`, error);
+                }
+                return errorResponse(input, sanitizeErrorMessage(error));
+            }
+        };
+        return { response: Array.isArray(value) ? await Promise.all(value.map(process)) : await process(value) };
+    }
 
-        return { response };
+    async handleStreamRequest(
+        body: Buffer,
+        ip: string,
+        req: http.IncomingMessage,
+        signal: AbortSignal,
+        onChunk: (value: unknown, signal: AbortSignal) => Promise<void>
+    ): Promise<RpcStats> {
+        let request: unknown;
+        try {
+            request = msgpackDecode(body);
+        } catch {
+            throw new PublicError("Invalid request format");
+        }
+        if (Array.isArray(request)) {
+            throw new PublicError("Streaming RPC accepts one call, not a batch");
+        }
+        if (!isRpcRequest(request)) {
+            throw new PublicError("Invalid request format");
+        }
+        this.checkRateLimit(ip);
+        await this.invoke(request, ip, req, signal, async (result, iterationSignal) => {
+            if (!isAsyncIterable(result)) {
+                throw new PublicError("Streaming RPC requires a method returning an AsyncIterable. Use callMethod() for unary methods.");
+            }
+            const iterator = result[Symbol.asyncIterator]();
+            let completed = false;
+            try {
+                while (!iterationSignal.aborted) {
+                    const item = await abortable(iterator.next(), iterationSignal);
+                    if (item.done) {
+                        completed = true;
+                        break;
+                    }
+                    iterationSignal.throwIfAborted();
+                    await abortable(onChunk(item.value, iterationSignal), iterationSignal);
+                }
+            } finally {
+                if (!completed && iterator.return) {
+                    const cleanup = trackRequestCleanup(req, iterator.return());
+                    if (iterationSignal.aborted) {
+                        void cleanup.catch(() => {});
+                    } else {
+                        await abortable(cleanup, iterationSignal);
+                    }
+                }
+            }
+        });
+        return this.getStats(ip);
     }
 }
 
 function requestId(value: unknown): string | number {
-    if (value && typeof value === "object" && "id" in value) {
-        const id = value.id;
-        if (typeof id === "string" || (typeof id === "number" && Number.isFinite(id))) {
-            return id;
-        }
+    if (value && typeof value === "object" && "id" in value && (typeof value.id === "string" || (typeof value.id === "number" && Number.isFinite(value.id)))) {
+        return value.id;
     }
     return "unknown";
 }
@@ -352,55 +272,8 @@ function isRpcRequest(value: unknown): value is RpcRequest {
     );
 }
 
-function invalidRequest(value: unknown, stats: RpcStats): RpcResponse {
-    return { id: requestId(value), ok: false, stats, error: "Invalid request format" };
-}
-
-/**
- * Sanitize error messages before sending to clients.
- * In production, returns a generic message to prevent information leakage.
- * In development, returns the actual error message for debugging.
- */
-function sanitizeErrorMessage(err: unknown): string {
-    const message = getErrorMessage(err);
-    const isPublic = isPublicError(err);
-
-    if (process.env.NODE_ENV === "production") {
-        if (isPublic && message) {
-            return message;
-        }
-        return "Server error";
-    }
-
-    if (message) {
-        return message;
-    }
-
-    return "Server error";
-}
-
-function isPublicError(err: unknown): boolean {
-    if (err instanceof PublicError) {
-        return true;
-    }
-
-    if (!err || typeof err !== "object") {
-        return false;
-    }
-
-    const publicFlag = (err as { public?: unknown }).public;
-    return publicFlag === true;
-}
-
-function getErrorMessage(err: unknown): string | null {
-    if (err instanceof Error) {
-        return err.message;
-    }
-
-    if (err && typeof err === "object") {
-        const message = (err as { message?: unknown }).message;
-        return typeof message === "string" ? message : null;
-    }
-
-    return null;
+export function sanitizeErrorMessage(error: unknown): string {
+    const message = error instanceof Error ? error.message : error && typeof error === "object" && "message" in error && typeof error.message === "string" ? error.message : null;
+    const isPublic = error instanceof PublicError || (error !== null && typeof error === "object" && "public" in error && error.public === true);
+    return process.env.NODE_ENV === "production" && !isPublic ? "Server error" : message || "Server error";
 }

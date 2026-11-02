@@ -30,8 +30,7 @@ describe("security", () => {
     describe("initializeSecurity", () => {
         it("should initialize with default config", () => {
             const config = {
-                maxConnectionsPerIP: 10,
-                maxMessagesPerWindow: 100,
+                maxRequestsPerWindow: 100,
                 rateLimitWindowMs: 60000,
                 tokenValidityMs: 30000,
             };
@@ -44,8 +43,7 @@ describe("security", () => {
             process.env.HELIUM_SECRET = "test-secret-key";
 
             const config = {
-                maxConnectionsPerIP: 10,
-                maxMessagesPerWindow: 100,
+                maxRequestsPerWindow: 100,
                 rateLimitWindowMs: 60000,
                 tokenValidityMs: 30000,
             };
@@ -59,8 +57,7 @@ describe("security", () => {
 
         it("should generate random secret if HELIUM_SECRET not set", () => {
             const config = {
-                maxConnectionsPerIP: 10,
-                maxMessagesPerWindow: 100,
+                maxRequestsPerWindow: 100,
                 rateLimitWindowMs: 60000,
                 tokenValidityMs: 30000,
             };
@@ -75,8 +72,7 @@ describe("security", () => {
     describe("generateConnectionToken", () => {
         beforeEach(() => {
             initializeSecurity({
-                maxConnectionsPerIP: 10,
-                maxMessagesPerWindow: 100,
+                maxRequestsPerWindow: 100,
                 rateLimitWindowMs: 60000,
                 tokenValidityMs: 30000,
             });
@@ -117,8 +113,7 @@ describe("security", () => {
     describe("verifyConnectionToken", () => {
         beforeEach(() => {
             initializeSecurity({
-                maxConnectionsPerIP: 10,
-                maxMessagesPerWindow: 100,
+                maxRequestsPerWindow: 100,
                 rateLimitWindowMs: 60000,
                 tokenValidityMs: 30000,
             });

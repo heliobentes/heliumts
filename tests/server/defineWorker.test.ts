@@ -85,6 +85,7 @@ describe("defineWorker", () => {
             );
 
             const createContext = (): HeliumContext => ({
+                signal: new AbortController().signal,
                 req: {
                     ip: "127.0.0.1",
                     headers: {},
@@ -110,6 +111,7 @@ describe("defineWorker", () => {
             );
 
             const createContext = (): HeliumContext => ({
+                signal: new AbortController().signal,
                 req: { ip: "127.0.0.1", headers: {}, raw: {} as HeliumContext["req"]["raw"] },
             });
 
@@ -132,6 +134,7 @@ describe("defineWorker", () => {
             );
 
             const createContext = (): HeliumContext => ({
+                signal: new AbortController().signal,
                 req: { ip: "127.0.0.1", headers: {}, raw: {} as HeliumContext["req"]["raw"] },
             });
 
@@ -163,6 +166,7 @@ describe("defineWorker", () => {
             );
 
             const createContext = (): HeliumContext => ({
+                signal: new AbortController().signal,
                 req: { ip: "127.0.0.1", headers: {}, raw: {} as HeliumContext["req"]["raw"] },
             });
 
@@ -190,6 +194,7 @@ describe("defineWorker", () => {
             );
 
             const createContext = (): HeliumContext => ({
+                signal: new AbortController().signal,
                 req: { ip: "127.0.0.1", headers: {}, raw: {} as HeliumContext["req"]["raw"] },
             });
 
@@ -216,6 +221,7 @@ describe("defineWorker", () => {
             );
 
             const createContext = (): HeliumContext => ({
+                signal: new AbortController().signal,
                 req: { ip: "127.0.0.1", headers: {}, raw: {} as HeliumContext["req"]["raw"] },
             });
 
@@ -252,6 +258,7 @@ describe("defineWorker", () => {
             );
 
             const createContext = (): HeliumContext => ({
+                signal: new AbortController().signal,
                 req: { ip: "127.0.0.1", headers: {}, raw: {} as HeliumContext["req"]["raw"] },
             });
 
@@ -280,6 +287,7 @@ describe("defineWorker", () => {
             );
 
             const createContext = (): HeliumContext => ({
+                signal: new AbortController().signal,
                 req: { ip: "127.0.0.1", headers: {}, raw: {} as HeliumContext["req"]["raw"] },
             });
 
@@ -307,6 +315,7 @@ describe("defineWorker", () => {
             );
 
             const createContext = (): HeliumContext => ({
+                signal: new AbortController().signal,
                 req: { ip: "127.0.0.1", headers: {}, raw: {} as HeliumContext["req"]["raw"] },
             });
 
@@ -321,6 +330,7 @@ describe("defineWorker", () => {
 
     describe("worker lifecycle regressions", () => {
         const createContext = (): HeliumContext => ({
+            signal: new AbortController().signal,
             req: { ip: "127.0.0.1", headers: {}, raw: {} as HeliumContext["req"]["raw"] },
         });
 
@@ -437,6 +447,7 @@ describe("defineWorker", () => {
             );
 
             const createContext = (): HeliumContext => ({
+                signal: new AbortController().signal,
                 req: { ip: "127.0.0.1", headers: {}, raw: {} as HeliumContext["req"]["raw"] },
             });
 

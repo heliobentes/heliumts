@@ -1,10 +1,7 @@
-import { decode as msgpackDecode, encode as msgpackEncode } from "@msgpack/msgpack";
 import fs from "fs";
 import http from "http";
 import path from "path";
 import type { ComponentType, ReactNode } from "react";
-import type WebSocket from "ws";
-import { WebSocketServer } from "ws";
 
 import { SEO_METADATA_RPC_METHOD } from "../runtime/internalMethods.js";
 import { injectHeliumEnvIntoHtml } from "../utils/envLoader.js";
@@ -15,15 +12,15 @@ import { getRpcConfig, getRpcSecurityConfig, getTrustProxyDepth } from "./config
 import type { HeliumContext } from "./context.js";
 import type { HeliumWorkerDef } from "./defineWorker.js";
 import { startWorker, stopAllWorkers } from "./defineWorker.js";
-import { compressHttpRpcResponse } from "./httpCompression.js";
 import { HTTPRouter } from "./httpRouter.js";
+import { handleRpcHttpRequest } from "./httpRpc.js";
 import { injectSocialMetaIntoHtml, loadDefaultSocialMetaFromHtmlFile } from "./meta.js";
 import { RateLimiter } from "./rateLimiter.js";
 import { withRequestErrorHandling } from "./requestHandler.js";
+import { abortServerRequests, getRequestSignal, trackServerRequest } from "./requestSignal.js";
 import { RpcRegistry } from "./rpcRegistry.js";
-import { generateConnectionToken, initializeSecurity, verifyConnectionToken } from "./security.js";
+import { initializeSecurity } from "./security.js";
 import { SEOMetadataRouter } from "./seoMetadataRouter.js";
-import { prepareForMsgpack } from "./serializer.js";
 import { matchSSRPage, renderSSRHTML, resolveServerSideProps, SSRPageDef } from "./ssr.js";
 
 interface WorkerEntry {
@@ -48,7 +45,7 @@ interface ProdServerOptions {
  * - Supports SSG (Static Site Generation) by serving .html files for routes (e.g., /about -> about.html)
  * - Falls back to index.html for client-side routing (SPA)
  * - Handles custom HTTP endpoints (webhooks, auth, etc.)
- * - Hosts WebSocket RPC server
+ * - Hosts unary and streaming HTTP RPC
  * - Starts background workers
  *
  * SSG Behavior:
@@ -72,11 +69,10 @@ export function startProdServer(options: ProdServerOptions) {
     const trustProxyDepth = getTrustProxyDepth(config);
     const rpcSecurity = getRpcSecurityConfig(config);
     const rpcConfig = getRpcConfig(config);
-    const compressionConfig = rpcConfig.compression;
     initializeSecurity(rpcSecurity);
 
     // Initialize rate limiter
-    const rateLimiter = new RateLimiter(rpcSecurity.maxMessagesPerWindow, rpcSecurity.rateLimitWindowMs, rpcSecurity.maxConnectionsPerIP);
+    const rateLimiter = new RateLimiter(rpcSecurity.maxRequestsPerWindow, rpcSecurity.rateLimitWindowMs);
 
     const registry = new RpcRegistry();
     const httpRouter = new HTTPRouter({ maxBodySize: rpcConfig.maxBodySize });
@@ -85,7 +81,6 @@ export function startProdServer(options: ProdServerOptions) {
     registerHandlers(registry, httpRouter, seoRouter);
     registry.setRateLimiter(rateLimiter);
     registry.setMaxBatchSize(rpcConfig.maxBatchSize);
-    registry.setCompressionConfig(compressionConfig);
 
     // Security: max body size for HTTP requests (1 MB default)
     const maxBodySize = rpcConfig.maxBodySize ?? 1_048_576;
@@ -136,6 +131,7 @@ export function startProdServer(options: ProdServerOptions) {
 
             const ip = extractClientIP(req, trustProxyDepth);
             const httpCtx: HeliumContext = {
+                signal: getRequestSignal(req, res),
                 req: {
                     ip,
                     headers: req.headers,
@@ -172,90 +168,7 @@ export function startProdServer(options: ProdServerOptions) {
             return;
         }
 
-        if (requestPathname === "/__helium__/refresh-token") {
-            // Security: only allow POST to prevent CSRF via <img>/<script> tags
-            if (req.method !== "POST") {
-                res.writeHead(405, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ error: "Method not allowed" }));
-                return;
-            }
-            // Security: require custom header to prevent cross-origin requests
-            if (!req.headers["x-requested-with"]) {
-                res.writeHead(403, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ error: "Forbidden" }));
-                return;
-            }
-            const token = generateConnectionToken();
-            res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-            res.end(JSON.stringify({ token }));
-            return;
-        }
-
-        // Handle HTTP-based RPC endpoint (alternative to WebSocket for mobile networks)
-        if (requestPathname === "/__helium__/rpc" && req.method === "POST") {
-            // Security: verify connection token for HTTP RPC
-            const authToken = req.headers["x-helium-token"] as string | undefined;
-            if (!authToken || !verifyConnectionToken(authToken)) {
-                res.writeHead(401, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ ok: false, error: "Unauthorized" }));
-                return;
-            }
-
-            // Security: check Content-Length before reading body
-            const contentLength = parseInt(req.headers["content-length"] || "0", 10);
-            if (contentLength > maxBodySize) {
-                res.writeHead(413, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ ok: false, error: "Request entity too large" }));
-                return;
-            }
-
-            const chunks: Buffer[] = [];
-            let totalSize = 0;
-            let aborted = false;
-            req.on("error", () => {
-                aborted = true;
-            });
-            req.on("data", (chunk: Buffer) => {
-                if (aborted) {
-                    return;
-                }
-                totalSize += chunk.length;
-                if (totalSize > maxBodySize) {
-                    aborted = true;
-                    res.writeHead(413, { "Content-Type": "application/json" });
-                    res.end(JSON.stringify({ ok: false, error: "Request entity too large" }));
-                    return;
-                }
-                chunks.push(chunk);
-            });
-            req.on("end", async () => {
-                if (aborted) {
-                    return;
-                }
-                try {
-                    const body = Buffer.concat(chunks);
-                    const ip = extractClientIP(req, trustProxyDepth);
-                    const result = await registry.handleHttpRequest(body, ip, req);
-
-                    const encoded = msgpackEncode(prepareForMsgpack(result.response));
-                    const compressed = await compressHttpRpcResponse(Buffer.from(encoded as Uint8Array), req.headers["accept-encoding"]);
-                    const headers: Record<string, string> = {
-                        "Content-Type": "application/msgpack",
-                        "Cache-Control": "no-store",
-                    };
-
-                    if (compressed.encoding) {
-                        headers["Content-Encoding"] = compressed.encoding;
-                    }
-
-                    res.writeHead(200, headers);
-                    res.end(compressed.body);
-                } catch (error) {
-                    log("error", "HTTP RPC error:", error);
-                    res.writeHead(500, { "Content-Type": "application/json" });
-                    res.end(JSON.stringify({ ok: false, error: "Internal server error" }));
-                }
-            });
+        if (registry && (await handleRpcHttpRequest(req, res, registry, { maxBodySize, trustProxyDepth }))) {
             return;
         }
 
@@ -441,6 +354,7 @@ export function startProdServer(options: ProdServerOptions) {
             if (!is404 && contentType === "text/html") {
                 const ip = extractClientIP(req, trustProxyDepth);
                 const httpCtx: HeliumContext = {
+                    signal: getRequestSignal(req, res),
                     req: {
                         ip,
                         headers: req.headers,
@@ -512,140 +426,15 @@ export function startProdServer(options: ProdServerOptions) {
             res.end("Internal server error");
         }
     });
-    const server = http.createServer(handleRequest);
-
-    // Setup WebSocket server for RPC
-    const wss = new WebSocketServer({
-        noServer: true,
-        maxPayload: rpcConfig.maxWsPayload,
-        perMessageDeflate: compressionConfig.enabled
-            ? {
-                  zlibDeflateOptions: {
-                      chunkSize: 1024,
-                      memLevel: 7,
-                      level: 9, // 6 is default compression level (balanced)
-                  },
-                  zlibInflateOptions: {
-                      chunkSize: 10 * 1024,
-                  },
-                  threshold: compressionConfig.threshold,
-              }
-            : false,
-    });
-
-    wss.on("connection", (socket: WebSocket, req: http.IncomingMessage) => {
-        // Extract client IP with proxy configuration
-        const ip = extractClientIP(req, trustProxyDepth);
-
-        // Store connection metadata for RPC context
-        registry.setSocketMetadata(socket, ip, req);
-
-        // Track connection and check IP limit
-        if (!rateLimiter.trackConnection(socket, ip)) {
-            socket.close(1008, "Too many connections from your IP");
-            return;
-        }
-
-        // Prevent unhandled errors from crashing the process (e.g. maxPayload exceeded)
-        socket.on("error", (err) => {
-            log("warn", "WebSocket error:", err);
-            if (socket.readyState === socket.OPEN || socket.readyState === socket.CLOSING) {
-                socket.close(1009, "Message too large");
-            }
-        });
-
-        socket.on("message", (msg: WebSocket.RawData, _isBinary: boolean) => {
-            // Check rate limit
-            if (!rateLimiter.checkRateLimit(socket)) {
-                // Parse request to get the ID for proper error response
-                try {
-                    let req: any;
-                    // Always expect MessagePack
-                    const buffer = Buffer.isBuffer(msg) ? msg : Buffer.from(msg as any);
-                    req = msgpackDecode(buffer);
-
-                    const stats = rateLimiter.getConnectionStats(socket);
-                    const now = Date.now();
-                    const resetInSeconds = stats ? Math.ceil((stats.resetTimeMs - now) / 1000) : 0;
-
-                    const createError = (id: string) => ({
-                        id,
-                        ok: false,
-                        stats: {
-                            remainingRequests: stats ? stats.remainingMessages : 0,
-                            resetInSeconds,
-                        },
-                        error: "Rate limit exceeded",
-                    });
-
-                    let errorResponse: any;
-                    if (Array.isArray(req)) {
-                        errorResponse = req.map((r: any) => createError(r.id));
-                    } else {
-                        errorResponse = createError(req.id);
-                    }
-
-                    log("warn", `Rate limit exceeded for IP ${ip}, resets in ${resetInSeconds} seconds`);
-                    const encodedError = msgpackEncode(errorResponse);
-                    socket.send(encodedError, { compress: compressionConfig.enabled && encodedError.length > compressionConfig.threshold });
-                } catch {
-                    // If we can't parse the request, just close the connection
-                    socket.close();
-                }
-                return;
-            }
-
-            void registry.handleMessage(socket, Buffer.isBuffer(msg) ? msg : Buffer.from(msg as any)).catch((error) => {
-                log("error", "WebSocket RPC error:", error);
-            });
-        });
-    });
-
-    // Handle WebSocket upgrade requests
-    server.on("upgrade", (req, socket, head) => {
-        if (req.url?.split("?")[0] === "/rpc") {
-            // Security: read token from Sec-WebSocket-Protocol header instead of query string
-            const protocols = req.headers["sec-websocket-protocol"];
-            const token =
-                typeof protocols === "string"
-                    ? protocols
-                          .split(",")
-                          .map((p) => p.trim())
-                          .find((p) => p.includes("."))
-                    : undefined;
-
-            if (!token || !verifyConnectionToken(token)) {
-                log("warn", "WebSocket connection rejected - invalid token");
-                socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-                socket.destroy();
-                return;
-            }
-
-            // Check IP connection limit before upgrading
-            const ip = extractClientIP(req, trustProxyDepth);
-            if (rpcSecurity.maxConnectionsPerIP > 0) {
-                const currentConnections = rateLimiter.getIPConnectionCount(ip);
-                if (currentConnections >= rpcSecurity.maxConnectionsPerIP) {
-                    log("warn", `WebSocket connection rejected - IP ${ip} has ${currentConnections} connections`);
-                    socket.write("HTTP/1.1 429 Too Many Requests\r\n\r\n");
-                    socket.destroy();
-                    return;
-                }
-            }
-
-            wss.handleUpgrade(req, socket, head, (ws) => {
-                wss.emit("connection", ws, req);
-            });
-        } else {
-            socket.destroy();
-        }
+    const server = http.createServer((req, res) => {
+        trackServerRequest(server, req, res);
+        void handleRequest(req, res);
     });
 
     // Start server
     server.listen(port, () => {
         log("info", `Production server listening on http://localhost:${port}`);
         log("info", `Serving static files from ${staticDir}`);
-        log("info", `WebSocket RPC available at ws://localhost:${port}/rpc`);
 
         // Start workers
         if (workers.length > 0) {
@@ -659,6 +448,7 @@ export function startProdServer(options: ProdServerOptions) {
                 }
                 if (worker.options.autoStart) {
                     const createContext = (): HeliumContext => ({
+                        signal: new AbortController().signal,
                         req: {
                             ip: "127.0.0.1",
                             headers: {},
@@ -676,17 +466,21 @@ export function startProdServer(options: ProdServerOptions) {
     });
 
     // Handle graceful shutdown
+    let shuttingDown = false;
     const shutdown = async () => {
-        log("info", "Shutting down...");
-        await stopAllWorkers();
-        for (const socket of wss.clients) {
-            socket.terminate();
+        if (shuttingDown) {
+            return;
         }
-        wss.close();
-        server.close(() => {
+        shuttingDown = true;
+        log("info", "Shutting down...");
+        try {
+            await closeProductionServer(server);
             log("info", "Server closed");
             process.exit(0);
-        });
+        } catch (error) {
+            log("error", "Server shutdown failed:", error);
+            process.exit(1);
+        }
     };
 
     process.on("SIGINT", shutdown);
@@ -694,13 +488,22 @@ export function startProdServer(options: ProdServerOptions) {
     server.once("close", () => {
         process.off("SIGINT", shutdown);
         process.off("SIGTERM", shutdown);
-        for (const socket of wss.clients) {
-            socket.terminate();
-        }
-        wss.close();
     });
 
     return server;
+}
+
+/** @internal Stop open HTTP streams so providers receive their cancellation signal. */
+export async function closeProductionServer(server: http.Server): Promise<void> {
+    const requestsStopped = abortServerRequests(server);
+    let closed = Promise.resolve();
+    if (server.listening) {
+        closed = new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+        });
+        server.closeAllConnections();
+    }
+    await Promise.all([stopAllWorkers(), closed, requestsStopped]);
 }
 
 // ============================================================================

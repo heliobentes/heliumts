@@ -80,18 +80,6 @@ describe("devServer", () => {
         });
     });
 
-    describe("WebSocket token endpoint", () => {
-        it("should have correct refresh-token endpoint path", () => {
-            const endpoint = "/__helium__/refresh-token";
-            expect(endpoint).toBe("/__helium__/refresh-token");
-        });
-
-        it("should have correct RPC endpoint path prefix", () => {
-            const endpoint = "/rpc";
-            expect(endpoint).toBe("/rpc");
-        });
-    });
-
     describe("worker name handling", () => {
         it("should identify anonymous worker names", () => {
             const workerName = "anonymous";
@@ -115,39 +103,6 @@ describe("devServer", () => {
         it("should have development mode priority", () => {
             const devEnvFile = ".env.development";
             expect(devEnvFile).toBe(".env.development");
-        });
-    });
-
-    describe("request URL parsing", () => {
-        it("should extract token from URL query string", () => {
-            const url = "/rpc?token=abc123";
-            const urlObj = new URL(url, "http://localhost");
-            expect(urlObj.searchParams.get("token")).toBe("abc123");
-        });
-
-        it("should handle URL without token", () => {
-            const url = "/rpc";
-            const urlObj = new URL(url, "http://localhost");
-            expect(urlObj.searchParams.get("token")).toBeNull();
-        });
-
-        it("should handle complex URL with multiple params", () => {
-            const url = "/rpc?token=xyz&other=123";
-            const urlObj = new URL(url, "http://localhost");
-            expect(urlObj.searchParams.get("token")).toBe("xyz");
-            expect(urlObj.searchParams.get("other")).toBe("123");
-        });
-    });
-
-    describe("WebSocket path detection", () => {
-        it("should match /rpc path", () => {
-            const url = "/rpc?token=test";
-            expect(url.startsWith("/rpc")).toBe(true);
-        });
-
-        it("should not match other paths", () => {
-            const url = "/api/users";
-            expect(url.startsWith("/rpc")).toBe(false);
         });
     });
 
@@ -185,16 +140,12 @@ describe("devServer", () => {
             const eventType = "request";
             expect(eventType).toBe("request");
         });
-
-        it("should handle upgrade event type", () => {
-            const eventType = "upgrade";
-            expect(eventType).toBe("upgrade");
-        });
     });
 
     describe("context creation for workers", () => {
         it("should create context with localhost IP", () => {
             const context = {
+                signal: new AbortController().signal,
                 req: {
                     ip: "127.0.0.1",
                     headers: {},
@@ -207,6 +158,7 @@ describe("devServer", () => {
 
         it("should have empty headers by default", () => {
             const context = {
+                signal: new AbortController().signal,
                 req: {
                     ip: "127.0.0.1",
                     headers: {},

@@ -1,6 +1,6 @@
 # Data Fetching
 
-HeliumTS provides two React hooks for data fetching and mutations: `useFetch` and `useCall`. Both hooks use the RPC transport configured in `helium.config.ts`: WebSocket, HTTP, or automatic selection. Import method stubs from `heliumts/server` in client components; keep their implementations in `src/server`.
+HeliumTS provides `useFetch` for queries, `useCall` for mutations, and [`useStreaming`](./streaming.md) for incremental results. All RPC calls use HTTP. Import method stubs from `heliumts/server` in client components; keep their implementations in `src/server`.
 
 ## Public errors in production
 
@@ -397,18 +397,16 @@ Use `callMethod` in event handlers or other browser code when you do not need Re
 import { callMethod } from "heliumts/client";
 import { getUser } from "heliumts/server";
 
-const { data, stats, transport } = await callMethod(getUser, { id: "123" });
-// data is inferred from getUser; transport is "http" or "websocket".
+const { data, stats } = await callMethod(getUser, { id: "123" });
+// data is inferred from getUser.
 ```
 
-By default, this uses the configured transport selection and automatic fallback. Pass `{ transport: "http" }` or `{ transport: "websocket" }` as the third argument to require one transport. Explicit selections retain connection retries but never switch transport. Failures reject the promise; they do not return an empty result. Unlike the hooks, this function does not update React state or invalidate cached queries.
-
-WebSocket RPC is not guaranteed to beat an HTTP endpoint. Both can reuse established connections, and payload size, compression, browser decoding, network conditions, and hosting proxies affect the result. When comparing them, warm both paths, alternate their order, validate equivalent responses, and retain successful samples below any expected server duration. Chrome DevTools throttling treats established WebSocket latency differently from HTTP latency, so its speed ratio is not evidence of a real mobile-network advantage.
+Calls use HTTP and share the capped batch queue. Failures reject the promise. Unlike the hooks, `callMethod` does not update React state or invalidate cached queries. Methods returning async iterables use `useStreaming` instead.
 
 ## Request lifecycle and retries
 
 Queries with the same method and arguments share pending work. Changing arguments ignores older responses, and invalidating a pending query prevents its old result from replacing the fresh cache entry. `invalidateAll()` also includes pending queries. Shared layouts preserve their component state as navigation changes the page.
 
-HTTP calls are grouped up to `rpc.maxBatchSize` (default 20), use a 30-second request timeout, and share a rate-limit window per client IP. WebSocket limits apply per connection, with a separate concurrent-connection limit per IP.
+HTTP calls are grouped up to `rpc.maxBatchSize` (default 20), use a 30-second request timeout, and share a rate-limit window per client IP. Streaming calls use separate requests with their own idle timeout; both share per-IP request limits.
 
-Transport failures can trigger automatic retries. A lost response does not prove that a mutation failed to run: make side-effecting methods idempotent before relying on retries, especially for payments, email delivery, or job creation. Helium does not provide server-side deduplication of logical mutations.
+Network failures and server errors do not automatically replay RPC calls: a lost response may follow a successful mutation. An unauthorized response can refresh the request token and retry once before handler execution. Make side-effecting methods idempotent before adding application-level retries, especially for payments, email delivery, or job creation. Streaming methods are not replayed automatically.

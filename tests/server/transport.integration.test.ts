@@ -6,14 +6,12 @@ import http from "http";
 import os from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import WebSocket from "ws";
 
 import { startProdServer } from "../../src/server/prodServer";
 
 let server: http.Server;
 let fixture: string;
 let baseUrl: string;
-let wsUrl: string;
 
 beforeEach(async () => {
     fixture = fs.mkdtempSync(path.join(os.tmpdir(), "helium-transport-"));
@@ -29,7 +27,7 @@ beforeEach(async () => {
     server = startProdServer({
         port: 0,
         staticDir,
-        config: { rpc: { security: { maxMessagesPerWindow: 1 } } },
+        config: { rpc: { security: { maxRequestsPerWindow: 1 } } },
         registerHandlers(registry, httpRouter) {
             registry.register("echo", { __kind: "method", __id: "echo", handler: async (args) => args });
             httpRouter.registerRoutes([
@@ -41,7 +39,6 @@ beforeEach(async () => {
     await once(server, "listening");
     const port = (server.address() as { port: number }).port;
     baseUrl = `http://127.0.0.1:${port}`;
-    wsUrl = `ws://127.0.0.1:${port}/rpc`;
 });
 
 afterEach(async () => {
@@ -101,22 +98,6 @@ describe("production request handling", () => {
         expect(await call(2)).toMatchObject({ id: 2, ok: false, error: "Rate limit exceeded" });
     });
 
-    it("returns correlated WebSocket rate-limit errors in an ESM server", async () => {
-        const socket = new WebSocket(wsUrl, await token());
-        await once(socket, "open");
-        try {
-            socket.send(encode({ id: 1, method: "echo", args: "first" }));
-            const [first] = await once(socket, "message");
-            expect(decode(first as Buffer)).toMatchObject({ id: 1, ok: true });
-            socket.send(encode({ id: 2, method: "echo" }));
-            const [second] = await once(socket, "message");
-            expect(decode(second as Buffer)).toMatchObject({ id: 2, ok: false, error: "Rate limit exceeded" });
-        } finally {
-            socket.terminate();
-            await once(socket, "close");
-        }
-    });
-
     it("removes shutdown signal listeners when the server closes", async () => {
         const before = process.listenerCount("SIGTERM");
         await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -129,35 +110,19 @@ it("lets custom OPTIONS handlers run before CORS preflight fallback", async () =
     expect((await fetch(`${baseUrl}/other`, { method: "OPTIONS" })).status).toBe(204);
 });
 
-it("preserves live WebSocket context and the original Vite listener across dev reloads", async () => {
+it("preserves the original Vite listener across HTTP handler reloads", async () => {
     const { attachToDevServer } = await import("../../src/server/devServer");
     const viteHandler = vi.fn((_req, res) => res.end("original-vite"));
     const dev = http.createServer(viteHandler);
-    const register = (value: string) => (registry: any) => {
-        registry.register("context", { __kind: "method", handler: async (_args: unknown, ctx: any) => `${value}:${ctx.req.headers["x-test"]}` });
-    };
-    const config = { rpc: { security: { maxMessagesPerWindow: 2 } } };
-    attachToDevServer(dev, register("before"), config);
+    attachToDevServer(dev, () => undefined);
+    attachToDevServer(dev, () => undefined);
     dev.listen(0);
     await once(dev, "listening");
-    const port = (dev.address() as { port: number }).port;
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/rpc`, await token(), { headers: { "X-Test": "live" } });
-    await once(socket, "open");
     try {
-        const call = async (id: number) => {
-            socket.send(encode({ id, method: "context" }));
-            const [response] = await once(socket, "message");
-            return decode(response as Buffer);
-        };
-        expect(await call(1)).toMatchObject({ ok: true, result: "before:live" });
-        attachToDevServer(dev, register("after"), config);
-        expect(await call(2)).toMatchObject({ ok: true, result: "after:live" });
-        expect(await call(3)).toMatchObject({ id: 3, ok: false, error: "Rate limit exceeded" });
+        const port = (dev.address() as { port: number }).port;
         expect(await (await fetch(`http://127.0.0.1:${port}/asset`, { headers: { Accept: "text/plain" } })).text()).toBe("original-vite");
         expect(viteHandler).toHaveBeenCalledTimes(1);
     } finally {
-        socket.terminate();
-        await once(socket, "close");
         await new Promise<void>((resolve) => dev.close(() => resolve()));
     }
 });

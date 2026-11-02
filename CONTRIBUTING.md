@@ -98,7 +98,7 @@ heliumts/
 │   │   ├── Router.tsx          # Client router implementation
 │   │   ├── useCall.ts          # RPC mutation hook
 │   │   ├── useFetch.ts         # RPC query hook
-│   │   ├── rpcClient.ts        # WebSocket RPC client
+│   │   ├── rpcClient.ts        # HTTP RPC client
 │   │   └── cache.ts            # Client-side cache
 │   ├── server/                 # Server-side exports
 │   │   ├── devServer.ts        # Development server
@@ -195,7 +195,7 @@ git commit -m "feat: add middleware support for RPC methods"
 **Examples:**
 
 ```
-feat: add support for WebSocket compression
+feat: add cancellation for streamed methods
 fix: resolve race condition in RPC client connection
 docs: update routing documentation with examples
 refactor: simplify config loading logic
@@ -260,7 +260,7 @@ npm run build
 npm run test:smoke
 ```
 
-The suite includes browser-like unit tests and production HTTP/WebSocket tests on temporary local ports. Dependency upgrades should also be checked with `npm audit`.
+The suite includes browser-like unit tests and production HTTP RPC/streaming tests on temporary local ports. Dependency upgrades should also be checked with `npm audit`.
 
 ## Submitting Changes
 

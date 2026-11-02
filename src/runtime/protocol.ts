@@ -27,3 +27,9 @@ export type RpcResponse = RpcSuccess | RpcError;
 
 export type RpcBatchRequest = RpcRequest[];
 export type RpcBatchResponse = RpcResponse[];
+
+/** Streaming RPC responses contain length-prefixed MessagePack frames. */
+export const RPC_STREAM_CONTENT_TYPE = "application/x-helium-stream";
+export const MAX_RPC_STREAM_FRAME_SIZE = 10 * 1024 * 1024;
+
+export type RpcStreamFrame = { type: "chunk"; data: unknown } | { type: "done"; stats: RpcStats } | { type: "error"; error: string; stats: RpcStats };

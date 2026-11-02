@@ -170,11 +170,11 @@ export default function Page() {
 
 **Warning:** `Page imports from 'heliumts/client' which requires client-side execution`
 
-**What it means:** Client-side features like `useFetch`, `useCall`, and `useRouter` require a WebSocket connection and won't work during static generation.
+**What it means:** RPC requests execute in the browser after hydration. During static generation, hooks expose their initial state. Event handlers may import `callMethod` or `useStreaming`, but must not execute requests during server rendering.
 
 **Solutions:**
 
-- Remove client-side data fetching from SSG pages
+- Render an initial state and let client hooks fetch after hydration
 - Use static data or fetch data at build time (custom build script)
 - Remove `"use ssg";` if the page needs dynamic data
 

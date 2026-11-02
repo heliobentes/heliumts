@@ -31,6 +31,7 @@ describe("seoMetadataRouter", () => {
         } as IncomingMessage;
 
         const result = await router.resolve(req, {
+            signal: new AbortController().signal,
             req: {
                 ip: "127.0.0.1",
                 headers: {},
@@ -64,6 +65,7 @@ describe("seoMetadataRouter", () => {
         } as unknown as IncomingMessage;
 
         const result = await router.resolve(req, {
+            signal: new AbortController().signal,
             req: {
                 ip: "127.0.0.1",
                 headers: req.headers,
@@ -99,6 +101,7 @@ describe("seoMetadataRouter", () => {
         const result = await router.resolve(
             req,
             {
+                signal: new AbortController().signal,
                 req: {
                     ip: "127.0.0.1",
                     headers: req.headers,

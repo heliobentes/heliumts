@@ -430,9 +430,24 @@ export function Redirect({ to, replace }) {
     return null;
 }
 
-// Mock useCall hook
+// Browser RPC calls may be referenced by handlers but cannot run during SSG.
 export async function callMethod() {
     throw new Error('callMethod is only available in the browser. Load server data with getServerSideProps instead.');
+}
+
+export function useStreaming() {
+    return {
+        chunks: [],
+        text: '',
+        isStreaming: false,
+        error: null,
+        stats: null,
+        start: async () => {
+            throw new Error('useStreaming.start is only available in the browser. Load server data with getServerSideProps instead.');
+        },
+        cancel: () => {},
+        reset: () => {},
+    };
 }
 
 export function useCall(serverFn) {

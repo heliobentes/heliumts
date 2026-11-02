@@ -160,7 +160,7 @@ function waitForAbort(signal: AbortSignal): Promise<void> {
  * - Background task processors
  * - Scheduled jobs and cron-like tasks
  * - Real-time data synchronization
- * - WebSocket connection managers
+ * - External connection managers
  * - Cache warmers and data pre-loaders
  *
  * @example
@@ -269,6 +269,7 @@ export async function startWorker(worker: HeliumWorkerDef, createContext: () => 
                 log("info", `Starting worker '${name}'`);
 
                 const ctx = createContext();
+                ctx.signal = abortController.signal;
                 const lifecycle: WorkerLifecycle = {
                     signal: abortController.signal,
                     onCleanup: (cleanup) => {

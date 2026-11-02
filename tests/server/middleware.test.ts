@@ -71,6 +71,7 @@ describe("middleware", () => {
 
             const testContext: MiddlewareContext = {
                 ctx: {
+                    signal: new AbortController().signal,
                     req: {
                         ip: "192.168.1.1",
                         headers: { authorization: "Bearer token" },
@@ -99,6 +100,7 @@ describe("middleware", () => {
 
             const testContext: MiddlewareContext = {
                 ctx: {
+                    signal: new AbortController().signal,
                     req: {
                         ip: "192.168.1.1",
                         headers: {},
@@ -153,6 +155,7 @@ describe("middleware", () => {
             let handlerCalled = false;
             const testContext: MiddlewareContext = {
                 ctx: {
+                    signal: new AbortController().signal,
                     req: {
                         ip: "192.168.1.1",
                         headers: { authorization: "Bearer valid-token" },
@@ -186,6 +189,7 @@ describe("middleware", () => {
 
             const testContext: MiddlewareContext = {
                 ctx: {
+                    signal: new AbortController().signal,
                     req: {
                         ip: "192.168.1.1",
                         headers: {},

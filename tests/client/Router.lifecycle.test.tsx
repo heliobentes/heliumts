@@ -7,9 +7,7 @@ import { buildRoutes } from "../../src/client/routerManifest";
 
 vi.mock("../../src/client/routerManifest", () => ({ buildRoutes: vi.fn() }));
 vi.mock("../../src/client/rpcClient", () => ({
-    rpcCallWithOptions: vi.fn(async () => ({ data: null })),
-    isAutoHttpOnMobileEnabled: () => false,
-    isMobileRpcDevice: () => false,
+    rpcCall: vi.fn(async () => ({ data: null })),
 }));
 
 function CounterPage(input: unknown) {

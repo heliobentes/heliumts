@@ -54,7 +54,7 @@ export default function helium(): Plugin {
                 const entryPath = path.join(heliumDir, "entry.tsx");
                 fs.writeFileSync(entryPath, generateEntryModule(scanAppShell(root)));
 
-                // Return with tags to inject the entry (runtime config is fetched by the client)
+                // Return tags that inject the framework entry.
                 return {
                     html: modifiedHtml,
                     tags: [
@@ -80,7 +80,7 @@ export default function helium(): Plugin {
             // consistently in both development and production.
             injectEnvToProcess(envVars);
 
-            // Load helium config to get client-side RPC transport settings
+            // Load the client token lifetime and HTTP batching limit.
             const heliumConfig = await loadConfig(root);
             const rpcClientConfig = getRpcClientConfig(heliumConfig);
 
@@ -126,8 +126,6 @@ export default function helium(): Plugin {
                 },
                 define: {
                     __HELIUM_DEV__: JSON.stringify(env.command === "serve"),
-                    __HELIUM_RPC_TRANSPORT__: JSON.stringify(rpcClientConfig.transport),
-                    __HELIUM_RPC_AUTO_HTTP_ON_MOBILE__: JSON.stringify(rpcClientConfig.autoHttpOnMobile),
                     __HELIUM_RPC_TOKEN_VALIDITY_MS__: JSON.stringify(rpcClientConfig.tokenValidityMs),
                     __HELIUM_RPC_MAX_BATCH_SIZE__: JSON.stringify(getRpcConfig(heliumConfig).maxBatchSize),
                 },
@@ -415,47 +413,79 @@ export default function helium(): Plugin {
                 }
             });
 
-            // We hook into the server start to attach our RPC server
-            server.httpServer?.on("listening", async () => {
-                try {
-                    // Load config
+            if (!server.httpServer) {
+                // Middleware mode has no Vite-owned HTTP server to attach to.
+                return;
+            }
+
+            const httpServer = server.httpServer;
+            let initialized = false;
+            let initialization: Promise<void> | undefined;
+            const initialize = () => {
+                initialization ??= (async () => {
                     const config = await loadConfig(root);
-
-                    // Load the manifest using Vite's SSR loader
-                    // This allows us to load TS files directly and handle dependencies
                     const mod = await server.ssrLoadModule(VIRTUAL_SERVER_MANIFEST_ID);
-                    const registerAll = mod.registerAll;
-                    const httpHandlers = mod.httpHandlers || [];
-                    const seoMetadataHandlers = mod.seoMetadataHandlers || [];
-                    const pageRoutePatterns = mod.pageRoutePatterns || [];
-                    const middlewareHandler = mod.middlewareHandler || null;
-                    const workers = mod.workers || [];
-                    const ssrPages = mod.ssrPages || [];
-                    const appShell = mod.appShell || null;
+                    attachToDevServer(
+                        httpServer,
+                        (registry, httpRouter, seoRouter) => {
+                            mod.registerAll(registry);
+                            httpRouter.registerRoutes(mod.httpHandlers || []);
+                            seoRouter.registerRoutes(mod.seoMetadataHandlers || []);
+                            seoRouter.setPageRoutePatterns(mod.pageRoutePatterns || []);
+                            if (mod.middlewareHandler) {
+                                registry.setMiddleware(mod.middlewareHandler);
+                                httpRouter.setMiddleware(mod.middlewareHandler);
+                            }
+                        },
+                        config,
+                        mod.workers || [],
+                        mod.ssrPages || [],
+                        mod.appShell || null
+                    );
+                    initialized = true;
+                })();
+                return initialization;
+            };
 
-                    if (server.httpServer) {
-                        attachToDevServer(
-                            server.httpServer,
-                            (registry, httpRouter, seoRouter) => {
-                                registerAll(registry);
-                                httpRouter.registerRoutes(httpHandlers);
-                                seoRouter.registerRoutes(seoMetadataHandlers);
-                                seoRouter.setPageRoutePatterns(pageRoutePatterns);
-                                if (middlewareHandler) {
-                                    registry.setMiddleware(middlewareHandler);
-                                    httpRouter.setMiddleware(middlewareHandler);
-                                }
-                            },
-                            config,
-                            workers,
-                            ssrPages,
-                            appShell
-                        );
-                    }
-                } catch (e) {
-                    log("error", "Failed to attach Helium RPC server", e);
+            // Vite initializes plugin containers and dependency optimizers as it
+            // starts listening. Do not load the SSR manifest before that work.
+            // Requests accepted during loading must wait without reading bodies.
+            server.middlewares.use((req, res, next) => {
+                if (initialized) {
+                    next();
+                    return;
                 }
+                void initialize().then(
+                    () => {
+                        if (!res.destroyed && !res.writableEnded) {
+                            // The request entered Connect before Helium attached.
+                            // Dispatch it through the newly installed HTTP handler.
+                            // Its Connect fallback passes this gate immediately
+                            // because initialized is now true.
+                            httpServer.emit("request", req, res);
+                        }
+                    },
+                    () => {
+                        if (!res.destroyed && !res.writableEnded) {
+                            res.writeHead(503, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+                            res.end("Helium server initialization failed");
+                        }
+                    }
+                );
             });
+
+            // Native callers can start httpServer directly; the shared promise
+            // protects those requests too. Public Vite listen() must not resolve
+            // and advertise readiness until registration has completed.
+            httpServer.once("listening", () => {
+                void initialize().catch((error) => log("error", "Failed to attach Helium RPC server", error));
+            });
+            const listen = server.listen.bind(server);
+            server.listen = async (...args) => {
+                const listeningServer = await listen(...args);
+                await initialize();
+                return listeningServer;
+            };
         },
     };
 }
@@ -515,6 +545,21 @@ export async function callMethod() {
     throw new Error('callMethod is only available in the browser. Load server data with getServerSideProps instead.');
 }
 
+export function useStreaming() {
+    return {
+        chunks: [],
+        text: '',
+        isStreaming: false,
+        error: null,
+        stats: null,
+        start: async () => {
+            throw new Error('useStreaming.start is only available in the browser. Load server data with getServerSideProps instead.');
+        },
+        cancel: () => {},
+        reset: () => {},
+    };
+}
+
 export function useCall() {
     return {
         call: async () => null,
@@ -545,16 +590,6 @@ export function getPublicEnvValue(key) {
 export function isDevEnvironment() {
     return false;
 }
-
-export function getRpcTransport() {
-    return 'websocket';
-}
-
-export function isAutoHttpOnMobileEnabled() {
-    return false;
-}
-
-export function preconnect() {}
 
 export function isSSR() {
     return true;

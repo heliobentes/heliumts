@@ -2,12 +2,14 @@ import type http from "http";
 
 /**
  * Context passed to RPC method handlers.
- * Contains request information and metadata about the WebSocket connection.
+ * Contains request information and cancellation metadata.
  */
 export interface HeliumContext {
+    /** Aborted when the caller disconnects. Pass to upstream fetch/LLM providers. */
+    signal: AbortSignal;
     /**
-     * The HTTP request that initiated the WebSocket connection.
-     * Contains headers, client IP, and other connection metadata.
+     * The current HTTP request.
+     * Contains headers, client IP, and request metadata.
      */
     req: {
         /**
@@ -15,15 +17,15 @@ export interface HeliumContext {
          */
         ip: string;
         /**
-         * HTTP headers from the WebSocket upgrade request.
+         * HTTP request headers.
          */
         headers: http.IncomingHttpHeaders;
         /**
-         * The URL of the WebSocket connection request.
+         * The HTTP request URL.
          */
         url?: string;
         /**
-         * The HTTP method (typically 'GET' for WebSocket upgrades).
+         * The HTTP request method.
          */
         method?: string;
         /**

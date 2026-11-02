@@ -12,6 +12,7 @@ describe("context", () => {
             } as unknown as http.IncomingMessage;
 
             const ctx: HeliumContext = {
+                signal: new AbortController().signal,
                 req: {
                     ip: "192.168.1.1",
                     headers: { "user-agent": "test" },
@@ -35,6 +36,7 @@ describe("context", () => {
             } as unknown as http.IncomingMessage;
 
             const ctx: HeliumContext = {
+                signal: new AbortController().signal,
                 req: {
                     ip: "127.0.0.1",
                     headers: {},
@@ -53,6 +55,7 @@ describe("context", () => {
             } as unknown as http.IncomingMessage;
 
             const ctx: HeliumContext = {
+                signal: new AbortController().signal,
                 req: {
                     ip: "127.0.0.1",
                     headers: {},
@@ -70,6 +73,7 @@ describe("context", () => {
 
         it("should preserve headers from IncomingMessage", () => {
             const ctx: HeliumContext = {
+                signal: new AbortController().signal,
                 req: {
                     ip: "10.0.0.1",
                     headers: {
@@ -98,6 +102,7 @@ describe("context", () => {
             }
 
             const ctx: HeliumContext = {
+                signal: new AbortController().signal,
                 req: {
                     ip: "192.168.1.100",
                     headers: { authorization: "Bearer xyz" },
@@ -122,6 +127,7 @@ describe("context", () => {
             };
 
             const ctx: HeliumContext = {
+                signal: new AbortController().signal,
                 req: {
                     ip: "127.0.0.1",
                     headers: {},

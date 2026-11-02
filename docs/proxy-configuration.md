@@ -53,4 +53,4 @@ export const inspectClientIP = defineMethod(async (_args, ctx) => ({
 }));
 ```
 
-Both HTTP RPC and WebSocket RPC use the extracted IP. HTTP limits share a window per IP; WebSocket message windows are per connection, with a separate concurrent-connection limit per IP. `rpc.security.maxMessagesPerWindow: 0` disables message rate limits for both transports.
+Unary RPC and streamed methods use the extracted IP for a shared HTTP request window. One batch envelope or stream counts as one request. `rpc.security.maxRequestsPerWindow: 0` disables this limit.

@@ -1,6 +1,6 @@
 {
     "name": "heliumts",
-    "version": "0.9.7",
+    "version": "0.10.0",
     "description": "A lightweight full-stack React framework with file-based routing, RPC, and SSG support",
     "keywords": [
         "react",
@@ -88,8 +88,7 @@
     },
     "dependencies": {
         "@msgpack/msgpack": "^3.1.2",
-        "dotenv": "^17.2.3",
-        "ws": "^8.22.1"
+        "dotenv": "^17.2.3"
     },
     "files": [
         "dist"
@@ -100,7 +99,6 @@
         "@types/node": "^22.0.0",
         "@types/react": "^18.0.0 || ^19.0.0",
         "@types/react-dom": "^18.3.7 || ^19.0.0",
-        "@types/ws": "^8.18.1",
         "@typescript-eslint/eslint-plugin": "^8.47.0",
         "@typescript-eslint/parser": "^8.47.0",
         "@vitest/coverage-v8": "^4.1.12",

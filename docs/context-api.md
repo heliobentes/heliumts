@@ -2,12 +2,13 @@
 
 ## Overview
 
-Every RPC method and HTTP handler in Helium receives a `HeliumContext` object as the second parameter. This context provides access to request metadata, including the client IP, headers, and other connection information.
+Every RPC method and HTTP handler in Helium receives a `HeliumContext` object as the second parameter. This context provides access to request metadata, including the client IP, current HTTP headers, and an abort signal.
 
 ## Context Structure
 
 ```typescript
 interface HeliumContext {
+    signal: AbortSignal; // Aborted on request cancellation/disconnect
     req: {
         ip: string; // Client IP (respects trustProxyDepth config)
         headers: http.IncomingHttpHeaders; // Request headers
@@ -32,8 +33,8 @@ export const getClientInfo = defineMethod(async (args, ctx) => {
     const userAgent = ctx.req.headers["user-agent"];
     const acceptLanguage = ctx.req.headers["accept-language"];
 
-    // Access WebSocket upgrade request details
-    console.log("Connection URL:", ctx.req.url);
+    // Access the current HTTP request URL
+    console.log("Request URL:", ctx.req.url);
 
     return {
         ip: ctx.req.ip,
@@ -71,11 +72,7 @@ The `ctx.req.ip` field contains the client's IP address, extracted based on your
 ```typescript
 // helium.config.ts
 const config: HeliumConfig = {
-    rpc: {
-        security: {
-            trustProxyDepth: 1, // Trust one proxy level (e.g., Vercel)
-        },
-    },
+    trustProxyDepth: 1, // Trust one proxy level
 };
 ```
 
@@ -219,4 +216,6 @@ export const advancedHandler = defineMethod(async (args, ctx) => {
 });
 ```
 
-**Note**: For WebSocket connections, `ctx.req` contains the HTTP upgrade request that initiated the connection, not individual WebSocket messages.
+RPC handlers receive the actual `POST /__helium__/rpc` request; streamed handlers receive `POST /__helium__/stream`. Headers and cookies are read for each request.
+
+`ctx.signal` aborts when the caller disconnects or cancels. Pass it to upstream fetch/LLM requests and use `finally` to clean up resources. Cancellation requires the upstream operation to observe the signal; it cannot forcibly interrupt arbitrary application code.

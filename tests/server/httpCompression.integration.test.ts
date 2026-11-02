@@ -5,12 +5,8 @@ import fs from "fs";
 import http from "http";
 import os from "os";
 import path from "path";
-import { promisify } from "util";
 import { afterEach, expect, it } from "vitest";
-import WebSocket from "ws";
-import { gunzip } from "zlib";
 
-import type { HeliumCompressionConfig } from "../../src/server/config";
 import { attachToDevServer } from "../../src/server/devServer";
 import { startProdServer } from "../../src/server/prodServer";
 import type { RpcRegistry } from "../../src/server/rpcRegistry";
@@ -30,11 +26,11 @@ afterEach(async () => {
 
 const payload = Array.from({ length: 100 }, (_, index) => ({ id: index, description: "A dynamic RPC response with repeated data" }));
 
-async function startServer(mode: string, compression?: HeliumCompressionConfig) {
+async function startServer(mode: string) {
     const register = (registry: RpcRegistry) => {
         registry.register("payload", { __kind: "method", __id: "payload", handler: () => payload });
     };
-    const config = { rpc: { compression } };
+    const config = {};
     if (mode === "development") {
         server = http.createServer((_req, res) => {
             res.writeHead(404);
@@ -65,27 +61,3 @@ it.each(["development", "production"])("round-trips a Brotli HTTP RPC response t
     expect(result.headers.get("cache-control")).toBe("no-store");
     expect(decode(new Uint8Array(await result.arrayBuffer()))).toMatchObject({ id: mode, ok: true, result: payload });
 });
-
-for (const mode of ["development", "production"]) {
-    it.each([
-        { enabled: false, threshold: 0, compressed: false },
-        { enabled: true, threshold: 0, compressed: true },
-        { enabled: true, threshold: 1_000_000, compressed: false },
-    ])(`honors WebSocket compression in ${mode}: enabled=$enabled, threshold=$threshold`, async ({ enabled, threshold, compressed }) => {
-        const { base, token } = await startServer(mode, { enabled, threshold });
-        const socket = new WebSocket(`${base.replace("http:", "ws:")}/rpc`, token);
-        await once(socket, "open");
-        try {
-            expect(socket.extensions.includes("permessage-deflate")).toBe(enabled);
-            const response = once(socket, "message");
-            socket.send(encode({ id: mode, method: "payload" }));
-            const [body] = (await response) as [Buffer];
-            expect(body[0] === 0x1f && body[1] === 0x8b).toBe(compressed);
-            const decoded = decode(compressed ? await promisify(gunzip)(body) : body);
-            expect(decoded).toMatchObject({ id: mode, ok: true, result: payload });
-        } finally {
-            socket.terminate();
-            await once(socket, "close");
-        }
-    });
-}

@@ -257,6 +257,21 @@ export async function callMethod() {
     throw new Error('callMethod is only available in the browser. Load server data with getServerSideProps instead.');
 }
 
+export function useStreaming() {
+    return {
+        chunks: [],
+        text: '',
+        isStreaming: false,
+        error: null,
+        stats: null,
+        start: async () => {
+            throw new Error('useStreaming.start is only available in the browser. Load server data with getServerSideProps instead.');
+        },
+        cancel: () => {},
+        reset: () => {},
+    };
+}
+
 export function useCall() {
     return {
         call: async () => null,
@@ -287,16 +302,6 @@ export function getPublicEnvValue(key: string) {
 export function isDevEnvironment() {
     return false;
 }
-
-export function getRpcTransport() {
-    return 'websocket';
-}
-
-export function isAutoHttpOnMobileEnabled() {
-    return false;
-}
-
-export function preconnect() {}
 
 export function isSSR() {
     return true;

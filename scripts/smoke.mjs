@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
+import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -67,8 +68,8 @@ async function start(args, port) {
             throw new Error(output);
         }
         try {
-            const response = await fetch(`http://127.0.0.1:${port}/__helium__/page-props`);
-            if (response.ok) {
+            const response = await fetch(`http://127.0.0.1:${port}/__helium__/page-props`, { headers: { Accept: "application/json" } });
+            if (response.ok && response.headers.get("content-type")?.includes("application/json")) {
                 return;
             }
         } catch {}
@@ -89,6 +90,177 @@ async function stop() {
         }
     }
     child = undefined;
+}
+
+async function nextStreamFrame(reader, state) {
+    for (;;) {
+        if (state.bytes.length >= 4) {
+            const length = new DataView(state.bytes.buffer, state.bytes.byteOffset, state.bytes.byteLength).getUint32(0);
+            assert.ok(length > 0 && length <= 10 * 1024 * 1024, "Invalid streaming frame size");
+            if (state.bytes.length >= length + 4) {
+                const frame = decode(state.bytes.subarray(4, length + 4));
+                state.bytes = state.bytes.slice(length + 4);
+                return frame;
+            }
+        }
+        const { value, done } = await reader.read();
+        assert.equal(done, false, "Stream ended before the expected frame");
+        const combined = new Uint8Array(state.bytes.length + value.length);
+        combined.set(state.bytes);
+        combined.set(value, state.bytes.length);
+        state.bytes = combined;
+    }
+}
+
+async function checkStreaming(base, token, phase) {
+    const headers = { "X-Helium-Token": token, "Content-Type": "application/msgpack" };
+    const name = `${phase}-complete`;
+    const releaseFile = path.join(fixture, `stream-${name}-release`);
+    const cleanupFile = path.join(fixture, `stream-${name}-cleanup`);
+    const response = await fetch(`${base}/__helium__/stream`, {
+        method: "POST",
+        headers,
+        body: encode({ id: name, method: "streamed", args: { name } }),
+        signal: AbortSignal.timeout(5000),
+    });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type"), /^application\/x-helium-stream(?:;|$)/);
+    const reader = response.body.getReader();
+    const state = { bytes: new Uint8Array() };
+    try {
+        assert.deepEqual(await nextStreamFrame(reader, state), { type: "chunk", data: { text: "first", index: 0 } });
+        // The generator cannot finish until this file exists. Its first chunk
+        // arriving before file creation proves the response is not buffered.
+        assert.equal(fs.existsSync(cleanupFile), false);
+        assert.equal(fs.existsSync(releaseFile), false);
+        fs.writeFileSync(releaseFile, "release");
+        assert.deepEqual(await nextStreamFrame(reader, state), { type: "chunk", data: { text: "second", index: 1 } });
+        const done = await nextStreamFrame(reader, state);
+        assert.equal(done.type, "done");
+        assert.equal(typeof done.stats.remainingRequests, "number");
+        assert.equal((await reader.read()).done, true);
+        assert.equal(fs.existsSync(cleanupFile), true);
+    } finally {
+        reader.releaseLock();
+    }
+
+    const cancelName = `${phase}-cancel`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+        const cancelled = await fetch(`${base}/__helium__/stream`, {
+            method: "POST",
+            headers,
+            body: encode({ id: cancelName, method: "streamed", args: { name: cancelName } }),
+            signal: controller.signal,
+        });
+        assert.equal(cancelled.status, 200);
+        const cancelReader = cancelled.body.getReader();
+        assert.equal((await nextStreamFrame(cancelReader, { bytes: new Uint8Array() })).type, "chunk");
+        controller.abort();
+        await cancelReader.cancel().catch(() => {});
+        cancelReader.releaseLock();
+        const cancelledCleanup = path.join(fixture, `stream-${cancelName}-cleanup`);
+        const deadline = Date.now() + 2000;
+        while (!fs.existsSync(cancelledCleanup) && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        assert.equal(fs.existsSync(cancelledCleanup), true, "Cancelling the response must abort ctx.signal and run the generator finally block");
+    } finally {
+        clearTimeout(timeout);
+        controller.abort();
+    }
+}
+
+async function checkRpcUpgradeRejected(base, token) {
+    await new Promise((resolve, reject) => {
+        const request = http.request(new URL("/rpc", base), {
+            headers: {
+                Upgrade: "websocket",
+                Connection: "Upgrade",
+                "Sec-WebSocket-Key": "c21va2UtdGVzdC1vbmx5IQ==",
+                "Sec-WebSocket-Version": "13",
+                "Sec-WebSocket-Protocol": token,
+            },
+        });
+        request.on("response", (response) => {
+            response.resume();
+            try {
+                // With no application upgrade listener, Node may handle this as
+                // an ordinary HTTP request (including the app's HTML fallback).
+                assert.notEqual(response.statusCode, 101, "Legacy RPC WebSocket upgrades must not be accepted");
+                resolve();
+            } catch (error) {
+                reject(error);
+            }
+        });
+        request.on("upgrade", (_response, socket) => {
+            socket.destroy();
+            reject(new Error("Application RPC still accepts WebSocket upgrades"));
+        });
+        request.on("error", (error) => (error.code === "ECONNRESET" ? resolve() : reject(error)));
+        request.setTimeout(5000, () => request.destroy(new Error("Legacy upgrade did not finish")));
+        request.end();
+    });
+}
+
+async function checkStreamingShutdown(base, token) {
+    const response = await fetch(`${base}/__helium__/stream`, {
+        method: "POST",
+        headers: { "X-Helium-Token": token, "Content-Type": "application/msgpack" },
+        body: encode({ id: "shutdown", method: "streamed", args: { name: "shutdown" } }),
+        signal: AbortSignal.timeout(10_000),
+    });
+    assert.equal(response.status, 200);
+    const reader = response.body.getReader();
+    try {
+        assert.equal((await nextStreamFrame(reader, { bytes: new Uint8Array() })).type, "chunk");
+        const cleanupFile = path.join(fixture, "stream-shutdown-cleanup");
+        assert.equal(fs.existsSync(cleanupFile), false);
+        const stoppingChild = child;
+        // stop() has a five-second SIGKILL deadline. A clean zero exit proves
+        // shutdown did not leave this open provider waiting for its next yield.
+        await stop();
+        assert.equal(stoppingChild.exitCode, 0, "The CLI must exit gracefully with an active stream");
+        assert.equal(fs.existsSync(cleanupFile), true, "Shutdown must abort the provider and run its finally block before exit");
+    } finally {
+        await reader.cancel().catch(() => {});
+        reader.releaseLock();
+    }
+}
+
+async function checkViteHmr(base) {
+    const client = await (await fetch(`${base}/@vite/client`)).text();
+    const match = client.match(/const wsToken = ("[^"]+");/);
+    assert.ok(match, "Vite must expose its own HMR connection token");
+    const token = JSON.parse(match[1]);
+    await new Promise((resolve, reject) => {
+        const request = http.request(new URL(`/?token=${encodeURIComponent(token)}`, base), {
+            headers: {
+                Upgrade: "websocket",
+                Connection: "Upgrade",
+                "Sec-WebSocket-Key": "c21va2UtdGVzdC1vbmx5IQ==",
+                "Sec-WebSocket-Version": "13",
+                "Sec-WebSocket-Protocol": "vite-hmr",
+            },
+        });
+        request.on("upgrade", (response, socket) => {
+            socket.destroy();
+            try {
+                assert.equal(response.statusCode, 101);
+                resolve();
+            } catch (error) {
+                reject(error);
+            }
+        });
+        request.on("response", (response) => {
+            response.resume();
+            reject(new Error(`Vite HMR upgrade returned ${response.statusCode}`));
+        });
+        request.on("error", reject);
+        request.setTimeout(5000, () => request.destroy(new Error("Vite HMR upgrade did not finish")));
+        request.end();
+    });
 }
 
 try {
@@ -112,7 +284,7 @@ try {
     write("settings.ts", 'export const headerValue: string = "from-config-helper";');
     write(
         "helium.config.ts",
-        'import { headerValue } from "./settings.ts"; export default { rpc: { transport: "http" }, security: { headerOverrides: { "X-Smoke": headerValue } } };'
+        'import { headerValue } from "./settings.ts"; export default { rpc: { maxBatchSize: 2 }, security: { headerOverrides: { "X-Smoke": headerValue } } };'
     );
     write("public/health", "extensionless-static");
     write(
@@ -129,11 +301,11 @@ try {
     );
     write(
         "src/pages/index.tsx",
-        '"use ssg"; import React from "react"; import {callMethod,getPublicEnvValue,useRouter} from "heliumts/client"; import {echo} from "heliumts/server"; export default function Home(){return React.createElement("main",null,"static $& $$ "+getPublicEnvValue("HELIUM_PUBLIC_GREETING")+" "+useRouter().path,React.createElement("button",{onClick:()=>callMethod(echo,{value:"clicked"})},"SSG RPC button"));}'
+        '"use ssg"; import React from "react"; import {callMethod,getPublicEnvValue,useRouter,useStreaming} from "heliumts/client"; import {echo,streamed} from "heliumts/server"; export default function Home(){const stream=useStreaming(streamed);return React.createElement("main",null,"static $& $$ "+getPublicEnvValue("HELIUM_PUBLIC_GREETING")+" "+useRouter().path,React.createElement("button",{onClick:()=>callMethod(echo,{value:"clicked"})},"SSG RPC button"),React.createElement("button",{onClick:()=>stream.start({name:"click"})},"SSG streaming button"));}'
     );
     write(
         "src/pages/search.tsx",
-        '"use ssr"; import React from "react"; import {callMethod,useFetch} from "heliumts/client"; import {echo} from "heliumts/server"; export default function Search(props){useFetch(echo,{value:"unused"});return React.createElement("main",null,"SSR query:"+props.query,React.createElement("button",{onClick:()=>callMethod(echo,{value:"clicked"})},"SSR RPC button"));}'
+        '"use ssr"; import React from "react"; import {callMethod,useFetch,useStreaming} from "heliumts/client"; import {echo,streamed} from "heliumts/server"; export default function Search(props){useFetch(echo,{value:"unused"});const stream=useStreaming(streamed);return React.createElement("main",null,"SSR query:"+props.query,React.createElement("button",{onClick:()=>callMethod(echo,{value:"clicked"})},"SSR RPC button"),React.createElement("button",{onClick:()=>stream.start({name:"click"})},"SSR streaming button"));}'
     );
     write(
         "src/pages/search.server.ts",
@@ -144,12 +316,33 @@ try {
         'import {defineMethod,defineHTTPRequest} from "heliumts/server"; export const echo=defineMethod(async(args)=>args); export const failure=defineMethod(async()=>{throw new Error("private database detail")}); export const options=defineHTTPRequest("OPTIONS","/api/custom",()=>new Response("custom-options",{status:200}));'
     );
 
+    write(
+        "src/server/stream.ts",
+        `import fs from 'node:fs';
+import {defineMethod} from 'heliumts/server';
+export const streamed=defineMethod(async function* (args: {name: string},ctx){
+    try {
+        yield {text:'first',index:0};
+        await new Promise<void>((resolve)=>{
+            if(ctx.signal.aborted){resolve();return;}
+            const finish=()=>{clearInterval(timer);ctx.signal.removeEventListener('abort',finish);resolve();};
+            const timer=setInterval(()=>{if(fs.existsSync('stream-'+args.name+'-release'))finish();},10);
+            ctx.signal.addEventListener('abort',finish,{once:true});
+        });
+        if(!ctx.signal.aborted)yield {text:'second',index:1};
+    } finally {
+        fs.writeFileSync('stream-'+args.name+'-cleanup','done');
+    }
+});`
+    );
+
     const buildLogs = await command([cli, "build"], { HELIUM_PUBLIC_GREETING: "public-greeting", HELIUM_SECRET: "smoke-test-only-secret" });
     assert.ok(!buildLogs.includes("Failed to generate"), buildLogs);
     const staticHtml = fs.readFileSync(path.join(fixture, "dist/index.ssg.html"), "utf8");
     assert.match(staticHtml, /data-app="yes"/);
     assert.match(staticHtml, /data-layout="yes"/);
     assert.match(staticHtml, /SSG RPC button/);
+    assert.match(staticHtml, /SSG streaming button/);
     assert.match(staticHtml, /opacity:1;transition:opacity 150ms ease/);
     assert.match(staticHtml, /static \$&amp; \$\$ public-greeting/);
     assert.ok(!staticHtml.includes("Old sibling"), staticHtml);
@@ -166,6 +359,7 @@ try {
     assert.equal(rendered.headers.get("x-smoke"), "from-config-helper");
     assert.match(html, /SSR query:hello/);
     assert.match(html, /SSR RPC button/);
+    assert.match(html, /SSR streaming button/);
     assert.match(html, /data-app="yes"/);
     assert.ok(!html.includes("Old sibling"), html);
     assert.equal((await fetch(`${base}/search?fail=1`)).status, 500);
@@ -179,13 +373,27 @@ try {
         const result = decode(new Uint8Array(await response.arrayBuffer()));
         assert.deepEqual(method === "echo" ? result.result : result.error, method === "echo" ? "rpc-ok" : "Server error");
     }
+    await checkStreaming(base, token, "production");
+    await checkRpcUpgradeRejected(base, token);
     await stop();
 
     await start([cli, "start"], port);
     assert.equal((await fetch(base)).headers.get("x-smoke"), "from-config-helper");
+    const { token: shutdownToken } = await (await fetch(`${base}/__helium__/refresh-token`, { method: "POST", headers: { "X-Requested-With": "helium" } })).json();
+    await checkStreamingShutdown(base, shutdownToken);
+
+    fs.renameSync(path.join(fixture, "helium.config.ts.disabled"), path.join(fixture, "helium.config.ts"));
+    fs.renameSync(path.join(fixture, "settings.ts.disabled"), path.join(fixture, "settings.ts"));
+    await start([cli, "dev"], port);
+    const devHtml = await (await fetch(`${base}/search?q=development`)).text();
+    assert.match(devHtml, /SSR query:development/);
+    assert.match(devHtml, /SSR streaming button/);
+    const { token: devToken } = await (await fetch(`${base}/__helium__/refresh-token`, { method: "POST", headers: { "X-Requested-With": "helium" } })).json();
+    await checkStreaming(base, devToken, "development");
+    await checkViteHmr(base);
     await stop();
     console.log(
-        "Smoke checks passed: CLI build, SSG, SSR, callMethod handler imports, layouts, transitions, config helpers, public env, HTTP RPC, error privacy, custom OPTIONS, static assets, direct server, CLI start and dev in a path with spaces."
+        "Smoke checks passed: CLI build, SSG, SSR, callMethod/useStreaming handler imports, layouts, transitions, config helpers, public env, HTTP-only RPC, early streaming chunks, cancellation/finally, active-stream shutdown, error privacy, custom OPTIONS, static assets, direct server, CLI start/dev and Vite HMR in a path with spaces."
     );
 } catch (error) {
     console.error(output);

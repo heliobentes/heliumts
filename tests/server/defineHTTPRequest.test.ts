@@ -112,6 +112,7 @@ describe("defineHTTPRequest", () => {
             };
 
             const mockCtx: HeliumContext = {
+                signal: new AbortController().signal,
                 req: {
                     ip: "127.0.0.1",
                     headers: {},

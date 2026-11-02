@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.10.0
+
+- Use HTTP for all RPC calls and remove the framework WebSocket client, server, reconnection logic, transport detection, and direct socket dependencies. Vite HMR remains independent.
+- Add typed `useStreaming` for methods returning async iterables, with incremental text/structured chunks, start/cancel/reset, callbacks, idle timeouts, and stale-run protection.
+- Stream authenticated MessagePack frames with backpressure, bounded sizes, sanitized terminal errors, middleware, and cooperative upstream cancellation through `ctx.signal`.
+- Simplify `callMethod` to return `{ data, stats }` and obtain HTTP authorization tokens on demand. Network failures and server errors no longer replay calls automatically.
+- Remove transport comparison pages, fixtures, and marketing content; update the website, templates, and example with streaming demos.
+
+### Upgrade notes
+
+- Remove `rpc.transport`, `rpc.autoHttpOnMobile`, `rpc.compression`, `rpc.maxWsPayload`, and `rpc.security.maxConnectionsPerIP`; rename `maxMessagesPerWindow` to `maxRequestsPerWindow`.
+- Remove `getRpcTransport`, `isAutoHttpOnMobileEnabled`, `preconnect`, `RpcTransport`, `CallMethodOptions`, explicit transport arguments, and response `transport` reads.
+- RPC middleware now sees each HTTP POST with current cookies/headers. Rate limits are per-IP request windows; a batch envelope or stream counts as one request.
+- `HeliumContext.signal` is required; supply an AbortSignal in hand-written context fixtures and pass it through upstream operations.
+- Deploy the matching client and server builds together; cached older clients may still attempt the removed RPC socket endpoint.
+- See [streaming methods](./docs/streaming.md) for LLM/provider cancellation, partial errors, and deployment requirements.
+
 ## 0.9.7
 
 - Use Brotli quality 4 for dynamic HTTP RPC responses in development and production, avoiding maximum-quality compression on every request.

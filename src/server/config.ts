@@ -4,50 +4,18 @@ import path from "path";
 import { pathToFileURL } from "url";
 
 /**
- * WebSocket per-message compression configuration.
- * Uses the permessage-deflate extension to compress messages on the wire.
- */
-export interface HeliumCompressionConfig {
-    /**
-     * Enable WebSocket per-message compression (permessage-deflate extension).
-     * When enabled, messages are compressed before sending to reduce bandwidth usage.
-     *
-     * @default true
-     */
-    enabled?: boolean;
-
-    /**
-     * Minimum message size in bytes to apply compression.
-     * Messages smaller than this threshold will not be compressed to avoid overhead.
-     * Only applies when compression is enabled.
-     *
-     * @default 1024 (1KB)
-     */
-    threshold?: number;
-}
-
-/**
  * RPC security and rate limiting configuration.
- * Controls WebSocket connection limits, message rate limits, and token-based authentication.
+ * Controls per-IP HTTP request limits and token-based protection.
  */
 export interface HeliumRpcSecurityConfig {
     /**
-     * Maximum number of concurrent WebSocket connections allowed per IP address.
-     * Helps prevent a single client from exhausting connection resources.
-     * Set to 0 to disable this limit.
-     *
-     * @default 10
-     */
-    maxConnectionsPerIP?: number;
-
-    /**
-     * Maximum number of RPC messages allowed per connection within the time window.
-     * Helps prevent abuse by limiting message throughput per connection.
+     * Maximum number of HTTP RPC requests allowed per client IP within the time window.
+     * Helps prevent abuse by limiting HTTP request throughput per client.
      * Set to 0 to disable rate limiting.
      *
      * @default 100
      */
-    maxMessagesPerWindow?: number;
+    maxRequestsPerWindow?: number;
 
     /**
      * Time window in milliseconds for rate limiting.
@@ -58,7 +26,7 @@ export interface HeliumRpcSecurityConfig {
     rateLimitWindowMs?: number;
 
     /**
-     * WebSocket connection token validity duration in milliseconds.
+     * HTTP RPC token validity duration in milliseconds.
      * Tokens are generated server-side and must be used within this timeframe.
      * Shorter durations improve security but may cause issues with slow networks.
      *
@@ -123,8 +91,8 @@ export interface HeliumSecurityConfig {
 /**
  * Helium framework configuration.
  *
- * Configure your Helium application behavior including RPC transport settings,
- * compression, security, and proxy configuration for production deployments.
+ * Configure your Helium application behavior including HTTP RPC settings,
+ * security, and proxy configuration for production deployments.
  */
 export interface HeliumConfig {
     /**
@@ -156,7 +124,7 @@ export interface HeliumConfig {
      * **Security note:** Setting this too high can allow IP spoofing. Only trust as many
      * proxy levels as you actually have in your infrastructure.
      *
-     * This setting applies to both HTTP requests and WebSocket connections.
+     * This setting applies to HTTP requests.
      *
      * @default 0
      */
@@ -169,53 +137,11 @@ export interface HeliumConfig {
     security?: HeliumSecurityConfig;
 
     /**
-     * RPC transport configuration.
+     * HTTP RPC configuration.
      *
-     * Configure the WebSocket-based RPC layer including compression
-     * and security settings.
+     * Configure HTTP RPC request limits and security settings.
      */
     rpc?: {
-        /**
-         * Client-side transport mode for RPC calls.
-         *
-         * - `"websocket"` (default): Uses persistent WebSocket connection
-         *   - ✅ Lower latency for subsequent calls (connection reuse)
-         *   - ✅ Real-time bidirectional communication ready
-         *   - ⚠️ Higher initial connection overhead
-         *
-         * - `"http"`: Uses HTTP POST requests for each RPC call
-         *   - ✅ Better performance on mobile/cellular networks (HTTP/2 optimizations)
-         *   - ✅ No connection state to maintain
-         *   - ⚠️ Slightly higher per-request overhead on fast networks
-         *
-         * - `"auto"`: Automatically selects based on network conditions
-         *   - Uses HTTP on cellular/slow networks when `autoHttpOnMobile` is true
-         *   - Uses WebSocket on fast networks (WiFi, wired)
-         *
-         * @default "websocket"
-         */
-        transport?: "http" | "websocket" | "auto";
-
-        /**
-         * Automatically switch to HTTP transport on mobile/cellular networks.
-         *
-         * When enabled and `transport` is `"auto"`, the client will use HTTP
-         * instead of WebSocket on cellular connections (4G/LTE, 5G) and slow
-         * connections (2G, 3G). This improves performance on mobile networks
-         * where HTTP/2 is more efficient due to carrier network optimizations.
-         *
-         * @default false
-         */
-        autoHttpOnMobile?: boolean;
-
-        /**
-         * WebSocket per-message compression configuration.
-         *
-         * Enable and configure the permessage-deflate extension to compress
-         * messages on the wire, reducing bandwidth usage.
-         */
-        compression?: HeliumCompressionConfig;
-
         /**
          * RPC security and rate limiting configuration.
          *
@@ -239,27 +165,13 @@ export interface HeliumConfig {
          * @default 20
          */
         maxBatchSize?: number;
-
-        /**
-         * Maximum WebSocket message payload size in bytes.
-         * Messages exceeding this limit cause the connection to be closed.
-         *
-         * @default 1048576 (1 MB)
-         */
-        maxWsPayload?: number;
     };
 }
 
 const DEFAULT_RPC_SECURITY: Required<HeliumRpcSecurityConfig> = {
-    maxConnectionsPerIP: 10,
-    maxMessagesPerWindow: 100,
+    maxRequestsPerWindow: 100,
     rateLimitWindowMs: 60000,
     tokenValidityMs: 30000,
-};
-
-const DEFAULT_COMPRESSION: Required<HeliumCompressionConfig> = {
-    enabled: true,
-    threshold: 1024,
 };
 
 const cachedConfigs = new Map<string, HeliumConfig>();
@@ -351,7 +263,7 @@ export function getTrustProxyDepth(config: HeliumConfig = {}): number {
 
 /**
  * Get RPC security configuration with defaults applied.
- * Returns rate limiting, connection limits, and token settings.
+ * Returns HTTP rate limiting and token settings.
  *
  * @internal - Used by framework internals only
  */
@@ -359,62 +271,41 @@ export function getRpcSecurityConfig(config: HeliumConfig = {}): Required<Helium
     const src = config.rpc?.security;
 
     return {
-        maxConnectionsPerIP: src?.maxConnectionsPerIP ?? DEFAULT_RPC_SECURITY.maxConnectionsPerIP,
-        maxMessagesPerWindow: src?.maxMessagesPerWindow ?? DEFAULT_RPC_SECURITY.maxMessagesPerWindow,
+        maxRequestsPerWindow: src?.maxRequestsPerWindow ?? DEFAULT_RPC_SECURITY.maxRequestsPerWindow,
         rateLimitWindowMs: src?.rateLimitWindowMs ?? DEFAULT_RPC_SECURITY.rateLimitWindowMs,
         tokenValidityMs: src?.tokenValidityMs ?? DEFAULT_RPC_SECURITY.tokenValidityMs,
     };
 }
 
 /**
- * Get WebSocket compression configuration with defaults applied.
- *
- * @internal - Used by framework internals only
- */
-export function getCompressionConfig(config: HeliumConfig = {}): Required<HeliumCompressionConfig> {
-    const src = config.rpc?.compression;
-
-    return {
-        enabled: src?.enabled ?? DEFAULT_COMPRESSION.enabled,
-        threshold: src?.threshold ?? DEFAULT_COMPRESSION.threshold,
-    };
-}
-
-/**
- * Get complete RPC configuration including compression, and security.
+ * Get HTTP RPC configuration, including request limits and security.
  *
  * @internal - Used by framework internals only
  */
 export function getRpcConfig(config: HeliumConfig = {}) {
     return {
-        compression: getCompressionConfig(config),
         security: getRpcSecurityConfig(config),
         maxBodySize: config.rpc?.maxBodySize ?? 1_048_576,
         maxBatchSize: config.rpc?.maxBatchSize ?? 20,
-        maxWsPayload: config.rpc?.maxWsPayload ?? 1_048_576,
     };
 }
 
 /**
- * Client-side RPC transport configuration.
+ * Client-side HTTP RPC configuration.
  * This is injected into the client bundle at build time.
  */
-export interface RpcClientTransportConfig {
-    transport: "http" | "websocket" | "auto";
-    autoHttpOnMobile: boolean;
+export interface RpcClientConfig {
     tokenValidityMs: number;
 }
 
 /**
- * Get client-side RPC transport configuration.
+ * Get client-side HTTP RPC configuration.
  * This configuration is injected into the client bundle via Vite defines.
  *
  * @internal - Used by framework internals only
  */
-export function getRpcClientConfig(config: HeliumConfig = {}): RpcClientTransportConfig {
+export function getRpcClientConfig(config: HeliumConfig = {}): RpcClientConfig {
     return {
-        transport: config.rpc?.transport ?? "websocket",
-        autoHttpOnMobile: config.rpc?.autoHttpOnMobile ?? false,
         tokenValidityMs: getRpcSecurityConfig(config).tokenValidityMs,
     };
 }

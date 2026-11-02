@@ -1,6 +1,6 @@
 # Production deployment
 
-Helium's production build runs a persistent Node.js HTTP server with HTTP handlers, SSR, and HTTP/WebSocket RPC. Deploy `dist/server.js` to a host that runs Node.js and accepts WebSocket upgrades when using the WebSocket transport. Uploading `dist` to static hosting serves assets and generated pages, but does not run server methods or SSR.
+Helium's production build runs a persistent Node.js HTTP server with HTTP handlers, SSR, and HTTP RPC and streamed methods. Deploy `dist/server.js` to a host that runs Node.js and forwards incremental HTTP responses. Uploading `dist` to static hosting serves assets and generated pages, but does not run server methods or SSR.
 
 ## Build and start
 
@@ -78,10 +78,8 @@ import type { HeliumConfig } from "heliumts/server";
 export default {
     trustProxyDepth: 1,
     rpc: {
-        transport: "auto",
         security: {
-            maxConnectionsPerIP: 10,
-            maxMessagesPerWindow: 100,
+            maxRequestsPerWindow: 100,
             rateLimitWindowMs: 60_000,
         },
     },
@@ -90,9 +88,9 @@ export default {
 
 Use depth one only when that topology matches the deployment. See [proxy configuration](./proxy-configuration.md) for examples.
 
-HTTP RPC limits share an IP window; WebSocket message limits are per connection. The limiter is process-local. Shared quotas across multiple instances need enforcement outside this in-memory limiter. Background workers start in each server instance unless their application configuration disables them; account for that when scaling consumers or scheduled work.
+Unary RPC and streaming requests share a per-IP request window. The limiter is process-local. Shared quotas across multiple instances need enforcement outside this in-memory limiter. Background workers start in each server instance unless their application configuration disables them; account for that when scaling consumers or scheduled work.
 
-Configure the proxy to forward WebSocket upgrade headers and use appropriate connection timeouts. Even with HTTP RPC selected, the built application still needs its Node.js server for RPC handlers and SSR.
+Configure proxy idle timeouts for the expected stream duration and disable response buffering for streamed methods. Helium sends no-store/no-transform and X-Accel-Buffering headers; verify early chunks on the deployed host. The built application needs its Node.js server for RPC handlers and SSR.
 
 ## Docker example
 
@@ -128,6 +126,6 @@ Verify the actual built artifact after deployment:
 
 1. Load an SSG page and an SSR page directly, then navigate to each from another route.
 2. Confirm query parameters reach SSR props and private props are returned only to an authorized user.
-3. Test the configured RPC transport, custom HTTP callbacks, and all expected cookies.
+3. Test unary RPC, early streaming output, cancellation, custom HTTP callbacks, and all expected cookies.
 4. Check trusted client IP/protocol values behind the real proxy.
 5. Confirm HTML is not shared-cached across users, and verify worker start/shutdown behavior.

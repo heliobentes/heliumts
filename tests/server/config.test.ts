@@ -2,16 +2,7 @@ import fs from "fs";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-    clearConfigCache,
-    getCompressionConfig,
-    getRpcClientConfig,
-    getRpcConfig,
-    getRpcSecurityConfig,
-    getTrustProxyDepth,
-    type HeliumConfig,
-    loadConfig,
-} from "../../src/server/config";
+import { clearConfigCache, getRpcClientConfig, getRpcConfig, getRpcSecurityConfig, getTrustProxyDepth, type HeliumConfig, loadConfig } from "../../src/server/config";
 
 describe("config", () => {
     let existsSyncSpy: ReturnType<typeof vi.spyOn>;
@@ -39,157 +30,18 @@ describe("config", () => {
         });
     });
 
-    describe("getRpcSecurityConfig", () => {
-        it("should return defaults when no config provided", () => {
-            const result = getRpcSecurityConfig({});
-
-            expect(result).toEqual({
-                maxConnectionsPerIP: 10,
-                maxMessagesPerWindow: 100,
-                rateLimitWindowMs: 60000,
-                tokenValidityMs: 30000,
-            });
+    describe("HTTP RPC configuration", () => {
+        it("applies per-IP request and token defaults", () => {
+            expect(getRpcSecurityConfig()).toEqual({ maxRequestsPerWindow: 100, rateLimitWindowMs: 60000, tokenValidityMs: 30000 });
+            expect(getRpcSecurityConfig({ rpc: { security: { maxRequestsPerWindow: 3 } } }).maxRequestsPerWindow).toBe(3);
         });
-
-        it("should merge partial config with defaults", () => {
-            const config: HeliumConfig = {
-                rpc: {
-                    security: {
-                        maxConnectionsPerIP: 5,
-                    },
-                },
-            };
-
-            const result = getRpcSecurityConfig(config);
-
-            expect(result.maxConnectionsPerIP).toBe(5);
-            expect(result.maxMessagesPerWindow).toBe(100); // default
-            expect(result.rateLimitWindowMs).toBe(60000); // default
-            expect(result.tokenValidityMs).toBe(30000); // default
+        it("keeps request body and batch limits", () => {
+            expect(getRpcConfig()).toMatchObject({ maxBodySize: 1048576, maxBatchSize: 20 });
+            expect(getRpcConfig({ rpc: { maxBodySize: 512, maxBatchSize: 2 } })).toMatchObject({ maxBodySize: 512, maxBatchSize: 2 });
         });
-
-        it("should use all custom values when provided", () => {
-            const config: HeliumConfig = {
-                rpc: {
-                    security: {
-                        maxConnectionsPerIP: 5,
-                        maxMessagesPerWindow: 50,
-                        rateLimitWindowMs: 30000,
-                        tokenValidityMs: 15000,
-                    },
-                },
-            };
-
-            const result = getRpcSecurityConfig(config);
-
-            expect(result).toEqual({
-                maxConnectionsPerIP: 5,
-                maxMessagesPerWindow: 50,
-                rateLimitWindowMs: 30000,
-                tokenValidityMs: 15000,
-            });
-        });
-    });
-
-    describe("getCompressionConfig", () => {
-        it("should return defaults when no config provided", () => {
-            const result = getCompressionConfig({});
-
-            expect(result).toEqual({
-                enabled: true,
-                threshold: 1024,
-            });
-        });
-
-        it("should merge partial config with defaults", () => {
-            const config: HeliumConfig = {
-                rpc: {
-                    compression: {
-                        enabled: false,
-                    },
-                },
-            };
-
-            const result = getCompressionConfig(config);
-
-            expect(result.enabled).toBe(false);
-            expect(result.threshold).toBe(1024); // default
-        });
-
-        it("should use all custom values when provided", () => {
-            const config: HeliumConfig = {
-                rpc: {
-                    compression: {
-                        enabled: true,
-                        threshold: 2048,
-                    },
-                },
-            };
-
-            const result = getCompressionConfig(config);
-
-            expect(result).toEqual({
-                enabled: true,
-                threshold: 2048,
-            });
-        });
-    });
-
-    describe("getRpcConfig", () => {
-        it("should return both compression and security configs", () => {
-            const config: HeliumConfig = {
-                rpc: {
-                    compression: { enabled: false },
-                    security: { maxConnectionsPerIP: 5 },
-                },
-            };
-
-            const result = getRpcConfig(config);
-
-            expect(result.compression.enabled).toBe(false);
-            expect(result.security.maxConnectionsPerIP).toBe(5);
-        });
-    });
-
-    describe("getRpcClientConfig", () => {
-        it("should return default transport config", () => {
-            const result = getRpcClientConfig({});
-
-            expect(result).toEqual({
-                transport: "websocket",
-                autoHttpOnMobile: false,
-                tokenValidityMs: 30000,
-            });
-        });
-
-        it("should use http transport when configured", () => {
-            const config: HeliumConfig = {
-                rpc: {
-                    transport: "http",
-                    autoHttpOnMobile: true,
-                },
-            };
-
-            const result = getRpcClientConfig(config);
-
-            expect(result).toEqual({
-                transport: "http",
-                autoHttpOnMobile: true,
-                tokenValidityMs: 30000,
-            });
-        });
-
-        it("should use auto transport when configured", () => {
-            const config: HeliumConfig = {
-                rpc: {
-                    transport: "auto",
-                },
-            };
-
-            const result = getRpcClientConfig(config);
-
-            expect(result.transport).toBe("auto");
-            expect(result.tokenValidityMs).toBe(30000);
+        it("injects only token validity into the client", () => {
+            expect(getRpcClientConfig()).toEqual({ tokenValidityMs: 30000 });
+            expect(getRpcClientConfig({ rpc: { security: { tokenValidityMs: 60000 } } })).toEqual({ tokenValidityMs: 60000 });
         });
     });
 

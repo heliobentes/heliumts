@@ -7,7 +7,6 @@ describe("server index exports", () => {
         expect(serverModule.loadConfig).toBeDefined();
         expect(serverModule.getTrustProxyDepth).toBeDefined();
         expect(serverModule.getRpcSecurityConfig).toBeDefined();
-        expect(serverModule.getCompressionConfig).toBeDefined();
         expect(serverModule.getRpcConfig).toBeDefined();
         expect(serverModule.getRpcClientConfig).toBeDefined();
         expect(serverModule.clearConfigCache).toBeDefined();

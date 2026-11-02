@@ -9,7 +9,7 @@ HeliumTS provides `defineWorker` for creating long-running background processes 
 - Scheduled jobs and cron-like tasks
 - Real-time data synchronization
 - Cache warmers and data pre-loaders
-- WebSocket connection managers
+- External provider integrations
 
 Workers eliminate the need for separate microservices or monorepo setups like Turborepo - everything runs in the same process, sharing the same code, services, types, and models.
 
@@ -192,32 +192,25 @@ export const dailyCleanup = defineWorker(
 );
 ```
 
-### Real-time Data Sync
+### External Data Sync
+
+This worker polls an application-owned provider and observes cancellation during both the request and the wait:
 
 ```typescript
+import { setTimeout as delay } from "node:timers/promises";
 import { defineWorker } from "heliumts/server";
 
 export const priceSync = defineWorker(
-    (ctx) => {
-        const ws = new WebSocket("wss://api.exchange.com/prices");
-
-        ws.on("message", async (data) => {
-            const prices = JSON.parse(data.toString());
-            await updatePricesInDatabase(prices);
-            await notifySubscribers(prices);
-        });
-
-        ws.on("close", () => {
-            throw new Error("WebSocket connection closed");
-        });
-
-        return () => ws.close();
+    async (ctx) => {
+        while (!ctx.signal.aborted) {
+            const response = await fetch("https://api.example.com/prices", { signal: ctx.signal });
+            if (!response.ok) throw new Error(`Provider request failed: ${response.status}`);
+            const prices = await response.json();
+            await updatePricesInDatabase(prices); // Application function
+            await delay(5000, undefined, { signal: ctx.signal });
+        }
     },
-    {
-        name: "priceSync",
-        autoRestart: true,
-        restartDelayMs: 5000,
-    }
+    { name: "priceSync", autoRestart: true, restartDelayMs: 5000 }
 );
 ```
 

@@ -31,7 +31,7 @@ HeliumTS is a lightweight, opinionated full-stack React + Vite framework designe
 
 ## 1. Getting Started
 
-The current release is **0.9.7**. See the [changelog](./CHANGELOG.md) for fixes and upgrade notes.
+The current release is **0.10.0**. See the [changelog](./CHANGELOG.md) for fixes and upgrade notes.
 
 ### 1.1. Installation
 
@@ -100,7 +100,7 @@ vite.config.ts       # Vite configuration
 
 ## 3. Core Concepts
 
-Using HeliumTS makes it easy to build full-stack applications with minimal boilerplate. It removes the need for separate API routes and REST endpoints by enabling direct RPC calls from the client to server methods using websocket.
+Using HeliumTS makes it easy to build full-stack applications with minimal boilerplate. It removes the need for separate API routes and REST endpoints by enabling direct RPC calls from the client to server methods over HTTP.
 
 No more `Axios` or `fetch` calls! Just define your server methods and call them directly from your React components with full type safety.
 
@@ -153,6 +153,37 @@ export default function TasksPage() {
     );
 }
 ```
+
+### Streaming methods
+
+Use `defineMethod` with an async generator and consume it with `useStreaming`. The hook handles the HTTP stream and incremental output:
+
+```ts
+// src/server/answers.ts
+import { defineMethod } from "heliumts/server";
+
+export const answer = defineMethod(async function* ({ prompt }: { prompt: string }) {
+    yield "You asked: ";
+    yield prompt;
+});
+```
+
+```tsx
+import { useStreaming } from "heliumts/client";
+import { answer } from "heliumts/server";
+
+function Answer() {
+    const { text, isStreaming, error, start, cancel } = useStreaming(answer);
+    return <>
+        <button onClick={() => void start({ prompt: "Hello" })}>Generate</button>
+        <button disabled={!isStreaming} onClick={cancel}>Stop</button>
+        <pre>{text}</pre>
+        {error && <p role="alert">{error}</p>}
+    </>;
+}
+```
+
+Pass `ctx.signal` to upstream LLM requests for cooperative cancellation. See [streaming methods](./docs/streaming.md) for typed events, callbacks, errors, limits, and deployment guidance.
 
 ### 3.2. Routing
 
@@ -282,7 +313,7 @@ export default middleware(async (ctx, next) => {
 ```
 
 ### 3.6. helium.config.ts
-Helium's configuration file allows you to customize server settings including RPC encoding, compression, security, and proxy configuration.
+Helium's configuration file allows you to customize server settings including HTTP RPC limits, security, and proxy configuration.
 
 ```typescript
 import type { HeliumConfig } from "heliumts/server";
@@ -299,18 +330,11 @@ const config: HeliumConfig = {
         corsOrigins: ["https://app.example.com"],
     },
     rpc: {
-        encoding: "msgpack",  // or "json"
-        compression: {
-            enabled: true,
-            threshold: 1024,
-        },
         security: {
-            maxConnectionsPerIP: 10,
-            maxMessagesPerWindow: 100,
+            maxRequestsPerWindow: 100,
             rateLimitWindowMs: 60000,
             tokenValidityMs: 30000,
         },
-        maxWsPayload: 10_485_760, // 10 MB max WebSocket message size
         maxBodySize: 10_485_760,  // 10 MB max HTTP RPC body
         maxBatchSize: 50,
     },
@@ -411,7 +435,8 @@ See [SSR Documentation](./docs/ssr.md) for detailed information including sideca
 ### Core Features
 -   [Data Fetching](./docs/data-fetching.md) - useFetch and useCall hooks for data fetching and mutations
 -   [Routing & useRouter](./docs/routing.md) - File-based routing, dynamic routes, navigation, and the useRouter hook
--   [Configuration](./docs/helium-config.md) - Configure RPC encoding, compression, security, and proxy settings
+-   [Streaming](./docs/streaming.md) - Typed incremental results and LLM output
+-   [Configuration](./docs/helium-config.md) - Configure HTTP RPC limits, security, and proxy settings
 -   [Static Site Generation](./docs/ssg.md) - Pre-render pages at build time for better performance
 -   [Server-Side Rendering](./docs/ssr.md) - Render pages on the server per-request for SEO and dynamic data
 -   [Route Groups](./docs/route-groups.md) - Organize routes with shared layouts without affecting URLs

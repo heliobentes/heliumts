@@ -6,6 +6,7 @@ import { log } from "../utils/logger.js";
 import type { HeliumContext } from "./context.js";
 import type { HeliumHTTPDef, HTTPRequest } from "./defineHTTPRequest.js";
 import type { HeliumMiddleware } from "./middleware.js";
+import { getRequestSignal } from "./requestSignal.js";
 
 export interface HTTPRoute {
     name: string;
@@ -82,7 +83,7 @@ export class HTTPRouter {
                         }
                     }
                 }
-                const httpRequest = await createHTTPRequest(req, query, params, this.maxBodySize, this.trustProxyDepth);
+                const httpRequest = await createHTTPRequest(req, query, params, this.maxBodySize, this.trustProxyDepth, getRequestSignal(req, res));
 
                 let result: any;
                 // Build context with request metadata
@@ -96,6 +97,7 @@ export class HTTPRouter {
                         raw: req,
                     },
                     ...(ctx as Record<string, unknown>),
+                    signal: getRequestSignal(req, res),
                 };
 
                 // Execute middleware if present
@@ -214,7 +216,8 @@ async function createHTTPRequest(
     query: Record<string, string | string[]>,
     params: Record<string, string>,
     maxBodySize: number,
-    trustProxyDepth: number
+    trustProxyDepth: number,
+    signal: AbortSignal
 ): Promise<HTTPRequest> {
     const headers: Record<string, string | string[] | undefined> = {};
     for (const [key, value] of Object.entries(req.headers)) {
@@ -296,6 +299,7 @@ async function createHTTPRequest(
 
             return new Request(url, {
                 method: req.method,
+                signal,
                 headers: webHeaders,
                 body: requestBody,
             });

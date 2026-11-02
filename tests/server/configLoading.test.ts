@@ -20,9 +20,9 @@ describe("configuration file loading", () => {
     });
 
     it("loads TypeScript configuration and its local TypeScript helpers without a Node TypeScript loader", async () => {
-        fs.writeFileSync(path.join(root, "settings.ts"), 'export const transport: "http" = "http";');
-        fs.writeFileSync(path.join(root, "helium.config.ts"), 'import { transport } from "./settings.ts"; export default { rpc: { transport }, trustProxyDepth: 2 };');
-        expect(await loadConfig(root)).toEqual({ rpc: { transport: "http" }, trustProxyDepth: 2 });
+        fs.writeFileSync(path.join(root, "settings.ts"), "export const maxBatchSize: number = 5;");
+        fs.writeFileSync(path.join(root, "helium.config.ts"), 'import { maxBatchSize } from "./settings.ts"; export default { rpc: { maxBatchSize }, trustProxyDepth: 2 };');
+        expect(await loadConfig(root)).toEqual({ rpc: { maxBatchSize: 5 }, trustProxyDepth: 2 });
         expect(fs.readdirSync(root).filter((file) => file.startsWith(".helium-config-"))).toEqual([]);
     });
 

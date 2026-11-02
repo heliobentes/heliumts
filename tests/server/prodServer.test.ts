@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HeliumConfig } from "../../src/server/config";
 import { getSecurityHeaders } from "../../src/server/prodServer";
 
-// Note: prodServer.ts is a highly integrated module that creates HTTP and WebSocket servers.
+// Note: prodServer.ts is a highly integrated module that creates the HTTP server.
 // Full integration testing would require complex mocking that can become fragile.
 // Instead, we test the configuration and internal helper logic via the modules it uses.
 // The actual server behavior is best tested via E2E tests.
@@ -193,7 +193,7 @@ describe("prodServer", () => {
         });
     });
 
-    describe("WebSocket token endpoint", () => {
+    describe("HTTP token endpoint", () => {
         it("should have correct refresh-token endpoint path", () => {
             const endpoint = "/__helium__/refresh-token";
             expect(endpoint).toBe("/__helium__/refresh-token");
@@ -250,7 +250,27 @@ describe("prodServer", () => {
     });
 
     describe("static asset fallback prevention", () => {
-        const staticExtensions = new Set([".js", ".mjs", ".css", ".map", ".json", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".eot", ".webp", ".avif", ".mp4", ".webm"]);
+        const staticExtensions = new Set([
+            ".js",
+            ".mjs",
+            ".css",
+            ".map",
+            ".json",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".svg",
+            ".ico",
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".eot",
+            ".webp",
+            ".avif",
+            ".mp4",
+            ".webm",
+        ]);
 
         it("should identify .js files as static assets", () => {
             const ext = path.extname("/assets/vendor-BhNvX4lm.js").toLowerCase();

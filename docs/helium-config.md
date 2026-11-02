@@ -1,479 +1,112 @@
-# Helium Configuration
+# Helium configuration
 
-## Overview
+Place `helium.config.ts`, `helium.config.js`, or `helium.config.mjs` at the project root. RPC calls and streamed methods use HTTP. The same configuration applies during development and production.
 
-Helium's configuration file allows you to customize server settings, RPC behavior, security, and proxy configuration. The configuration file should be placed at the project root as `helium.config.ts`, `helium.config.js`, or `helium.config.mjs`.
-
-### Built-in Client Stale Recovery
-
-Helium includes a default client-side stale recovery mechanism (zero config). This behavior is always enabled when you use `heliumts/client`:
-
-- Tracks when a tab/app is backgrounded
-- On long suspend/resume cycles, triggers a safe hard reload to recover stale runtime state
-- On known chunk-load failures (for example after deploys), triggers a guarded hard reload
-- Applies a short reload cooldown to avoid reload loops
-
-No `helium.config` option is required for this protection.
-
-## Basic Configuration
-
-Create a `helium.config.ts` file in your project root:
-
-```typescript
+```ts
 import type { HeliumConfig } from "heliumts/server";
 
-const config: HeliumConfig = {
-    // Your configuration here
-};
-
-export default config;
-```
-
-## HTTP Security Headers
-
-Control Helium's default security headers and override specific headers when needed:
-
-```typescript
-import type { HeliumConfig } from "heliumts/server";
-
-const config: HeliumConfig = {
-        security: {
-                // Keep Helium defaults (X-Frame-Options, Referrer-Policy, etc.)
-                // Set to false for full manual control
-                defaultHeaders: true,
-
-                // Optional specific overrides applied last
-                headerOverrides: {
-                        "X-Frame-Options": "SAMEORIGIN",
-                        "Permissions-Policy": null, // null removes the header
-                        "X-Custom-Security": "enabled",
-                },
-
-                // Existing explicit options still supported
-                contentSecurityPolicy: "default-src 'self'; frame-ancestors 'self'",
-                hsts: true,
-                corsOrigins: ["https://app.example.com"],
-        },
-};
-
-export default config;
-```
-
-### Security Header Options
-
-- `security.defaultHeaders` (boolean): Apply Helium's built-in security headers
-    - Default: `true`
-    - Set to `false` to skip all default security headers
-
-- `security.headerOverrides` (Record<string, string | null>): Final header overrides
-    - String value: set/override header
-    - `null` value: remove header
-
-- `security.contentSecurityPolicy` (string): Add Content-Security-Policy header (when defaults are enabled)
-- `security.hsts` (boolean): Control Strict-Transport-Security (when defaults are enabled)
-- `security.corsOrigins` (string[]): Configure CORS allowlist
-
-## Configuration Options
-
-### RPC Configuration
-
-The `rpc` section configures WebSocket/HTTP communication, payload and batch limits, compression, and rate-limit windows.
-
-#### Transport Mode
-
-Configure the client-side transport for RPC calls:
-
-```typescript
-const config: HeliumConfig = {
-    rpc: {
-        transport: "websocket",    // "websocket" | "http" | "auto"
-        autoHttpOnMobile: false,   // Automatically use HTTP on mobile networks
-    },
-};
-```
-
-**Transport Options:**
-
-- **`"websocket"`** (default): Uses persistent WebSocket connection
-  - ✅ Lower latency for subsequent calls (connection reuse)
-  - ✅ Real-time bidirectional communication ready
-  - ⚠️ Higher initial connection overhead on high-latency networks
-
-- **`"http"`**: Uses HTTP POST requests for each RPC call
-  - ✅ Better performance on mobile/cellular networks (HTTP/2 optimizations)
-  - ✅ No connection state to maintain
-  - ⚠️ Slightly higher per-request overhead on fast networks
-
-- **`"auto"`**: Automatically selects based on device/network conditions
-    - Uses HTTP on all mobile devices when `autoHttpOnMobile` is `true`
-    - Uses HTTP on cellular/slow links for non-mobile devices
-    - Uses WebSocket on fast desktop networks (WiFi, wired)
-
-**Auto HTTP on Mobile:**
-
-When `autoHttpOnMobile` is enabled, the client will automatically use HTTP transport on mobile devices regardless of `transport` mode. For non-mobile devices, additional HTTP fallback applies when `transport` is `"auto"` on:
-- Any mobile device (including when connected to Wi-Fi)
-- Cellular connections (4G/LTE, 5G) on non-mobile devices
-- Slow connections (2G, 3G) on non-mobile devices
-
-This improves performance on mobile networks where HTTP/2 multiplexing is more efficient than WebSocket due to carrier network optimizations.
-
-```typescript
-// Optimize for mobile performance
-const config: HeliumConfig = {
-    rpc: {
-        transport: "auto",
-        autoHttpOnMobile: true,
-    },
-};
-```
-
-#### Compression
-
-Configure WebSocket per-message compression (permessage-deflate extension):
-
-```typescript
-const config: HeliumConfig = {
-    rpc: {
-        compression: {
-            enabled: true,     // Enable compression (default: true)
-            threshold: 1024,   // Minimum message size in bytes to compress (default: 1024)
-        },
-    },
-};
-```
-
-**Options:**
-
-- `enabled` (boolean): Enable WebSocket per-message compression
-  - Default: `true`
-  - When enabled, messages are compressed before sending to reduce bandwidth usage
-
-- `threshold` (number): Minimum message size in bytes to apply compression
-  - Default: `1024` (1 KB)
-  - Messages smaller than this threshold will not be compressed to avoid overhead
-  - Only applies when compression is enabled
-
-#### Security & Rate Limiting
-
-Configure connection limits, message rate limits, and token validity:
-
-```typescript
-const config: HeliumConfig = {
-    rpc: {
-        security: {
-            maxConnectionsPerIP: 10,        // Max concurrent WebSocket connections per IP
-            maxMessagesPerWindow: 100,      // Max RPC messages per connection per time window
-            rateLimitWindowMs: 60000,       // Time window for rate limiting (1 minute)
-            tokenValidityMs: 30000,         // WebSocket connection token validity (30 seconds)
-        },
-    },
-};
-```
-
-**Options:**
-
-- `maxConnectionsPerIP` (number): Maximum number of concurrent WebSocket connections allowed per IP address
-  - Default: `10`
-  - Helps prevent a single client from exhausting connection resources
-  - Set to `0` to disable this limit
-  - Uses the client IP extracted based on `trustProxyDepth` configuration
-
-- `maxMessagesPerWindow` (number): Maximum number of RPC envelopes within the time window: per WebSocket connection or per client IP for HTTP
-  - Default: `100`
-  - HTTP requests share an IP window; WebSocket messages share a connection window
-  - Set to `0` to disable rate limiting
-  - Resets after `rateLimitWindowMs`
-
-- `rateLimitWindowMs` (number): Time window in milliseconds for rate limiting
-  - Default: `60000` (1 minute)
-  - Rate limits reset after this duration
-  - Lower values = stricter rate limiting, higher values = more permissive
-
-- `tokenValidityMs` (number): WebSocket connection token validity duration in milliseconds
-  - Default: `30000` (30 seconds)
-  - Tokens are generated server-side and must be used within this timeframe
-  - Shorter durations improve security but may cause issues with slow networks
-  - If a client takes longer than this to connect, the token expires and connection fails
-
-#### Payload Limits
-
-Configure maximum payload sizes for RPC requests and WebSocket messages:
-
-```typescript
-const config: HeliumConfig = {
-        rpc: {
-                maxWsPayload: 10_485_760, // 10 MB max WebSocket message size
-                maxBodySize: 10_485_760,  // 10 MB max HTTP RPC request body
-                maxBatchSize: 50,         // Max RPC calls per batch
-        },
-};
-```
-
-**Options:**
-
-- `maxWsPayload` (number): Maximum WebSocket message payload size in bytes
-    - Default: `1048576` (1 MB)
-    - Increase this for large binary uploads over WebSocket
-
-- `maxBodySize` (number): Maximum HTTP RPC request body size in bytes
-    - Default: `1048576` (1 MB)
-    - Applies to the `POST /__helium__/rpc` endpoint
-
-- `maxBatchSize` (number): Maximum number of RPC calls in a single batch
-    - Default: `20`
-    - Helps prevent oversized batch payloads
-
-### Proxy Configuration
-
-Configure IP detection for deployments behind proxies, load balancers, or CDNs.
-
-```typescript
-const config: HeliumConfig = {
-    trustProxyDepth: 1, // Trust 1 proxy level
-};
-```
-
-The `trustProxyDepth` setting tells Helium how many proxy levels to trust when extracting client IPs from headers like `X-Forwarded-For`. This is crucial for rate limiting and connection limits to work correctly.
-
-**Values:**
-
-- `0` (default): Don't trust any proxies, use direct connection IP
-  - Most secure for local development
-  - Use when not behind any proxies
-
-- `1`: Trust 1 proxy level
-  - Recommended for most production platforms (Vercel, Netlify, Railway)
-  - Use when behind one proxy/load balancer
-
-- `2+`: Trust multiple proxy levels
-  - For complex setups like Cloudflare → Load Balancer → Your Server
-  - Only trust as many proxy levels as you actually have
-
-**Common configurations:**
-
-```typescript
-// Local development
-trustProxyDepth: 0
-
-// Vercel/Netlify/Railway
-trustProxyDepth: 1
-
-// Cloudflare → Your server
-trustProxyDepth: 1
-
-// Cloudflare → Nginx → Node.js
-trustProxyDepth: 2
-
-// AWS ALB → EC2
-trustProxyDepth: 1
-```
-
-**Security note:** Setting this too high can allow IP spoofing. Only trust as many proxy levels as you actually have in your infrastructure.
-
-See [Proxy Configuration](./proxy-configuration.md) for detailed information about IP detection.
-
-## Complete Example
-
-Here's a complete configuration example with all options:
-
-```typescript
-import type { HeliumConfig } from "heliumts/server";
-
-const config: HeliumConfig = {
-    // Trust 1 proxy level (e.g., Vercel)
-    trustProxyDepth: 1,
-
-    // RPC configuration
-    rpc: {
-        // Client-side transport mode
-        transport: "websocket",    // Default: WebSocket for lowest latency
-        autoHttpOnMobile: false,   // Set to true to optimize for mobile networks
-
-        // Enable compression for messages over 1KB
-        compression: {
-            enabled: true,
-            threshold: 1024,
-        },
-
-        // Security and rate limiting
-        security: {
-            maxConnectionsPerIP: 10,
-            maxMessagesPerWindow: 100,
-            rateLimitWindowMs: 60000,
-            tokenValidityMs: 30000,
-        },
-
-        // Payload limits
-        maxWsPayload: 10_485_760,
-        maxBodySize: 10_485_760,
-        maxBatchSize: 50,
-    },
-};
-
-export default config;
-```
-
-## Environment-Specific Configuration
-
-You can use environment variables to adjust configuration based on the deployment environment:
-
-```typescript
-import type { HeliumConfig } from "heliumts/server";
-
-const isDevelopment = process.env.NODE_ENV === "development";
-const isProduction = process.env.NODE_ENV === "production";
-
-const config: HeliumConfig = {
-    trustProxyDepth: isProduction ? 1 : 0,
-
-    rpc: {
-        compression: {
-            enabled: isProduction,
-            threshold: 1024,
-        },
-
-        security: {
-            maxConnectionsPerIP: isDevelopment ? 100 : 10,
-            maxMessagesPerWindow: isDevelopment ? 1000 : 100,
-            rateLimitWindowMs: 60000,
-            tokenValidityMs: 30000,
-        },
-    },
-};
-
-export default config;
-```
-
-## Production Deployment
-
-### Automatic Transpilation
-
-During `helium build`, the framework selects `helium.config.js`, `helium.config.mjs`, or `helium.config.ts` in that order and bundles it to `dist/helium.config.js`. Local imports are included in the bundle so they continue to work after the config moves to `dist`; package dependencies remain external.
-
-Both `helium start` and `node dist/server.js` load the config from the build directory first, then fall back to the project root. You can override the search directory with `HELIUM_CONFIG_DIR`. A config build or evaluation error fails the build or startup instead of silently using default settings.
-
-### Manual Conversion
-
-If you prefer using `.js` config files without transpilation:
-
-```bash
-# Rename to .js
-mv helium.config.ts helium.config.js
-```
-
-Then update the syntax to JavaScript:
-
-```javascript
-// helium.config.js
 export default {
-    trustProxyDepth: 1,
-    rpc: {
-        compression: {
-            enabled: true,
-            threshold: 1024,
-        },
-        security: {
-            maxConnectionsPerIP: 10,
-            maxMessagesPerWindow: 100,
-            rateLimitWindowMs: 60000,
-            tokenValidityMs: 30000,
-        },
-    },
-};
-```
-
-See [Production Deployment](./production-deployment.md) for more deployment details.
-
-## Configuration Loading
-
-The framework loads configuration in the following order:
-
-1. Checks for `HELIUM_CONFIG_DIR` environment variable
-2. Looks for config files in priority order:
-   - `helium.config.js`
-   - `helium.config.mjs`
-   - `helium.config.ts` (bundled with esbuild before loading, including local TypeScript imports)
-3. Falls back to default configuration if no file is found
-
-Configuration must have an object as its default export. A file that exists but fails to load produces an error; defaults apply only when no config file exists.
-
-Configuration is cached per project and config directory. The development server reloads it when the config file changes.
-
-## Default Values
-
-If you don't provide a configuration file, Helium uses these defaults:
-
-```typescript
-{
     trustProxyDepth: 0,
     rpc: {
-        compression: {
-            enabled: true,
-            threshold: 1024,
-        },
+        maxBodySize: 1_048_576,
+        maxBatchSize: 20,
         security: {
-            maxConnectionsPerIP: 10,
-            maxMessagesPerWindow: 100,
-            rateLimitWindowMs: 60000,
-            tokenValidityMs: 30000,
+            maxRequestsPerWindow: 100,
+            rateLimitWindowMs: 60_000,
+            tokenValidityMs: 30_000,
         },
     },
-}
+} satisfies HeliumConfig;
 ```
 
-## Troubleshooting
+## RPC limits
 
-### Config file not loading in production
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `rpc.maxBodySize` | 1,048,576 bytes | Maximum encoded HTTP RPC or streaming request body; larger requests receive 413. |
+| `rpc.maxBatchSize` | 20 | Maximum method calls in one ordinary RPC envelope. The client splits larger concurrent groups. Streaming calls use separate requests. |
+| `rpc.security.maxRequestsPerWindow` | 100 | HTTP RPC requests per client IP in a rate-limit window. One batch envelope or one stream counts as one request. Set 0 to disable the limit. |
+| `rpc.security.rateLimitWindowMs` | 60,000 ms | Length of the rate-limit window. |
+| `rpc.security.tokenValidityMs` | 30,000 ms | Lifetime of the framework's signed request token. Clients obtain tokens on demand and refresh once after an unauthorized response. |
 
-**Symptoms:**
-- Settings not being applied
-- Rate limiting using default values
+Tokens protect the framework endpoint; application authorization belongs in method handlers or [middleware](./middleware.md). A token is not an authenticated user session.
 
-**Solutions:**
-1. Ensure you ran `helium build` before deploying
-2. Check that `dist/helium.config.js` exists after build
-3. Verify you're running from the correct directory (where `dist/` exists)
-4. Ensure `HELIUM_CONFIG_DIR` environment variable isn't incorrectly set
+Ordinary RPC responses negotiate Brotli, gzip, or deflate through `Accept-Encoding`. Compression is handled by the framework without a transport or compression setting. Streaming responses are sent incrementally without whole-response compression; each encoded stream frame is capped at 10 MiB. The client hook has a configurable idle timeout; see [streaming](./streaming.md).
 
-### Error: "Unknown file extension .ts"
+The in-memory request limiter is process-local. Multiple instances need an external shared limiter for global quotas. Users behind a NAT can share an IP; choose limits that fit the application and configure proxy trust correctly.
 
-**Symptoms:**
-- Production server fails to start
-- Error mentions `.ts` extension
+## Proxy configuration
 
-**Solutions:**
-1. Ensure your config was transpiled during build: `helium build` should create `dist/helium.config.js`
-2. Alternatively, rename your config to `.js` or `.mjs` and use JavaScript syntax
-3. Check that the build process completed successfully
+`trustProxyDepth` defaults to 0. Forwarding headers are ignored at depth zero. Set the exact number of trusted proxy hops between the browser and the Node server; depth 1 fits a single trusted reverse proxy.
 
-### Rate limiting not working as expected
+```ts
+import type { HeliumConfig } from "heliumts/server";
 
-**Symptoms:**
-- Users being rate limited too aggressively or not at all
-- All users sharing the same limits
+export default {
+    trustProxyDepth: 1,
+} satisfies HeliumConfig;
+```
 
-**Solutions:**
-1. Verify `trustProxyDepth` is configured correctly for your deployment
-2. Check that your proxy is setting the `X-Forwarded-For` header
-3. Review the `maxConnectionsPerIP` and `maxMessagesPerWindow` settings
-4. Ensure you're not setting limits to `0` (which disables them)
+Helium selects forwarded IPs from the right, counting the direct peer as the first trusted hop. The proxy must overwrite provider-specific IP and protocol headers. See [proxy configuration](./proxy-configuration.md) for topology examples.
 
-See [Proxy Configuration](./proxy-configuration.md) for detailed IP detection troubleshooting.
+## HTTP security headers
 
-## Best Practices
+```ts
+import type { HeliumConfig } from "heliumts/server";
 
-1. **Use TypeScript for type safety**: The `HeliumConfig` type provides autocomplete and type checking
-2. **Environment-specific settings**: Use environment variables to adjust settings per environment
-3. **Start with defaults**: Only configure what you need to change from the defaults
-4. **Monitor rate limits**: Adjust `maxMessagesPerWindow` based on your application's needs
-5. **Test proxy configuration**: Use the Context API to verify IP detection is working correctly
-6. **Enable compression**: Reduces bandwidth usage for large messages
-7. **Set appropriate token validity**: Balance security (shorter) vs. network reliability (longer)
+export default {
+    security: {
+        defaultHeaders: true,
+        headerOverrides: {
+            "X-Frame-Options": "SAMEORIGIN",
+            "Permissions-Policy": null,
+            "X-Application": "example",
+        },
+        contentSecurityPolicy: "default-src 'self'; frame-ancestors 'self'",
+        hsts: true,
+        corsOrigins: ["https://app.example.com"],
+    },
+} satisfies HeliumConfig;
+```
 
-## Related Documentation
+- `security.defaultHeaders` defaults to `true`. Set it to `false` for full manual header control.
+- `security.headerOverrides` runs last. A string sets a header; `null` removes it.
+- `security.contentSecurityPolicy` adds the supplied CSP when default headers are enabled.
+- `security.hsts` defaults to `true` when default headers are enabled.
+- `security.corsOrigins` defaults to an empty list for same-origin requests. Configure explicit allowed origins when required.
 
-- [Proxy Configuration](./proxy-configuration.md) - Detailed guide on IP detection and proxy trust depth
-- [Production Deployment](./production-deployment.md) - Deploy to production platforms
-- [Context API](./context-api.md) - Access request metadata including client IPs
-- [Rate Limiting](./context-api.md#rate-limiting-by-ip) - Implement custom rate limiting
+## Environment-specific settings
+
+```ts
+import type { HeliumConfig } from "heliumts/server";
+
+const production = process.env.NODE_ENV === "production";
+
+export default {
+    trustProxyDepth: production ? 1 : 0,
+    rpc: {
+        security: {
+            maxRequestsPerWindow: production ? 100 : 1000,
+            rateLimitWindowMs: 60_000,
+        },
+    },
+} satisfies HeliumConfig;
+```
+
+Use a positive proxy depth only when that topology matches the deployment.
+
+## Configuration loading and production builds
+
+The loader checks `helium.config.js`, `helium.config.mjs`, then `helium.config.ts`. A config must default-export an object. Defaults apply when no file exists; a config that exists but fails to build or evaluate produces an error.
+
+`helium build` bundles the config and local imports into `dist/helium.config.js`; package dependencies remain external. Both `helium start` and `node dist/server.js` load the built configuration first, then fall back to the project root. `HELIUM_CONFIG_DIR` overrides the search directory. Configuration is cached per project/config directory; development reloads it when the config changes.
+
+See [production deployment](./production-deployment.md) for environment variables, proxies, and scaling.
+
+## Client recovery
+
+Helium's client detects stale chunks and long background suspensions and uses guarded reload recovery when needed. This behavior needs no config option. HTTP RPC authorization tokens are fetched on demand, with no persistent connection or periodic refresh timer.
+
+## Upgrading to 0.10
+
+Remove `rpc.transport`, `rpc.autoHttpOnMobile`, `rpc.compression`, `rpc.maxWsPayload`, and `rpc.security.maxConnectionsPerIP`. Rename `maxMessagesPerWindow` to `maxRequestsPerWindow` and review its per-IP request semantics. These obsolete settings no longer select a transport or configure socket behavior.

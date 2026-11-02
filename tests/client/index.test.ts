@@ -37,11 +37,6 @@ describe("client index exports", () => {
         expect(clientModule.useFetch).toBeDefined();
     });
 
-    it("should export getRpcTransport", async () => {
-        const clientModule = await import("../../src/client/index");
-        expect(clientModule.getRpcTransport).toBeDefined();
-    });
-
     it("should export getPublicEnv", async () => {
         const clientModule = await import("../../src/client/index");
         expect(clientModule.getPublicEnv).toBeDefined();
@@ -52,13 +47,9 @@ describe("client index exports", () => {
         expect(clientModule.getPublicEnvValue).toBeDefined();
     });
 
-    it("should export isAutoHttpOnMobileEnabled", async () => {
+    it("should export useStreaming and callMethod", async () => {
         const clientModule = await import("../../src/client/index");
-        expect(clientModule.isAutoHttpOnMobileEnabled).toBeDefined();
-    });
-
-    it("should export preconnect", async () => {
-        const clientModule = await import("../../src/client/index");
-        expect(clientModule.preconnect).toBeDefined();
+        expect(clientModule.useStreaming).toBeTypeOf("function");
+        expect(clientModule.callMethod).toBeTypeOf("function");
     });
 });

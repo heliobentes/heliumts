@@ -36,7 +36,7 @@ describe("Vite and static generation regressions", () => {
     });
 
     it("loads config and env from Vite's root and mode before configResolved", async () => {
-        const loadConfig = vi.spyOn(configModule, "loadConfig").mockResolvedValue({ rpc: { maxBatchSize: 2 } });
+        const loadConfig = vi.spyOn(configModule, "loadConfig").mockResolvedValue({ rpc: { maxBatchSize: 2, security: { tokenValidityMs: 45000 } } });
         const loadEnvFiles = vi.spyOn(envModule, "loadEnvFiles").mockReturnValue({});
         const plugin = helium();
         const result = await getHook(plugin, "config")({ root, appType: "custom" }, { mode: "staging", command: "build" });
@@ -46,6 +46,9 @@ describe("Vite and static generation regressions", () => {
         expect(result.appType).toBe("custom");
         expect(result.define.__HELIUM_DEV__).toBe("false");
         expect(result.define.__HELIUM_RPC_MAX_BATCH_SIZE__).toBe("2");
+        expect(result.define.__HELIUM_RPC_TOKEN_VALIDITY_MS__).toBe("45000");
+        expect(result.define).not.toHaveProperty("__HELIUM_RPC_TRANSPORT__");
+        expect(result.define).not.toHaveProperty("__HELIUM_RPC_AUTO_HTTP_ON_MOBILE__");
     });
 
     it("returns the inserted root along with the generated entry script", () => {
@@ -85,7 +88,7 @@ describe("Vite and static generation regressions", () => {
         expect(getHook(plugin, "transform")("const token = 'private';", `${root}/src/server/secret.ts`, { ssr: true })).toBeUndefined();
     });
 
-    it("loads callMethod imports in SSR event handlers without attempting server-side RPC", async () => {
+    it("loads browser RPC and streaming handlers during SSR without attempting server-side RPC", async () => {
         const plugin = helium();
         const id = getHook(plugin, "resolveId")("heliumts/client", undefined, { ssr: true });
         const code = getHook(plugin, "load")(id);
@@ -99,6 +102,26 @@ describe("Vite and static generation regressions", () => {
         expect(html).toContain("Call method");
         expect(fetch).not.toHaveBeenCalled();
         await expect(loaded.callMethod({ __id: "echo" }, {})).rejects.toThrow("only available in the browser");
+        const stream = loaded.useStreaming({ __id: "streamText" });
+        expect(stream).toEqual({
+            chunks: [],
+            text: "",
+            isStreaming: false,
+            error: null,
+            stats: null,
+            start: expect.any(Function),
+            cancel: expect.any(Function),
+            reset: expect.any(Function),
+        });
+        expect(renderToString(React.createElement("button", { onClick: () => stream.start({}) }, "Stream method"))).toContain("Stream method");
+        await expect(stream.start({})).rejects.toThrow("useStreaming.start is only available in the browser");
+        expect(() => {
+            stream.cancel();
+            stream.reset();
+        }).not.toThrow();
+        expect(loaded).not.toHaveProperty("getRpcTransport");
+        expect(loaded).not.toHaveProperty("isAutoHttpOnMobileEnabled");
+        expect(loaded).not.toHaveProperty("preconnect");
         expect(fetch).not.toHaveBeenCalled();
     });
 

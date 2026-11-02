@@ -5,7 +5,7 @@ import { SEO_METADATA_RPC_METHOD } from "../runtime/internalMethods.js";
 import { isDevEnvironment } from "./env.js";
 import type { RouteEntry } from "./routerManifest.js";
 import { buildRoutes } from "./routerManifest.js";
-import { isAutoHttpOnMobileEnabled, isMobileRpcDevice, rpcCallWithOptions } from "./rpcClient.js";
+import { rpcCall } from "./rpcClient.js";
 
 type HeliumSSRBootstrap = {
     path: string;
@@ -673,13 +673,7 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
                     return;
                 }
 
-                const result = await rpcCallWithOptions<ClientSocialMeta | null, { path: string }>(
-                    SEO_METADATA_RPC_METHOD,
-                    { path: targetPath },
-                    {
-                        forceHttp: isAutoHttpOnMobileEnabled() && isMobileRpcDevice(),
-                    }
-                );
+                const result = await rpcCall<ClientSocialMeta | null, { path: string }>(SEO_METADATA_RPC_METHOD, { path: targetPath });
 
                 if (controller.signal.aborted) {
                     return;
