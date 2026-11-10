@@ -17,7 +17,7 @@ describe("scanner", () => {
         existsSyncSpy = vi.spyOn(fs, "existsSync");
         readdirSyncSpy = vi.spyOn(fs, "readdirSync");
         statSyncSpy = vi.spyOn(fs, "statSync");
-        readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+        readFileSyncSpy = vi.spyOn(fs, "readFileSync").mockReturnValue("");
     });
 
     afterEach(() => {

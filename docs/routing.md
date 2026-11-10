@@ -649,13 +649,15 @@ export default function UnsavedChangesGuard() {
 
 ## Complete Examples
 
+The RPC imports in these examples use the generated module from HeliumTS 0.11.0. [Upgrade notes](../CHANGELOG.md#upgrade-notes)
+
 ### Blog with Dynamic Routes
 
 ```tsx
 // src/pages/blog/[slug].tsx
 import { useRouter } from "heliumts/client";
 import { useFetch } from "heliumts/client";
-import { getBlogPost } from "heliumts/server";
+import { getBlogPost } from "../../rpc.generated";
 
 export default function BlogPostPage() {
     const router = useRouter();
@@ -681,7 +683,7 @@ export default function BlogPostPage() {
 // src/pages/search.tsx
 import { useRouter } from "heliumts/client";
 import { useFetch } from "heliumts/client";
-import { searchProducts } from "heliumts/server";
+import { searchProducts } from "../rpc.generated";
 
 export default function SearchPage() {
     const router = useRouter();

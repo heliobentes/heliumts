@@ -7,6 +7,8 @@ import { RpcError } from "../../src/client/RpcError";
 import { useFetch } from "../../src/client/useFetch";
 
 // Mock rpcClient
+import { methodReference } from "./methodReference";
+
 vi.mock("../../src/client/rpcClient", () => ({
     rpcCall: vi.fn(),
 }));
@@ -26,7 +28,7 @@ vi.mock("../../src/client/cache", () => ({
 }));
 
 describe("useFetch", () => {
-    const mockMethod = { __kind: "method" as const, __id: "testMethod", handler: (_args: unknown) => undefined };
+    const mockMethod = methodReference("testMethod");
     const mockRpcCall = rpcCall as ReturnType<typeof vi.fn>;
     const mockHas = has as ReturnType<typeof vi.fn>;
     const mockGet = get as ReturnType<typeof vi.fn>;

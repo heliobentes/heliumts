@@ -1,6 +1,8 @@
 # Data Fetching
 
-HeliumTS provides `useFetch` for queries, `useCall` for mutations, and [`useStreaming`](./streaming.md) for incremental results. All RPC calls use HTTP. Import method stubs from `heliumts/server` in client components; keep their implementations in `src/server`.
+HeliumTS provides `useFetch` for queries, `useCall` for mutations, and `useStreaming` for incremental results. All RPC calls use HTTP. Import client method references from `src/rpc.generated.ts` and keep implementations in `src/server`. [Streaming methods](./streaming.md)
+
+The generated module is part of HeliumTS 0.11.0. [Upgrade notes](../CHANGELOG.md#upgrade-notes)
 
 ## Public errors in production
 
@@ -28,8 +30,9 @@ The `useFetch` hook automatically fetches data from a server method and caches t
 ### Basic Usage
 
 ```tsx
+// src/pages/tasks.tsx
 import { useFetch } from "heliumts/client";
-import { getTasks } from "heliumts/server";
+import { getTasks } from "../rpc.generated";
 
 function TaskList() {
     const { data, isLoading, error } = useFetch(getTasks, { status: "open" });
@@ -188,8 +191,9 @@ The `useCall` hook is used for **mutations** (create, update, delete operations)
 ### Basic Usage
 
 ```tsx
+// src/components/CreateTaskForm.tsx
 import { useCall } from "heliumts/client";
-import { createTask } from "heliumts/server";
+import { createTask } from "../rpc.generated";
 
 function CreateTaskForm() {
     const { call, isCalling, error } = useCall(createTask);
@@ -239,7 +243,7 @@ const { call } = useCall(method, {
 
 | Option       | Type                        | Description                                                                                                                                                     |
 | ------------ | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `invalidate` | `MethodStub[]`              | Array of methods whose cached data should be invalidated after a successful call. This triggers automatic refetch for all `useFetch` hooks using those methods. |
+| `invalidate` | `MethodReference[]`               | Array of methods whose cached data should be invalidated after a successful call. This triggers automatic refetch for all `useFetch` hooks using those methods. |
 | `onSuccess`  | `(result: TResult) => void` | Callback fired after a successful call                                                                                                                          |
 | `onError`    | `(error: string) => void`   | Callback fired when the call fails                                                                                                                              |
 
@@ -250,8 +254,9 @@ const { call } = useCall(method, {
 Automatically refresh related data after a mutation:
 
 ```tsx
+// src/pages/tasks.tsx
 import { useCall, useFetch } from "heliumts/client";
-import { getTasks, createTask, deleteTask } from "heliumts/server";
+import { getTasks, createTask, deleteTask } from "../rpc.generated";
 
 function TaskManager() {
     const { data: tasks } = useFetch(getTasks);
@@ -394,8 +399,9 @@ const { data } = useFetch(getUser, { id: "123" });
 Use `callMethod` in event handlers or other browser code when you do not need React state or automatic cache invalidation:
 
 ```ts
+// src/components/loadUser.ts
 import { callMethod } from "heliumts/client";
-import { getUser } from "heliumts/server";
+import { getUser } from "../rpc.generated";
 
 const { data, stats } = await callMethod(getUser, { id: "123" });
 // data is inferred from getUser.

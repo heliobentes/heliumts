@@ -19,6 +19,7 @@ describe("prefetch", () => {
             const routes: RouteEntry[] = [
                 {
                     pathPattern: "/about",
+                    render: "spa",
                     matcher: (path: string) => (path === "/about" ? { params: {} } : null),
                     Component: () => null,
                     LazyComponent: {} as RouteEntry["LazyComponent"],
@@ -44,6 +45,7 @@ describe("prefetch", () => {
             const routes: RouteEntry[] = [
                 {
                     pathPattern: "/about",
+                    render: "spa",
                     matcher: (path: string) => (path === "/about" ? { params: {} } : null),
                     Component: () => null,
                     LazyComponent: {} as RouteEntry["LazyComponent"],
@@ -69,6 +71,7 @@ describe("prefetch", () => {
             const routes: RouteEntry[] = [
                 {
                     pathPattern: "/products",
+                    render: "spa",
                     matcher: (path: string) => {
                         matchedPath = path;
                         return path === "/products" ? { params: {} } : null;
@@ -93,6 +96,7 @@ describe("prefetch", () => {
             const routes: RouteEntry[] = [
                 {
                     pathPattern: "/about",
+                    render: "spa",
                     matcher: (path: string) => (path === "/about" ? { params: {} } : null),
                     Component: () => null,
                     LazyComponent: {} as RouteEntry["LazyComponent"],
@@ -117,6 +121,7 @@ describe("prefetch", () => {
             const routes: RouteEntry[] = [
                 {
                     pathPattern: "/failing",
+                    render: "spa",
                     matcher: (path: string) => (path === "/failing" ? { params: {} } : null),
                     Component: () => null,
                     LazyComponent: {} as RouteEntry["LazyComponent"],
@@ -148,6 +153,7 @@ describe("prefetch", () => {
             const routes: RouteEntry[] = [
                 {
                     pathPattern: "/test",
+                    render: "spa",
                     matcher: (path: string) => (path === "/test" ? { params: {} } : null),
                     Component: () => null,
                     LazyComponent: {} as RouteEntry["LazyComponent"],

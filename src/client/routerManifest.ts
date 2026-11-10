@@ -1,14 +1,17 @@
 import type { ComponentType, LazyExoticComponent } from "react";
 import React from "react";
 
+import { createMatcher as createPageMatcher, type PageRoute, pathFromPageFile } from "../runtime/pageRoutes.js";
 import { compareRoutePatterns } from "../runtime/routeOrder.js";
 import { log } from "../utils/logger.js";
+import { pageModules } from "./pageModules.js";
 
 export type LayoutProps = {
     children: React.ReactNode;
 };
 
 export type RouteEntry = {
+    render: PageRoute["render"];
     pathPattern: string; // "/tasks/:id"
     matcher: (path: string) => { params: Record<string, string | string[]> } | null;
     Component: ComponentType<unknown>;
@@ -31,132 +34,13 @@ export type RouteEntry = {
  * @internal Exported for testing
  */
 export function pathFromFile(file: string): string {
-    // Remove /src/pages prefix and file extension
-    const withoutPrefix = file.replace("/src/pages", "").replace(/\.(tsx|jsx|ts|js)$/, "");
-
-    // Handle special files
-    if (withoutPrefix === "/404") {
-        return "__404__";
-    }
-
-    // Remove route groups (folders in parentheses)
-    // E.g., /(website)/contact → /contact
-    let pattern = withoutPrefix.replace(/\/\([^)]+\)/g, "");
-
-    // Convert /index to /
-    pattern = pattern.replace(/\/index$/, "") || "/";
-    // Convert [...param] to *param (catch-all)
-    pattern = pattern.replace(/\[\.\.\.(.+?)\]/g, "*$1");
-    // Convert [param] to :param (single dynamic segment)
-    pattern = pattern.replace(/\[(.+?)\]/g, ":$1");
-
-    return pattern;
+    return pathFromPageFile(file.replace("/src/pages", ""));
 }
 
-/**
- * Create a matcher function for a route pattern
- * Supports dynamic segments like :id, :slug, etc.
- * Supports catch-all segments like *slug for [...slug]
- * @internal Exported for testing
- */
 export function createMatcher(pattern: string) {
-    const decodeSegment = (value: string) => {
-        try {
-            return decodeURIComponent(value);
-        } catch {
-            return value;
-        }
-    };
-    const segments = pattern.split("/").filter(Boolean);
-
-    return (path: string) => {
-        // Remove query string and hash
-        const cleanPath = path.split("?")[0].split("#")[0];
-        const pathSegments = cleanPath.split("/").filter(Boolean);
-
-        // For root path, handle specially
-        if (pattern === "/" && cleanPath === "/") {
-            return { params: {} };
-        }
-
-        const params: Record<string, string | string[]> = {};
-
-        // Check for catch-all segment (must be last)
-        const hasCatchAll = segments.some((seg) => seg.startsWith("*"));
-        if (hasCatchAll) {
-            const catchAllIndex = segments.findIndex((seg) => seg.startsWith("*"));
-
-            // Catch-all must be the last segment
-            if (catchAllIndex !== segments.length - 1) {
-                log("warn", `Catch-all segment must be last: ${pattern}`);
-                return null;
-            }
-
-            const catchAllParam = segments[catchAllIndex].slice(1); // Remove *
-
-            // Match segments before catch-all
-            for (let i = 0; i < catchAllIndex; i++) {
-                const seg = segments[i];
-                const value = pathSegments[i];
-
-                if (!value) {
-                    return null;
-                } // Not enough path segments
-
-                if (seg.startsWith(":")) {
-                    params[seg.slice(1)] = decodeSegment(value);
-                } else if (seg !== value) {
-                    return null; // Static segment must match
-                }
-            }
-
-            // Collect remaining path segments into catch-all param as an array
-            const remainingSegments = pathSegments.slice(catchAllIndex);
-            params[catchAllParam] = remainingSegments.map(decodeSegment);
-
-            return { params };
-        }
-
-        // Regular matching (no catch-all)
-        // If segment counts don't match, no match
-        if (segments.length !== pathSegments.length) {
-            return null;
-        }
-
-        for (let i = 0; i < segments.length; i++) {
-            const seg = segments[i];
-            const value = pathSegments[i];
-
-            if (seg.startsWith(":")) {
-                // Dynamic segment
-                params[seg.slice(1)] = decodeSegment(value);
-            } else if (seg !== value) {
-                // Static segment must match exactly
-                return null;
-            }
-        }
-
-        return { params };
-    };
+    return createPageMatcher(pattern, () => log("warn", `Catch-all segment must be last: ${pattern}`));
 }
 
-/**
- * Get directory path from file path
- * /src/pages/tasks/[id].tsx → /tasks
- * /src/pages/(website)/contact.tsx → /(website)
- */
-function getDirectoryPath(file: string): string {
-    const withoutPrefix = file.replace("/src/pages", "").replace(/\.(tsx|jsx|ts|js)$/, "");
-    const parts = withoutPrefix.split("/");
-    parts.pop(); // Remove filename
-    return parts.join("/") || "/";
-}
-
-/**
- * Build route manifest from pages directory
- * Uses import.meta.glob to discover all page files
- * Supports both eager and lazy loading for Suspense compatibility
- */
 export function buildRoutes(): {
     routes: RouteEntry[];
     NotFound?: ComponentType<unknown>;
@@ -167,130 +51,42 @@ export function buildRoutes(): {
         return { routes: [], NotFound: undefined, AppShell: undefined };
     }
 
-    // Eagerly load all page components (for initial render and layouts)
-    // Exclude .server.* sidecar files — they contain server-only code (e.g. DB access)
-    // and must never be bundled into the client. App shells are loaded by the
-    // generated entry and are not routable pages; declarations have no runtime.
-    const eagerPages = import.meta.glob(["/src/pages/**/*.{tsx,jsx,ts,js}", "!**/*.server.*", "!**/*.d.ts", "!**/_app.*"], {
-        eager: true,
-    }) as Record<string, { default: ComponentType<unknown> }>;
-
-    // Lazy load all page components (for Suspense support)
-    const lazyPages = import.meta.glob(["/src/pages/**/*.{tsx,jsx,ts,js}", "!**/*.server.*", "!**/*.d.ts", "!**/_app.*"]) as Record<
-        string,
-        () => Promise<{ default: ComponentType<unknown> }>
-    >;
-
-    // Debug mode: set localStorage.setItem('helium_debug_routes', 'true') to enable
     const debugRoutes = typeof localStorage !== "undefined" && localStorage.getItem("helium_debug_routes") === "true";
-
-    if (debugRoutes) {
-        console.group("[Helium Router] Discovered pages:");
-        for (const file of Object.keys(eagerPages)) {
-            console.log(`  ${file} → ${pathFromFile(file)}`);
-        }
-        console.groupEnd();
-    }
-
     const routes: RouteEntry[] = [];
     let NotFound: ComponentType<unknown> | undefined;
-    let AppShell: ComponentType<unknown> | undefined;
 
-    // Build layout map: directory path -> layout component
-    const layoutMap = new Map<string, ComponentType<LayoutProps>>();
-
-    // Track route patterns to detect collisions: pattern -> file path
-    const routePatternMap = new Map<string, string>();
-
-    // First pass: collect all layouts
-    for (const [file, mod] of Object.entries(eagerPages)) {
-        if (file.includes("/_layout.")) {
-            const Component = mod.default;
-            if (Component) {
-                const dirPath = getDirectoryPath(file);
-                layoutMap.set(dirPath, Component as ComponentType<LayoutProps>);
-            }
-        }
-    }
-
-    // Second pass: build routes with their layouts
-    for (const [file, mod] of Object.entries(eagerPages)) {
-        // Skip layout files
-        if (file.includes("/_layout.")) {
-            continue;
-        }
-
-        const Component = mod.default;
+    for (const { file, page, pattern, render, layouts, preload } of pageModules) {
+        const Component = page.default;
         if (!Component) {
             log("warn", `No default export found in ${file}`);
             continue;
         }
 
-        const pathPattern = pathFromFile(file);
-
-        // Handle special pages
-        if (pathPattern === "__404__") {
+        if (pattern === "__404__") {
             NotFound = Component;
             continue;
         }
 
-        // Detect route collisions
-        const existingFile = routePatternMap.get(pathPattern);
-        if (existingFile) {
-            log("error", `Route collision detected! Multiple files resolve to the same path "${pathPattern}":`);
-            log("error", `  - ${existingFile}`);
-            log("error", `  - ${file}`);
-            log("error", `Only the first file will be used. Consider using different file names or paths.`);
-        } else {
-            routePatternMap.set(pathPattern, file);
-        }
-
-        // Find all layouts for this route (from root to leaf)
-        const layouts: ComponentType<LayoutProps>[] = [];
-        const dirPath = getDirectoryPath(file);
-        const pathParts = dirPath.split("/").filter(Boolean);
-
-        // Always check for root layout first (applies to all pages)
-        const rootLayout = layoutMap.get("/");
-        if (rootLayout) {
-            layouts.push(rootLayout);
-        }
-
-        // Then check for layouts at each nested level
-        // This will include route group layouts and any nested folder layouts
-        for (let i = 1; i <= pathParts.length; i++) {
-            const checkPath = "/" + pathParts.slice(0, i).join("/");
-            const layout = layoutMap.get(checkPath);
-            if (layout) {
-                layouts.push(layout);
-            }
-        }
-
-        // Get the lazy loader for this page
-        const lazyLoader = lazyPages[file];
-        const LazyComponent = React.lazy(lazyLoader);
-
-        // Create route entry with both eager and lazy components
         routes.push({
-            pathPattern,
-            matcher: createMatcher(pathPattern),
+            pathPattern: pattern,
+            render,
+            matcher: createMatcher(pattern),
             Component,
-            LazyComponent,
-            layouts,
-            preload: lazyLoader,
+            LazyComponent: React.lazy(preload),
+            layouts: layouts.flatMap((layout) => (layout.default ? [layout.default] : [])),
+            preload,
         });
     }
 
-    // Compare specificity segment by segment so /users/:id beats /:section/edit.
     routes.sort((a, b) => compareRoutePatterns(a.pathPattern, b.pathPattern));
 
     if (debugRoutes) {
         console.group("[Helium Router] Final route order:");
         for (const route of routes) {
-            console.log(`  ${route.pathPattern}`);
+            console.log(`  ${route.pathPattern} (${route.render})`);
         }
         console.groupEnd();
     }
 
-    return { routes, NotFound, AppShell };
+    return { routes, NotFound };
 }

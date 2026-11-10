@@ -1,6 +1,7 @@
 import path from "path";
 
-import { HTTPHandlerExport, MethodExport, MiddlewareExport, SEOMetadataExport, SSRPageExport, WorkerExport } from "./scanner.js";
+import type { PageRoute } from "../runtime/pageRoutes.js";
+import { HTTPHandlerExport, MethodExport, MiddlewareExport, PageManifestEntry, SEOMetadataExport, SSRPageExport, WorkerExport } from "./scanner.js";
 
 function moduleSpecifier(filePath: string): string {
     // Vite expects POSIX import paths, including on Windows.
@@ -21,7 +22,8 @@ export function generateServerManifest(
     ssrPages: SSRPageExport[] = [],
     appShellFilePath: string | null = null,
     middleware?: MiddlewareExport,
-    workers: WorkerExport[] = []
+    workers: WorkerExport[] = [],
+    pageRoutes?: readonly PageRoute[]
 ): string {
     const methodImports = methods.map((m, i) => `import { ${m.name} as method_${i} } from ${moduleSpecifier(m.filePath)};`).join("\n");
     const httpImports = httpHandlers.map((h, i) => `import { ${h.name} as http_${i} } from ${moduleSpecifier(h.filePath)};`).join("\n");
@@ -103,6 +105,7 @@ ${seoExports}
 ];
 
 export const pageRoutePatterns = ${JSON.stringify(pageRoutePatterns)};
+export const pageRoutes = ${JSON.stringify(pageRoutes?.map(({ pattern, render }) => ({ pattern, render })))};
 
 export const ssrPages = [
 ${ssrPageExports}
@@ -125,77 +128,24 @@ export const middlewareHandler = ${middleware ? "middleware" : "null"};
 `;
 }
 
-export function generateClientModule(methods: MethodExport[]): string {
-    const exports = methods.map((m) => `export const ${m.name} = { __id: '${m.name}' };`).join("\n");
-
-    return exports;
-}
-
-export function generateTypeDefinitions(methods: MethodExport[], root: string): string {
-    // Sort methods by name for a stable output regardless of file-system walk order
-    const sorted = [...methods].sort((a, b) => a.name.localeCompare(b.name));
-
-    const methodsWithRelativePath = sorted.map((m) => {
-        let relPath = path.relative(path.join(root, "src"), m.filePath);
-        if (!relPath.startsWith(".")) {
-            relPath = "../" + relPath;
+export function generatePageModules(manifest: readonly PageManifestEntry[], root: string): string {
+    const modules = new Map<string, string>();
+    const importName = (file: string) => {
+        let name = modules.get(file);
+        if (!name) {
+            name = `pageModule_${modules.size}`;
+            modules.set(file, name);
         }
-        // Normalize to posix separators for import paths
-        relPath = relPath.replace(/\\/g, "/").replace(/\.ts$/, "");
-        return {
-            ...m,
-            relPath,
-        };
+        return name;
+    };
+    const entries = manifest.map(({ file, pattern, render, layouts }) => {
+        const relativeFile = "/" + path.relative(root, file).split(path.sep).join("/");
+        return `  { file: ${JSON.stringify(relativeFile)}, pattern: ${JSON.stringify(pattern)}, render: ${JSON.stringify(render)}, page: ${importName(file)}, layouts: [${layouts
+            .map(importName)
+            .join(", ")}], preload: () => import(${moduleSpecifier(file)}) },`;
     });
-
-    const imports = methodsWithRelativePath
-        .map((m, index) => {
-            return `import type { ${m.name} as __helium_method_${index} } from ${moduleSpecifier(m.relPath)};`;
-        })
-        .join("\n");
-
-    const methodExports = methodsWithRelativePath
-        .map((m, index) => {
-            return `    export const ${m.name}: import('heliumts/client').MethodStub<
-        Parameters<typeof __helium_method_${index}['handler']>[0],
-        Awaited<ReturnType<typeof __helium_method_${index}['handler']>>
-    >;`;
-        })
-        .join("\n");
-
-    // If there are no methods, we don't need to generate any augmentation
-    // This prevents shadowing the actual heliumts/server exports
-    if (methods.length === 0) {
-        return `/* eslint-disable */
-/**
-* Auto generated file - DO NOT EDIT!
-* # Helium Server Type Definitions
-* 
-* This file is empty because no methods have been defined yet.
-* Once you create a method using defineMethod(), type stubs will be generated here.
-*
-* @helium-methods (none)
-**/
-export {};
-`;
-    }
-
-    const methodSignature = methodsWithRelativePath.map((m) => m.name).join(", ");
-
-    return `/* eslint-disable */
-/**
-* Auto generated file - DO NOT EDIT!
-* # Helium Server Type Definitions
-*
-* @helium-methods ${methodSignature}
-**/
-${imports}
-
-declare module 'heliumts/server' {
-    // Method stubs for client-side type inference
-${methodExports}
-}
-`;
+    const imports = Array.from(modules, ([file, name]) => `import * as ${name} from ${moduleSpecifier(file)};`);
+    return `${imports.join("\n")}\nexport const pageModules = [\n${entries.join("\n")}\n];`;
 }
 
 export function generateEntryModule(appShellFilePath: string | null = "/src/App"): string {

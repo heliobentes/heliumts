@@ -1,10 +1,13 @@
 import fs from "fs";
 import path from "path";
 
+import { pathFromPageFile } from "../runtime/pageRoutes.js";
 import { replaceHtmlRootContents } from "../utils/html.js";
 import { log } from "../utils/logger.js";
-import { hasPageDirective, isPageFile, scanAppShell, scanServerExports } from "./scanner.js";
-import { generateClientModule } from "./virtualServerModule.js";
+import { findLayoutPathsForPage, type PageManifestEntry, scanAppShell, scanPageManifest } from "./scanner.js";
+import { generateServerClientModule, generateServerPrefetchModule, generateServerTransitionsModule } from "./serverClientAdapter.js";
+
+export { findLayoutPathsForPage };
 
 /**
  * SSG (Static Site Generation) implementation for Helium
@@ -18,6 +21,7 @@ interface SSGPage {
     urlPath: string;
     relativePath: string;
     warnings: string[];
+    layouts?: readonly string[];
 }
 
 interface SSGValidation {
@@ -98,62 +102,27 @@ export function validateSSGPage(filePath: string): SSGValidation {
 /**
  * Scan pages directory and find all pages with "use ssg" directive
  */
-export function scanSSGPages(root: string): SSGPage[] {
-    const pagesDir = path.join(root, "src", "pages");
-
-    if (!fs.existsSync(pagesDir)) {
-        return [];
-    }
-
-    const ssgPages: SSGPage[] = [];
-
-    function walkDirectory(dir: string) {
-        const items = fs.readdirSync(dir);
-
-        for (const item of items) {
-            const fullPath = path.join(dir, item);
-            const stat = fs.statSync(fullPath);
-
-            if (stat.isDirectory()) {
-                walkDirectory(fullPath);
-            } else if (isPageFile(item)) {
-                const content = fs.readFileSync(fullPath, "utf-8");
-
-                // Check for "use ssg"; directive at the top of the file
-                if (hasPageDirective(content, "use ssg")) {
-                    const relativePath = path.relative(path.join(root, "src"), fullPath);
-                    const urlPath = filePathToUrlPath(relativePath);
-
-                    // Validate the page for SSG compatibility
-                    const validation = validateSSGPage(fullPath);
-                    const warnings = [...validation.warnings];
-
-                    // Also check all layouts for this page
-                    const layoutPaths = findLayoutPathsForPage(fullPath, root);
-                    for (const layoutPath of layoutPaths) {
-                        const layoutValidation = validateSSGPage(layoutPath);
-                        if (layoutValidation.warnings.length > 0) {
-                            const layoutRelative = path.relative(path.join(root, "src"), layoutPath);
-                            warnings.push(`Layout ${layoutRelative} has issues:`);
-                            for (const warning of layoutValidation.warnings) {
-                                warnings.push(`  └─ ${warning}`);
-                            }
-                        }
-                    }
-
-                    ssgPages.push({
-                        filePath: fullPath,
-                        urlPath,
-                        relativePath,
-                        warnings,
-                    });
+export function scanSSGPages(root: string, manifest: readonly PageManifestEntry[] = scanPageManifest(root)): SSGPage[] {
+    const srcDir = path.join(root, "src");
+    return manifest
+        .filter((route) => route.render === "ssg")
+        .map(({ file, pattern, layouts }) => {
+            const { warnings } = validateSSGPage(file);
+            for (const layout of layouts) {
+                const layoutWarnings = validateSSGPage(layout).warnings;
+                if (layoutWarnings.length) {
+                    warnings.push(`Layout ${path.relative(srcDir, layout)} has issues:`);
+                    warnings.push(...layoutWarnings.map((warning) => `  └─ ${warning}`));
                 }
             }
-        }
-    }
-
-    walkDirectory(pagesDir);
-    return ssgPages;
+            return {
+                filePath: file,
+                urlPath: pattern === "__404__" ? "/404" : pattern,
+                relativePath: path.relative(srcDir, file),
+                warnings,
+                layouts,
+            };
+        });
 }
 
 /**
@@ -166,32 +135,8 @@ export function scanSSGPages(root: string): SSGPage[] {
  * @internal Exported for testing
  */
 export function filePathToUrlPath(relativePath: string): string {
-    // Remove 'pages/' prefix and file extension
-    let urlPath = relativePath
-        .replace(/\\/g, "/")
-        .replace(/^pages\//, "")
-        .replace(/\.(tsx|jsx|ts|js)$/, "");
-
-    // Remove route groups (folders in parentheses)
-    // E.g., (website)/contact -> /contact
-    urlPath = urlPath.replace(/\([^)]+\)\//g, "");
-
-    // Handle index files
-    if (urlPath.endsWith("/index") || urlPath === "index") {
-        urlPath = urlPath.replace(/\/index$/, "").replace(/^index$/, "");
-    }
-
-    // Ensure leading slash
-    if (!urlPath.startsWith("/")) {
-        urlPath = "/" + urlPath;
-    }
-
-    // Root path
-    if (urlPath === "/") {
-        return "/";
-    }
-
-    return urlPath;
+    const pattern = pathFromPageFile(relativePath.replace(/\\/g, "/").replace(/^pages\//, ""));
+    return pattern === "__404__" ? "/404" : pattern;
 }
 
 /**
@@ -212,37 +157,10 @@ export function urlPathToOutputPath(urlPath: string): string {
 }
 
 /**
- * Find all layout file paths for a given page path (from root to leaf)
- * @internal Exported for testing
- */
-export function findLayoutPathsForPage(pagePath: string, root: string): string[] {
-    const pagesDir = path.join(root, "src", "pages");
-    const relativePath = path.relative(pagesDir, pagePath);
-    const pathParts = path
-        .dirname(relativePath)
-        .split(path.sep)
-        .filter((p) => p !== ".");
-
-    const layoutPaths: string[] = [];
-
-    const layoutNames = ["_layout.tsx", "_layout.jsx", "_layout.ts", "_layout.js"];
-    for (let i = 0; i <= pathParts.length; i++) {
-        const dirPath = path.join(pagesDir, ...pathParts.slice(0, i));
-        const layoutPath = layoutNames.map((name) => path.join(dirPath, name)).find((candidate) => fs.existsSync(candidate));
-        if (layoutPath) {
-            layoutPaths.push(layoutPath);
-        }
-    }
-
-    return layoutPaths;
-}
-
-/**
  * Find all layout components for a given page path (from root to leaf)
  * Note: Layouts cannot use routing features during SSG since they're pre-rendered
  */
-async function findLayoutsForPage(pagePath: string, root: string, viteServer: any): Promise<any[]> {
-    const layoutPaths = findLayoutPathsForPage(pagePath, root);
+async function loadLayouts(layoutPaths: readonly string[], viteServer: any): Promise<any[]> {
     const layouts = [];
 
     for (const layoutPath of layoutPaths) {
@@ -287,7 +205,7 @@ export async function renderPageToHTML(page: SSGPage, root: string, htmlTemplate
             }
 
             // Find all layouts (from root to leaf)
-            const layouts = await findLayoutsForPage(page.filePath, root, viteServer);
+            const layouts = await loadLayouts(page.layouts ?? findLayoutPathsForPage(page.filePath, root), viteServer);
 
             // Build the component tree: layouts wrap the page, innermost to outermost
             const pageProps = { params: {}, searchParams: new URLSearchParams() };
@@ -349,9 +267,9 @@ export async function renderPageToHTML(page: SSGPage, root: string, htmlTemplate
 /**
  * Generate static HTML files for all SSG pages
  */
-export async function generateStaticPages(context: any, root: string, htmlTemplate: string, distDir: string) {
+export async function generateStaticPages(context: any, root: string, htmlTemplate: string, distDir: string, manifest?: readonly PageManifestEntry[]) {
     // Scan for SSG pages
-    const ssgPages = scanSSGPages(root);
+    const ssgPages = scanSSGPages(root, manifest);
 
     if (ssgPages.length === 0) {
         return;
@@ -368,184 +286,18 @@ export async function generateStaticPages(context: any, root: string, htmlTempla
     // Filter out dynamic routes
     const staticPages = ssgPages.filter((p) => !p.relativePath.includes("["));
 
-    // Precompute RPC client stubs for SSG (mirrors helium Vite plugin)
-    const { methods } = scanServerExports(root);
-    const serverStubCode = `// Auto-generated SSG RPC stub\n${generateClientModule(methods)}\n`;
-
-    // Create a stub for heliumts/client that provides mock Router and hooks
-    const clientStubCode = `
-// Auto-generated SSG client stub
-import React from 'react';
-
-// Mock RouterContext
-export const RouterContext = React.createContext({
-    path: '/',
-    params: {},
-    searchParams: new URLSearchParams(),
-    push: () => {},
-    replace: () => {},
-    on: () => () => {},
-    status: 200,
-    isNavigating: false,
-    isPending: false,
-});
-
-// Mock useRouter hook
-export function useRouter() {
-    const ctx = React.useContext(RouterContext);
-    if (!ctx) {
-        console.warn('useRouter called outside RouterContext during SSG');
-        return {
-            path: '/',
-            params: {},
-            searchParams: new URLSearchParams(),
-            push: () => {},
-            replace: () => {},
-            on: () => () => {},
-            status: 200,
-            isNavigating: false,
-            isPending: false,
-        };
-    }
-    return ctx;
-}
-
-// Mock AppRouter component (alias for Router)
-export function AppRouter({ children }) {
-    return React.createElement(React.Fragment, null, children);
-}
-
-// Mock Router component
-export function Router({ children }) {
-    return React.createElement(React.Fragment, null, children);
-}
-
-// Mock Link component
-export function Link({ href, children, prefetch, ...props }) {
-    return React.createElement('a', { href, ...props }, children);
-}
-
-// Mock Redirect component
-export function Redirect({ to, replace }) {
-    return null;
-}
-
-// Browser RPC calls may be referenced by handlers but cannot run during SSG.
-export async function callMethod() {
-    throw new Error('callMethod is only available in the browser. Load server data with getServerSideProps instead.');
-}
-
-export function useStreaming() {
-    return {
-        chunks: [],
-        text: '',
-        isStreaming: false,
-        error: null,
-        stats: null,
-        start: async () => {
-            throw new Error('useStreaming.start is only available in the browser. Load server data with getServerSideProps instead.');
-        },
-        cancel: () => {},
-        reset: () => {},
-    };
-}
-
-export function useCall(serverFn) {
-    return { call: async () => null, isCalling: false, error: null };
-}
-
-// Mock useFetch hook
-export function useFetch(serverFn, ...args) {
-    console.warn('useFetch called during SSG - returning null');
-    return { data: null, isLoading: false, error: null, refetch: async () => {} };
-}
-
-export function isSSR() { return true; }
-export function getPublicEnv() {
-    return Object.fromEntries(Object.entries(process.env).filter(([key, value]) => key.startsWith('HELIUM_PUBLIC_') && typeof value === 'string'));
-}
-export function getPublicEnvValue(key) { return getPublicEnv()[key]; }
-export function isDevEnvironment() { return false; }
-export class RpcError extends Error {}
-
-// Re-export cache (mock)
-export const cache = {
-    get: () => null,
-    set: () => {},
-    delete: () => {},
-    clear: () => {},
-};
-
-// Mock PageTransition and useDeferredNavigation (also available from heliumts/client/transitions)
-export function useDeferredNavigation() {
-    const { path } = useRouter();
-    return {
-        path,
-        deferredPath: path,
-        isStale: false,
-        isPending: false,
-        isTransitioning: false,
-    };
-}
-
-export function PageTransition({ children, fallback = null }) {
-    return React.createElement('div', { style: { opacity: 1, transition: 'opacity 150ms ease' } },
-        React.createElement(React.Suspense, { fallback }, children));
-}
-`;
-
-    // Create a stub for heliumts/client/transitions
-    const transitionsStubCode = `
-// Auto-generated SSG transitions stub
-import React from 'react';
-import { useRouter } from 'heliumts/client';
-
-// Mock useDeferredNavigation hook - returns static values for SSG
-export function useDeferredNavigation() {
-    const { path } = useRouter();
-    return {
-        path,
-        deferredPath: path,
-        isStale: false,
-        isPending: false,
-        isTransitioning: false,
-    };
-}
-
-// Mock PageTransition component - renders children without transition logic
-export function PageTransition({ children, fallback = null }) {
-    return React.createElement('div', { style: { opacity: 1, transition: 'opacity 150ms ease' } },
-        React.createElement(React.Suspense, { fallback }, children));
-}
-
-export default {
-    useDeferredNavigation,
-    PageTransition,
-};
-`;
-
-    // Create a stub for heliumts/client/prefetch
-    const prefetchStubCode = `
-// Auto-generated SSG prefetch stub
-export function prefetchRoute() {
-    // No-op during SSG
-}
-
-export function clearPrefetchCache() {
-    // No-op during SSG
-}
-`;
+    const clientStubCode = generateServerClientModule("ssg");
+    const transitionsStubCode = generateServerTransitionsModule("ssg");
+    const prefetchStubCode = generateServerPrefetchModule();
 
     // Write stub files to node_modules/.heliumts
     const heliumInternalDir = path.join(root, "node_modules", ".heliumts");
     if (!fs.existsSync(heliumInternalDir)) {
         fs.mkdirSync(heliumInternalDir, { recursive: true });
     }
-    const ssgServerStubPath = path.join(heliumInternalDir, "ssg-server-stub.mjs");
     const ssgClientStubPath = path.join(heliumInternalDir, "ssg-client-stub.mjs");
     const ssgTransitionsStubPath = path.join(heliumInternalDir, "ssg-transitions-stub.mjs");
     const ssgPrefetchStubPath = path.join(heliumInternalDir, "ssg-prefetch-stub.mjs");
-    fs.writeFileSync(ssgServerStubPath, serverStubCode, "utf-8");
     fs.writeFileSync(ssgClientStubPath, clientStubCode, "utf-8");
     fs.writeFileSync(ssgTransitionsStubPath, transitionsStubCode, "utf-8");
     fs.writeFileSync(ssgPrefetchStubPath, prefetchStubCode, "utf-8");
@@ -566,9 +318,7 @@ export function clearPrefetchCache() {
                 // Most specific aliases first - heliumts/client/transitions and heliumts/client/prefetch
                 { find: /^heliumts\/client\/transitions$/, replacement: ssgTransitionsStubPath },
                 { find: /^heliumts\/client\/prefetch$/, replacement: ssgPrefetchStubPath },
-                // Then heliumts/client and heliumts/server
                 { find: /^heliumts\/client$/, replacement: ssgClientStubPath },
-                { find: /^heliumts\/server$/, replacement: ssgServerStubPath },
             ],
         },
         ssr: {

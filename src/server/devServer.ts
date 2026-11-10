@@ -5,6 +5,7 @@ import path from "path";
 import type { ComponentType, ReactNode } from "react";
 
 import { SEO_METADATA_RPC_METHOD } from "../runtime/internalMethods.js";
+import type { PageRoute } from "../runtime/pageRoutes.js";
 import { injectEnvToProcess, injectHeliumEnvIntoHtml, loadEnvFiles } from "../utils/envLoader.js";
 import { extractClientIP } from "../utils/ipExtractor.js";
 import { log } from "../utils/logger.js";
@@ -22,7 +23,7 @@ import { getRequestSignal } from "./requestSignal.js";
 import { RpcRegistry } from "./rpcRegistry.js";
 import { initializeSecurity } from "./security.js";
 import { SEOMetadataRouter } from "./seoMetadataRouter.js";
-import { matchSSRPage, renderSSRHTML, resolveServerSideProps, SSRPageDef } from "./ssr.js";
+import { createSSRPageMatcher, renderSSRHTML, resolveServerSideProps, SSRPageDef } from "./ssr.js";
 
 type LoadHandlersFn = (registry: RpcRegistry, httpRouter: HTTPRouter, seoRouter: SEOMetadataRouter) => void;
 type HttpServer = http.Server | https.Server | http2.Http2Server | http2.Http2SecureServer;
@@ -37,8 +38,6 @@ type AppShellLoader = (() => Promise<ComponentType<{ Component: ComponentType<Re
 let currentRegistry: RpcRegistry | null = null;
 let currentHttpRouter: HTTPRouter | null = null;
 let currentSEORouter: SEOMetadataRouter | null = null;
-let currentSSRPages: SSRPageDef[] = [];
-let currentAppShell: AppShellLoader = null;
 let rateLimiter: RateLimiter | null = null;
 let currentWorkers: WorkerEntry[] = [];
 let cachedDefaultMeta: Awaited<ReturnType<typeof loadDefaultSocialMetaFromHtmlFile>> | undefined;
@@ -96,7 +95,8 @@ export function attachToDevServer(
     config: HeliumConfig = {},
     workers: WorkerEntry[] = [],
     ssrPages: SSRPageDef[] = [],
-    appShell: AppShellLoader = null
+    appShell: AppShellLoader = null,
+    pageRoutes?: readonly PageRoute[]
 ) {
     // Load environment variables for server-side access
     const envVars = loadEnvFiles();
@@ -122,8 +122,7 @@ export function attachToDevServer(
     currentRegistry = registry;
     currentHttpRouter = httpRouter;
     currentSEORouter = seoRouter;
-    currentSSRPages = ssrPages;
-    currentAppShell = appShell;
+    const matchSSRPage = createSSRPageMatcher(ssrPages, pageRoutes);
     cachedDefaultMeta = undefined;
     const getDefaultMeta = async () => {
         if (cachedDefaultMeta !== undefined) {
@@ -180,7 +179,7 @@ export function attachToDevServer(
             const targetUrl = new URL(pathQuery, "http://localhost");
             const targetPathname = targetUrl.pathname;
 
-            const ssrMatch = matchSSRPage(targetPathname, currentSSRPages);
+            const ssrMatch = matchSSRPage(targetPathname);
             if (!ssrMatch) {
                 res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
                 res.end(JSON.stringify({ ssr: false, props: null }));
@@ -264,7 +263,7 @@ export function attachToDevServer(
             !pathname.startsWith("/webhooks") &&
             !pathname.startsWith("/@") &&
             !pathname.startsWith("/__helium__");
-        const ssrMatch = isEligibleHtmlRequest ? matchSSRPage(pathname, currentSSRPages) : null;
+        const ssrMatch = isEligibleHtmlRequest ? matchSSRPage(pathname) : null;
 
         if (isEligibleHtmlRequest) {
             const originalWriteHead = res.writeHead.bind(res);
@@ -388,7 +387,7 @@ export function attachToDevServer(
                                 page: ssrMatch.page,
                                 req,
                                 ctx: httpCtx,
-                                loadAppShell: currentAppShell,
+                                loadAppShell: appShell,
                             });
 
                             if ("redirect" in rendered) {

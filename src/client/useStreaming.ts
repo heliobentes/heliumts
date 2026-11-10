@@ -3,7 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import type { RpcStats } from "../runtime/protocol.js";
 import { RpcError } from "./RpcError.js";
 import { streamRpc } from "./rpcStreaming.js";
-import type { MethodStub } from "./types.js";
+import { getMethodId, type MethodArgs, type MethodReference } from "./types.js";
 
 export type UseStreamingOptions<TChunk> = {
     onChunk?: (chunk: TChunk) => void;
@@ -50,14 +50,15 @@ function notify<TArgs extends unknown[]>(name: string, callback: ((...args: TArg
  * stream; cancellation preserves partial output, while reset also clears it.
  * RPC failures are exposed through error/onError, without replaying the stream.
  */
-export function useStreaming<TArgs, TChunk>(method: MethodStub<TArgs, AsyncIterable<TChunk>>, options: UseStreamingOptions<TChunk> = {}) {
+export function useStreaming<TArgs, TChunk>(method: MethodReference<TArgs, AsyncIterable<TChunk>>, options: UseStreamingOptions<TChunk> = {}) {
     const [state, setState] = useState<StreamingState<TChunk>>(emptyState);
-    const methodRef = useRef(method.__id);
+    const methodId = getMethodId(method);
+    const methodRef = useRef(methodId);
     const optionsRef = useRef(options);
     const mountedRef = useRef(true);
     const activeRef = useRef<ActiveStream<TChunk> | null>(null);
-    const previousMethodRef = useRef(method.__id);
-    methodRef.current = method.__id;
+    const previousMethodRef = useRef(methodId);
+    methodRef.current = methodId;
     optionsRef.current = options;
 
     const cancel = useCallback(() => {
@@ -88,13 +89,13 @@ export function useStreaming<TArgs, TChunk>(method: MethodStub<TArgs, AsyncItera
 
     useClientLayoutEffect(() => {
         // Switching the method invalidates output and pending work from its predecessor.
-        if (previousMethodRef.current !== method.__id) {
-            previousMethodRef.current = method.__id;
+        if (previousMethodRef.current !== methodId) {
+            previousMethodRef.current = methodId;
             reset();
         }
-    }, [method.__id, reset]);
+    }, [methodId, reset]);
 
-    const start = useCallback(async (args: TArgs): Promise<void> => {
+    const start = useCallback(async (...[args]: MethodArgs<TArgs>): Promise<void> => {
         if (!mountedRef.current) {
             return;
         }
@@ -111,7 +112,7 @@ export function useStreaming<TArgs, TChunk>(method: MethodStub<TArgs, AsyncItera
             }
         };
         try {
-            const stats = await streamRpc<TArgs, TChunk>(active.method, args, {
+            const stats = await streamRpc<TArgs, TChunk>(active.method, args as TArgs, {
                 signal: active.controller.signal,
                 timeoutMs: optionsRef.current.timeoutMs ?? 120_000,
                 onChunk: (chunk) => {

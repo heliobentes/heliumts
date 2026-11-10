@@ -10,6 +10,7 @@ vi.mock("../../src/client/routerManifest", () => ({
         routes: [
             {
                 pathPattern: "/",
+                render: "spa",
                 matcher: (path: string) => (path === "/" ? { params: {} } : null),
                 Component: () => <div>Home Page</div>,
                 LazyComponent: {} as React.LazyExoticComponent<React.ComponentType<unknown>>,
@@ -18,6 +19,7 @@ vi.mock("../../src/client/routerManifest", () => ({
             },
             {
                 pathPattern: "/about",
+                render: "spa",
                 matcher: (path: string) => (path === "/about" ? { params: {} } : null),
                 Component: () => <div>About Page</div>,
                 LazyComponent: {} as React.LazyExoticComponent<React.ComponentType<unknown>>,
@@ -26,6 +28,7 @@ vi.mock("../../src/client/routerManifest", () => ({
             },
             {
                 pathPattern: "/users/:id",
+                render: "spa",
                 matcher: (path: string) => {
                     const match = path.match(/^\/users\/([^/]+)$/);
                     return match ? { params: { id: match[1] } } : null;

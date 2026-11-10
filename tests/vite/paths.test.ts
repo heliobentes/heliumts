@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-    RESOLVED_VIRTUAL_CLIENT_MODULE_ID,
     RESOLVED_VIRTUAL_ENTRY_MODULE_ID,
     RESOLVED_VIRTUAL_SERVER_MANIFEST_ID,
     SERVER_DIR,
-    VIRTUAL_CLIENT_MODULE_ID,
     VIRTUAL_ENTRY_MODULE_ID,
     VIRTUAL_SERVER_MANIFEST_ID,
 } from "../../src/vite/paths";
@@ -18,10 +16,6 @@ describe("paths", () => {
     });
 
     describe("virtual module IDs", () => {
-        it("should have correct virtual client module ID", () => {
-            expect(VIRTUAL_CLIENT_MODULE_ID).toBe("heliumts/server");
-        });
-
         it("should have correct virtual server manifest ID", () => {
             expect(VIRTUAL_SERVER_MANIFEST_ID).toBe("heliumts/__serverManifest");
         });
@@ -33,7 +27,6 @@ describe("paths", () => {
 
     describe("resolved virtual module IDs", () => {
         it("should prefix with null character", () => {
-            expect(RESOLVED_VIRTUAL_CLIENT_MODULE_ID).toBe("\0heliumts/server");
             expect(RESOLVED_VIRTUAL_SERVER_MANIFEST_ID).toBe("\0heliumts/__serverManifest");
             expect(RESOLVED_VIRTUAL_ENTRY_MODULE_ID).toBe("\0virtual:heliumts/entry");
         });

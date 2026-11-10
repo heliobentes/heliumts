@@ -96,6 +96,7 @@ describe("routerManifest", () => {
         it("should have expected properties", () => {
             const mockEntry: RouteEntry = {
                 pathPattern: "/test",
+                render: "spa",
                 matcher: () => ({ params: {} }),
                 Component: () => null,
                 LazyComponent: {} as React.LazyExoticComponent<React.ComponentType<unknown>>,

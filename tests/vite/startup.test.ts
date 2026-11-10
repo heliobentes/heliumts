@@ -34,10 +34,7 @@ describe("Vite application startup", () => {
         fs.symlinkSync(fileURLToPath(new URL("../../node_modules", import.meta.url)), path.join(root, "node_modules"), "junction");
         fs.writeFileSync(path.join(root, "index.html"), '<html><body>Ready application<script type="module" src="/src/main.tsx"></script></body></html>');
         fs.writeFileSync(path.join(root, "src", "main.tsx"), "console.log('ready');");
-        fs.writeFileSync(
-            path.join(root, "src", "server", "methods.ts"),
-            "const defineMethod = (handler) => ({ __kind: 'method', handler }); export const echo = defineMethod((args) => args);"
-        );
+        fs.writeFileSync(path.join(root, "src", "server", "methods.ts"), "import { defineMethod } from 'heliumts/server'; export const echo = defineMethod((args) => args);");
         resetSecurity();
         clearConfigCache();
         initializeSecurity(getRpcSecurityConfig());
@@ -72,6 +69,7 @@ describe("Vite application startup", () => {
         server = await createServer({
             root,
             configFile: false,
+            resolve: { alias: { "heliumts/server": fileURLToPath(new URL("../../src/server/defineMethod.ts", import.meta.url)) } },
             logLevel: "silent",
             plugins: [helium(), delay],
             server: { port: 0, host: "127.0.0.1", watch: null },

@@ -178,28 +178,9 @@ export default function Page() {
 - Use static data or fetch data at build time (custom build script)
 - Remove `"use ssg";` if the page needs dynamic data
 
-#### Server Imports Warning
+#### RPC imports in static pages
 
-```tsx
-"use ssg";
-
-import { getTasks } from "heliumts/server"; // ⚠️ Warning!
-
-export default function Page() {
-    // Can't call server methods during SSG
-    return <div>...</div>;
-}
-```
-
-**Warning:** `Page imports from 'heliumts/server' which may cause runtime issues`
-
-**What it means:** Server-side methods aren't callable during static generation.
-
-**Solutions:**
-
-- Remove server imports from SSG pages
-- Fetch data at build time using a custom build script
-- Remove `"use ssg";` if the page needs server-side data
+Import RPC method references from `src/rpc.generated.ts` for client hooks. Those hooks run requests after hydration. Use a build script for build-time data or SSR for data fetched on each request.
 
 ### Layout Warnings
 
@@ -281,11 +262,14 @@ Links render as standard `<a>` tags in the static HTML.
 
 ### useFetch and useCall
 
+This example uses the generated module from HeliumTS 0.11.0. [Upgrade notes](../CHANGELOG.md#upgrade-notes)
+
 ```tsx
+// src/pages/tasks.tsx
 "use ssg";
 
 import { useFetch } from "heliumts/client";
-import { getTasks } from "heliumts/server";
+import { getTasks } from "../rpc.generated";
 
 export default function Page() {
     const { data } = useFetch(getTasks);

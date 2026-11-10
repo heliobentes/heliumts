@@ -53,6 +53,7 @@ async function fixture() {
     vi.mocked(buildRoutes).mockReturnValue({
         routes: ["/", "/docs/guide", "/profile"].map((pathPattern) => ({
             pathPattern,
+            render: pathPattern === "/profile" ? "ssr" : pathPattern === "/docs/guide" ? "ssg" : "spa",
             matcher: (path: string) => (path.replace(/\/$/, "") === pathPattern.replace(/\/$/, "") ? { params: {} } : null),
             Component: Page,
             LazyComponent: React.lazy(async () => ({ default: Page })),

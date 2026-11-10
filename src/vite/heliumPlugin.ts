@@ -1,27 +1,25 @@
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import type { Plugin } from "vite";
 
 import { clearConfigCache, getRpcClientConfig, getRpcConfig, loadConfig } from "../server/config.js";
 import { attachToDevServer } from "../server/devServer.js";
 import { injectEnvToProcess, loadEnvFiles } from "../utils/envLoader.js";
 import { log } from "../utils/logger.js";
-import {
-    RESOLVED_VIRTUAL_CLIENT_MODULE_ID,
-    RESOLVED_VIRTUAL_ENTRY_MODULE_ID,
-    RESOLVED_VIRTUAL_SERVER_MANIFEST_ID,
-    SERVER_DIR,
-    VIRTUAL_CLIENT_MODULE_ID,
-    VIRTUAL_ENTRY_MODULE_ID,
-    VIRTUAL_SERVER_MANIFEST_ID,
-} from "./paths.js";
-import { checkRouteCollisions, scanAppShell, scanPageRoutePatterns, scanServerExports, scanSSRPages } from "./scanner.js";
-import { generateClientModule, generateEntryModule, generateServerManifest, generateTypeDefinitions } from "./virtualServerModule.js";
+import { RESOLVED_VIRTUAL_ENTRY_MODULE_ID, RESOLVED_VIRTUAL_SERVER_MANIFEST_ID, SERVER_DIR, VIRTUAL_ENTRY_MODULE_ID, VIRTUAL_SERVER_MANIFEST_ID } from "./paths.js";
+import { RPC_MODULE_PATH, writeRpcModule } from "./rpcModule.js";
+import { checkRouteCollisions, type PageManifestEntry, scanAppShell, scanPageManifest, scanPageRoutePatterns, scanServerExports, scanSSRPages } from "./scanner.js";
+import { generateServerClientModule, generateServerPrefetchModule, generateServerTransitionsModule } from "./serverClientAdapter.js";
+import { generateEntryModule, generatePageModules, generateServerManifest } from "./virtualServerModule.js";
 
 export default function helium(): Plugin {
     let root = process.cwd();
+    let pageManifest: PageManifestEntry[] | undefined;
+    const getPageManifest = () => (pageManifest ??= scanPageManifest(root));
+    const generateProjectRpc = () => writeRpcModule(root, scanServerExports(root).methods);
     const serverDir = normalizeToPosix(SERVER_DIR);
-    const RESOLVED_VIRTUAL_SSR_SERVER_MODULE_ID = "\0heliumts:ssr-server";
+    const RESOLVED_PAGE_MODULES_ID = "\0heliumts:page-modules";
     const RESOLVED_VIRTUAL_SSR_CLIENT_MODULE_ID = "\0heliumts:ssr-client";
     const RESOLVED_VIRTUAL_SSR_TRANSITIONS_MODULE_ID = "\0heliumts:ssr-transitions";
     const RESOLVED_VIRTUAL_SSR_PREFETCH_MODULE_ID = "\0heliumts:ssr-prefetch";
@@ -132,6 +130,17 @@ export default function helium(): Plugin {
             };
         },
         resolveId(id, importer, options) {
+            if (!options?.ssr && id === "./pageModules.js" && importer && import.meta.url.startsWith("file:")) {
+                const importerFile = importer.split("?")[0];
+                if (fs.existsSync(importerFile)) {
+                    const pluginDir = path.dirname(fs.realpathSync(fileURLToPath(import.meta.url)));
+                    const routerManifest = normalizeToPosix(path.resolve(pluginDir, "../client/routerManifest"));
+                    const importerPath = normalizeToPosix(fs.realpathSync(importerFile));
+                    if (importerPath === `${routerManifest}.js` || importerPath === `${routerManifest}.ts`) {
+                        return RESOLVED_PAGE_MODULES_ID;
+                    }
+                }
+            }
             if (options?.ssr && id === "heliumts/client") {
                 return RESOLVED_VIRTUAL_SSR_CLIENT_MODULE_ID;
             }
@@ -141,11 +150,8 @@ export default function helium(): Plugin {
             if (options?.ssr && id === "heliumts/client/prefetch") {
                 return RESOLVED_VIRTUAL_SSR_PREFETCH_MODULE_ID;
             }
-            if (id === VIRTUAL_CLIENT_MODULE_ID) {
-                if (importer === RESOLVED_VIRTUAL_SSR_SERVER_MODULE_ID || isServerModule(importer, root, serverDir) || /\.server\.[cm]?[jt]sx?(?:\?|$)/.test(importer || "")) {
-                    return null;
-                }
-                return options?.ssr ? RESOLVED_VIRTUAL_SSR_SERVER_MODULE_ID : RESOLVED_VIRTUAL_CLIENT_MODULE_ID;
+            if (!options?.ssr && id === "heliumts/server") {
+                throw new Error("heliumts/server is server-only. Import application RPC references from src/rpc.generated.ts.");
             }
             if (id === VIRTUAL_SERVER_MANIFEST_ID) {
                 return RESOLVED_VIRTUAL_SERVER_MANIFEST_ID;
@@ -158,7 +164,7 @@ export default function helium(): Plugin {
         },
         transform(code, id, options) {
             if (!options?.ssr && isServerModule(id, root, serverDir)) {
-                throw new Error(`Server-only module cannot be imported by client code: ${id}. Import RPC method stubs from 'heliumts/server' instead.`);
+                throw new Error(`Server-only module cannot be imported by client code: ${id}. Import application RPC references from src/rpc.generated.ts instead.`);
             }
             // Prevent .server.ts/.server.js sidecar files from being bundled in client code.
             // These files contain server-only logic (e.g. DB queries) and must never run in the browser.
@@ -167,138 +173,67 @@ export default function helium(): Plugin {
             }
         },
         load(id) {
-            if (id === RESOLVED_VIRTUAL_SSR_SERVER_MODULE_ID) {
-                const { methods } = scanServerExports(root);
-                return `export * from 'heliumts/server';\n${generateClientModule(methods)}`;
+            if (id === RESOLVED_PAGE_MODULES_ID) {
+                return generatePageModules(getPageManifest(), root);
             }
             if (id === RESOLVED_VIRTUAL_SSR_CLIENT_MODULE_ID) {
-                return generateSSRClientStubModule();
+                return generateServerClientModule("ssr");
             }
             if (id === RESOLVED_VIRTUAL_SSR_TRANSITIONS_MODULE_ID) {
-                return generateSSRTransitionsStubModule();
+                return generateServerTransitionsModule("ssr");
             }
             if (id === RESOLVED_VIRTUAL_SSR_PREFETCH_MODULE_ID) {
-                return generateSSRPrefetchStubModule();
-            }
-            if (id === RESOLVED_VIRTUAL_CLIENT_MODULE_ID) {
-                const { methods } = scanServerExports(root);
-                return generateClientModule(methods);
+                return generateServerPrefetchModule();
             }
             if (id === RESOLVED_VIRTUAL_SERVER_MANIFEST_ID) {
                 const { methods, httpHandlers, seoMetadata, middleware, workers } = scanServerExports(root);
-                const pageRoutePatterns = scanPageRoutePatterns(root);
-                const ssrPages = scanSSRPages(root);
+                const pages = getPageManifest();
+                const pageRoutePatterns = scanPageRoutePatterns(root, pages);
+                const ssrPages = scanSSRPages(root, pages);
                 const appShell = scanAppShell(root);
-                return generateServerManifest(methods, httpHandlers, seoMetadata, pageRoutePatterns, ssrPages, appShell, middleware, workers);
+                return generateServerManifest(methods, httpHandlers, seoMetadata, pageRoutePatterns, ssrPages, appShell, middleware, workers, pages);
             }
             if (id === RESOLVED_VIRTUAL_ENTRY_MODULE_ID + ".tsx") {
                 return generateEntryModule(scanAppShell(root));
             }
         },
         buildStart() {
-            const { methods } = scanServerExports(root);
-            const dts = generateTypeDefinitions(methods, root);
-            const typesDir = path.join(root, "src", "types");
-            const dtsPath = path.join(typesDir, "heliumts-server.d.ts");
-
-            // Ensure src/types exists
-            if (!fs.existsSync(typesDir)) {
-                fs.mkdirSync(typesDir, { recursive: true });
-            }
-
-            // At build start we always allow writing the canonical set.
-            // Only skip if content is identical to avoid needless TS invalidation.
-            if (!fs.existsSync(dtsPath) || fs.readFileSync(dtsPath, "utf-8") !== dts) {
-                fs.writeFileSync(dtsPath, dts);
-                touchTsConfig(root);
-            }
+            generateProjectRpc();
 
             // Check for route collisions in pages directory
-            checkRouteCollisions(root);
+            pageManifest = undefined;
+            checkRouteCollisions(root, getPageManifest());
         },
         configureServer(server) {
             // Vite's SPA fallback runs after static/public assets and preserves request URLs.
-            /**
-             * Write type definitions only if content has changed.
-             * This prevents unnecessary TypeScript recompilation.
-             *
-             * When `allowFewer` is false (default) the file will NOT be
-             * overwritten if the new content has fewer method declarations
-             * than the existing file — this guards against writing a
-             * degraded .d.ts while the user's file is only partially saved.
-             */
-            const writeTypesIfChanged = (dts: string, allowFewer = false): boolean => {
-                const typesDir = path.join(root, "src", "types");
-                const dtsPath = path.join(typesDir, "heliumts-server.d.ts");
-
-                if (!fs.existsSync(typesDir)) {
-                    fs.mkdirSync(typesDir, { recursive: true });
-                }
-
-                // Check if file exists and content is the same
-                if (fs.existsSync(dtsPath)) {
-                    const existing = fs.readFileSync(dtsPath, "utf-8");
-                    if (existing === dts) {
-                        return false; // No change needed
-                    }
-
-                    // Guard: don't overwrite with fewer methods unless explicitly allowed
-                    // (e.g. on unlink). This prevents losing types during partial saves.
-                    if (!allowFewer) {
-                        const countExports = (s: string) => (s.match(/export const \w+:/g) || []).length;
-                        const existingCount = countExports(existing);
-                        const newCount = countExports(dts);
-                        if (newCount < existingCount) {
-                            log("info", `Skipping type generation: found ${newCount} methods, existing has ${existingCount} (likely partial save)`);
-                            return false;
-                        }
-                    }
-                }
-
-                fs.writeFileSync(dtsPath, dts);
-
-                // Touch tsconfig.json to force the TypeScript language server
-                // to reload the project. Without this, TS may cache stale
-                // module augmentations and autocomplete won't reflect the
-                // new methods until a manual restart.
-                touchTsConfig(root);
-
-                return true; // File was written
-            };
-
-            const regenerateTypes = (allowFewer = false): boolean => {
-                try {
-                    const { methods } = scanServerExports(root);
-                    const dts = generateTypeDefinitions(methods, root);
-                    return writeTypesIfChanged(dts, allowFewer);
-                } catch (e) {
-                    log("error", "Failed to regenerate types", e);
-                    return false;
-                }
-            };
-
             // Debounce timer for file changes
             let debounceTimer: ReturnType<typeof setTimeout> | null = null;
             const DEBOUNCE_DELAY = 300; // ms — long enough for format-on-save to finish
 
-            const handleServerFileChange = async (allowFewer = false) => {
-                // Regenerate type definitions
-                regenerateTypes(allowFewer);
+            const handleServerFileChange = async () => {
+                try {
+                    if (generateProjectRpc()) {
+                        const generatedFile = normalizeToPosix(path.join(root, RPC_MODULE_PATH));
+                        for (const environment of [server.environments.client, server.environments.ssr]) {
+                            const graph = environment?.moduleGraph;
+                            for (const module of graph?.getModulesByFile(generatedFile) ?? []) {
+                                graph?.invalidateModule(module);
+                            }
+                        }
+                    }
+                } catch (error) {
+                    log("error", "Failed to regenerate RPC imports", error);
+                }
 
                 // Invalidate the virtual modules so they get regenerated
-                const clientModule = server.environments.client?.moduleGraph.getModuleById(RESOLVED_VIRTUAL_CLIENT_MODULE_ID);
+                pageManifest = undefined;
+                const clientPages = server.environments.client?.moduleGraph.getModuleById(RESOLVED_PAGE_MODULES_ID);
                 const serverModule = server.environments.ssr?.moduleGraph.getModuleById(RESOLVED_VIRTUAL_SERVER_MANIFEST_ID);
-                const ssrRpcModule = server.environments.ssr?.moduleGraph.getModuleById(RESOLVED_VIRTUAL_SSR_SERVER_MODULE_ID);
-
-                if (clientModule) {
-                    server.environments.client?.moduleGraph.invalidateModule(clientModule);
+                if (clientPages) {
+                    server.environments.client?.moduleGraph.invalidateModule(clientPages);
                 }
                 if (serverModule) {
                     server.environments.ssr?.moduleGraph.invalidateModule(serverModule);
-                }
-
-                if (ssrRpcModule) {
-                    server.environments.ssr?.moduleGraph.invalidateModule(ssrRpcModule);
                 }
 
                 // Reload the server manifest and re-register methods
@@ -333,14 +268,15 @@ export default function helium(): Plugin {
                             config,
                             workers,
                             ssrPages,
-                            appShell
+                            appShell,
+                            mod.pageRoutes
                         );
                     }
                 } catch (e) {
                     log("error", "Failed to reload Helium server manifest", e);
                 }
 
-                // Trigger HMR for any client code that imports heliumts/server
+                // Refresh the browser after the server manifest has reloaded.
                 server.ws.send({
                     type: "full-reload",
                     path: "*",
@@ -359,29 +295,6 @@ export default function helium(): Plugin {
                 }
             }
 
-            /**
-             * Debounced handler for server file changes.
-             * This prevents multiple rapid regenerations during file saves.
-             * @param allowFewer - pass true when files are deleted, so the
-             *                     method count is allowed to decrease.
-             */
-            let pendingAllowFewer = false;
-            const debouncedHandleServerFileChange = (allowFewer = false) => {
-                // If any event in the batch is an unlink, honour it
-                if (allowFewer) {
-                    pendingAllowFewer = true;
-                }
-                if (debounceTimer) {
-                    clearTimeout(debounceTimer);
-                }
-                debounceTimer = setTimeout(() => {
-                    debounceTimer = null;
-                    const shouldAllowFewer = pendingAllowFewer;
-                    pendingAllowFewer = false;
-                    handleServerFileChange(shouldAllowFewer);
-                }, DEBOUNCE_DELAY);
-            };
-
             const affectsManifest = (file: string): boolean => {
                 const normalized = normalizeToPosix(path.relative(root, file));
                 return (
@@ -389,23 +302,21 @@ export default function helium(): Plugin {
                 );
             };
 
-            server.watcher.on("change", (file) => {
-                if (affectsManifest(file)) {
-                    debouncedHandleServerFileChange(true);
+            const refreshManifest = (file: string) => {
+                if (!affectsManifest(file)) {
+                    return;
                 }
-            });
-
-            server.watcher.on("add", (file) => {
-                if (affectsManifest(file)) {
-                    debouncedHandleServerFileChange();
+                if (debounceTimer) {
+                    clearTimeout(debounceTimer);
                 }
-            });
-
-            server.watcher.on("unlink", (file) => {
-                if (affectsManifest(file)) {
-                    debouncedHandleServerFileChange(true);
-                }
-            });
+                debounceTimer = setTimeout(() => {
+                    debounceTimer = null;
+                    void handleServerFileChange();
+                }, DEBOUNCE_DELAY);
+            };
+            server.watcher.on("change", refreshManifest);
+            server.watcher.on("add", refreshManifest);
+            server.watcher.on("unlink", refreshManifest);
 
             server.httpServer?.once("close", () => {
                 if (debounceTimer) {
@@ -440,7 +351,8 @@ export default function helium(): Plugin {
                         config,
                         mod.workers || [],
                         mod.ssrPages || [],
-                        mod.appShell || null
+                        mod.appShell || null,
+                        mod.pageRoutes
                     );
                     initialized = true;
                 })();
@@ -490,143 +402,6 @@ export default function helium(): Plugin {
     };
 }
 
-function generateSSRClientStubModule(): string {
-    return `
-import React from 'react';
-
-export const RouterContext = React.createContext(null);
-
-function getSSRRouterSnapshot() {
-    const snapshot = globalThis.__HELIUM_SSR_ROUTER__;
-    if (!snapshot || typeof snapshot !== 'object') {
-        return {
-            path: '/',
-            params: {},
-            search: '',
-        };
-    }
-
-    return {
-        path: typeof snapshot.path === 'string' ? snapshot.path : '/',
-        params: snapshot.params && typeof snapshot.params === 'object' ? snapshot.params : {},
-        search: typeof snapshot.search === 'string' ? snapshot.search : '',
-    };
-}
-
-export function useRouter() {
-    const snapshot = getSSRRouterSnapshot();
-    return {
-        path: snapshot.path,
-        params: snapshot.params,
-        searchParams: new URLSearchParams(snapshot.search),
-        push: () => {},
-        replace: () => {},
-        on: () => () => {},
-        status: 200,
-        isNavigating: false,
-        isPending: false,
-    };
-}
-
-export function Link(props) {
-    const { href = '#', children, prefetch, ...rest } = props || {};
-    return React.createElement('a', { href, ...rest }, children);
-}
-
-export function Redirect() {
-    return null;
-}
-
-export function AppRouter() {
-    return null;
-}
-
-export async function callMethod() {
-    throw new Error('callMethod is only available in the browser. Load server data with getServerSideProps instead.');
-}
-
-export function useStreaming() {
-    return {
-        chunks: [],
-        text: '',
-        isStreaming: false,
-        error: null,
-        stats: null,
-        start: async () => {
-            throw new Error('useStreaming.start is only available in the browser. Load server data with getServerSideProps instead.');
-        },
-        cancel: () => {},
-        reset: () => {},
-    };
-}
-
-export function useCall() {
-    return {
-        call: async () => null,
-        isCalling: false,
-        error: null,
-    };
-}
-
-export function useFetch() {
-    return {
-        data: null,
-        isLoading: false,
-        error: null,
-        refetch: async () => undefined,
-    };
-}
-
-export class RpcError extends Error {}
-
-export function getPublicEnv() {
-    return Object.fromEntries(Object.entries(process.env).filter(([key, value]) => key.startsWith('HELIUM_PUBLIC_') && typeof value === 'string'));
-}
-
-export function getPublicEnvValue(key) {
-    return getPublicEnv()[key];
-}
-
-export function isDevEnvironment() {
-    return false;
-}
-
-export function isSSR() {
-    return true;
-}
-`;
-}
-
-function generateSSRTransitionsStubModule(): string {
-    return `
-import React from 'react';
-import { useRouter } from 'heliumts/client';
-
-export function useDeferredNavigation() {
-    const { path } = useRouter();
-    return {
-        path,
-        deferredPath: path,
-        isStale: false,
-        isPending: false,
-        isTransitioning: false,
-    };
-}
-
-export function PageTransition({ children, fallback = null }) {
-    return React.createElement('div', { style: { opacity: 1, transition: 'opacity 150ms ease' } },
-        React.createElement(React.Suspense, { fallback }, children));
-}
-`;
-}
-
-function generateSSRPrefetchStubModule(): string {
-    return `
-export function prefetchRoute() {}
-export function clearPrefetchCache() {}
-`;
-}
-
 /**
  * Convert file path to POSIX format
  * @internal Exported for testing
@@ -656,29 +431,4 @@ export function isServerModule(importer: string | undefined, root: string, serve
 
     const normalized = normalizeToPosix(relative);
     return normalized === serverDir || normalized.startsWith(`${serverDir}/`);
-}
-
-/**
- * Touch the project's tsconfig.json to force the TypeScript language server
- * to reload the project and pick up changed module augmentations.
- *
- * TS language server watches tsconfig.json for changes. When a `.d.ts` file
- * with `declare module` augmentations is regenerated, TS doesn't always
- * detect the new content — leading to stale autocomplete.  By updating
- * tsconfig.json's mtime we trigger a full project reload.
- *
- * The file content is NOT modified; only the filesystem timestamp changes.
- *
- * @internal Exported for testing
- */
-export function touchTsConfig(root: string): void {
-    const tsconfigPath = path.join(root, "tsconfig.json");
-    try {
-        if (fs.existsSync(tsconfigPath)) {
-            const now = new Date();
-            fs.utimesSync(tsconfigPath, now, now);
-        }
-    } catch {
-        // Non-critical: if we can't touch the file, TS may just need a manual reload
-    }
 }

@@ -6,8 +6,9 @@ import ts from "typescript";
 import { fileURLToPath } from "url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { RPC_MODULE_PATH, writeRpcModule } from "../../src/vite/rpcModule";
 import { scanServerExports } from "../../src/vite/scanner";
-import { generateClientModule, generateServerManifest, generateTypeDefinitions } from "../../src/vite/virtualServerModule";
+import { generateServerManifest } from "../../src/vite/virtualServerModule";
 
 const frameworkRoot = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -17,7 +18,6 @@ describe("streaming method build support", () => {
     beforeEach(() => {
         root = fs.mkdtempSync(path.join(os.tmpdir(), "helium-streaming-types-"));
         fs.mkdirSync(path.join(root, "src", "server"), { recursive: true });
-        fs.mkdirSync(path.join(root, "src", "types"), { recursive: true });
         fs.symlinkSync(path.join(frameworkRoot, "node_modules"), path.join(root, "node_modules"), "junction");
         fs.writeFileSync(
             path.join(root, "src", "server", "streams.ts"),
@@ -37,26 +37,23 @@ export const streamText = defineMethod(async function* words(args: { name: strin
         fs.rmSync(root, { recursive: true, force: true });
     });
 
-    it("discovers async generators as methods and registers their normal client stubs", () => {
+    it("discovers async generators as methods and registers them for RPC", () => {
         const { methods } = scanServerExports(root);
         expect(methods.map((method) => method.name)).toEqual(["streamRows", "streamText"]);
-        const client = generateClientModule(methods);
-        expect(client).toContain("export const streamRows = { __id: 'streamRows' }");
-        expect(client).toContain("export const streamText = { __id: 'streamText' }");
         const manifest = generateServerManifest(methods, []);
         expect(manifest).toContain("registry.register('streamRows', method_0)");
         expect(manifest).toContain("registry.register('streamText', method_1)");
     });
 
-    it("preserves generator argument and chunk inference through generated declarations", () => {
+    it("preserves generator argument and chunk inference through generated references", () => {
         const { methods } = scanServerExports(root);
-        const declarationsPath = path.join(root, "src", "types", "heliumts-server.d.ts");
-        fs.writeFileSync(declarationsPath, generateTypeDefinitions(methods, root));
+        writeRpcModule(root, methods);
+        const rpcModulePath = path.join(root, RPC_MODULE_PATH);
         const consumerPath = path.join(root, "src", "consumer.ts");
         fs.writeFileSync(
             consumerPath,
             `import { useStreaming } from 'heliumts/client';
-import { streamRows, streamText } from 'heliumts/server';
+import { streamRows, streamText } from './rpc.generated';
 const rows = useStreaming(streamRows, { onChunk(chunk) {
     const text: string = chunk.text;
     const index: number = chunk.index;
@@ -73,7 +70,7 @@ strings.start({ name: 'Helium' });
 // @ts-expect-error Object and string streams must remain distinct.
 const wrongChunks: number[] = strings.chunks;`
         );
-        const program = ts.createProgram([consumerPath, declarationsPath, path.join(frameworkRoot, "src", "client", "vite-env.d.ts")], {
+        const program = ts.createProgram([consumerPath, rpcModulePath, path.join(frameworkRoot, "src", "client", "vite-env.d.ts")], {
             target: ts.ScriptTarget.ES2022,
             module: ts.ModuleKind.ESNext,
             moduleResolution: ts.ModuleResolutionKind.Bundler,

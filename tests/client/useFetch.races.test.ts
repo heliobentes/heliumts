@@ -5,6 +5,8 @@ import { cacheKey, get, invalidateAll, invalidateByMethod, isPending } from "../
 import { rpcCall } from "../../src/client/rpcClient";
 import { useFetch } from "../../src/client/useFetch";
 
+import { methodReference } from "./methodReference";
+
 vi.mock("../../src/client/rpcClient", () => ({ rpcCall: vi.fn() }));
 
 function deferred<T>() {
@@ -19,7 +21,7 @@ function deferred<T>() {
 
 type Result = { data: string; stats: { remainingRequests: number; resetInSeconds: number } };
 const stats = { remainingRequests: 10, resetInSeconds: 1 };
-const method = { __kind: "method" as const, __id: "query", handler: (_args: unknown) => "" };
+const method = methodReference<unknown, string>("query");
 
 describe("useFetch request lifecycle", () => {
     beforeEach(() => {

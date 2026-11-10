@@ -4,6 +4,7 @@ import path from "path";
 import type { ComponentType, ReactNode } from "react";
 
 import { SEO_METADATA_RPC_METHOD } from "../runtime/internalMethods.js";
+import type { PageRoute } from "../runtime/pageRoutes.js";
 import { injectHeliumEnvIntoHtml } from "../utils/envLoader.js";
 import { extractClientIP } from "../utils/ipExtractor.js";
 import { log } from "../utils/logger.js";
@@ -21,7 +22,7 @@ import { abortServerRequests, getRequestSignal, trackServerRequest } from "./req
 import { RpcRegistry } from "./rpcRegistry.js";
 import { initializeSecurity } from "./security.js";
 import { SEOMetadataRouter } from "./seoMetadataRouter.js";
-import { matchSSRPage, renderSSRHTML, resolveServerSideProps, SSRPageDef } from "./ssr.js";
+import { createSSRPageMatcher, renderSSRHTML, resolveServerSideProps, SSRPageDef } from "./ssr.js";
 
 interface WorkerEntry {
     name: string;
@@ -36,6 +37,7 @@ interface ProdServerOptions {
     config?: HeliumConfig;
     workers?: WorkerEntry[];
     ssrPages?: SSRPageDef[];
+    pageRoutes?: readonly PageRoute[];
     appShell?: (() => Promise<ComponentType<{ Component: ComponentType<Record<string, unknown>>; pageProps: Record<string, unknown>; children?: ReactNode }>>) | null;
 }
 
@@ -62,8 +64,10 @@ export function startProdServer(options: ProdServerOptions) {
         config = {},
         workers = [],
         ssrPages = [],
+        pageRoutes,
         appShell = null,
     } = options;
+    const matchSSRPage = createSSRPageMatcher(ssrPages, pageRoutes);
 
     // Load configuration
     const trustProxyDepth = getTrustProxyDepth(config);
@@ -121,7 +125,7 @@ export function startProdServer(options: ProdServerOptions) {
             const pathQuery = requestUrl.searchParams.get("path") || "/";
             const targetUrl = new URL(pathQuery, "http://localhost");
             const targetPathname = targetUrl.pathname;
-            const ssrMatch = matchSSRPage(targetPathname, ssrPages);
+            const ssrMatch = matchSSRPage(targetPathname);
 
             if (!ssrMatch) {
                 res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
@@ -340,6 +344,7 @@ export function startProdServer(options: ProdServerOptions) {
             ".mp4": "video/mp4",
             ".webm": "video/webm",
             ".txt": "text/plain",
+            ".md": "text/markdown; charset=utf-8",
             ".xml": "application/xml",
             ".wasm": "application/wasm",
         };
@@ -348,8 +353,8 @@ export function startProdServer(options: ProdServerOptions) {
         try {
             const content = fs.readFileSync(filePath);
             let responseBody = content;
-            const cleanedPathname = (req.url || "/").split("?")[0].replace(/\/$/, "") || "/";
-            const htmlSsrMatch = req.method === "GET" && contentType === "text/html" ? matchSSRPage(cleanedPathname, ssrPages) : null;
+            const cleanedPathname = requestPathname.replace(/\/$/, "") || "/";
+            const htmlSsrMatch = req.method === "GET" && contentType === "text/html" ? matchSSRPage(cleanedPathname) : null;
 
             if (!is404 && contentType === "text/html") {
                 const ip = extractClientIP(req, trustProxyDepth);

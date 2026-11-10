@@ -1,8 +1,17 @@
 import fs from "fs";
 import path from "path";
 
+import { type PageRoute, pathFromPageFile } from "../runtime/pageRoutes.js";
 import { log } from "../utils/logger.js";
 import { SERVER_DIR } from "./paths.js";
+import { discoverExports } from "./rpcDiscovery.js";
+
+// Application RPC names become `export const <name>` bindings in strict ES modules.
+const reservedRpcBindings = new Set(
+    "await break case catch class const continue debugger default delete do else enum export extends false finally for function if implements import in instanceof interface let new null package private protected public return static super switch this throw true try typeof var void while with yield eval arguments".split(
+        " "
+    )
+);
 
 export interface MethodExport {
     name: string;
@@ -44,6 +53,12 @@ export interface SSRPageExport {
     layoutFilePaths: string[];
 }
 
+export interface PageManifestEntry extends PageRoute {
+    file: string;
+    sidecar: string | null;
+    layouts: string[];
+}
+
 export function scanAppShell(root: string): string | null {
     const srcDir = path.join(root, "src");
     const pagesDir = path.join(srcDir, "pages");
@@ -82,109 +97,67 @@ export function scanServerExports(root: string): ServerExports {
         return { methods: [], httpHandlers: [], seoMetadata: [], workers: [] };
     }
 
-    const methods: MethodExport[] = [];
-    const httpHandlers: HTTPHandlerExport[] = [];
-    const seoMetadata: SEOMetadataExport[] = [];
-    const workers: WorkerExport[] = [];
-    let middleware: MiddlewareExport | undefined;
-
+    const files = new Map<string, string>();
     function walk(dir: string) {
-        let files: string[];
+        let entries: string[];
         try {
-            files = fs.readdirSync(dir);
-        } catch {
-            // Directory might have been deleted during scan
-            return;
-        }
-        for (const file of files) {
-            const fullPath = path.join(dir, file);
-            let stat: fs.Stats;
-            try {
-                stat = fs.statSync(fullPath);
-            } catch {
-                // File might have been deleted during scan
-                continue;
+            entries = fs.readdirSync(dir).sort();
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                return;
             }
-
-            if (stat.isDirectory()) {
-                walk(fullPath);
-            } else if (file.endsWith(".ts") && !file.endsWith(".d.ts")) {
-                let content: string;
-                try {
-                    content = fs.readFileSync(fullPath, "utf-8");
-                } catch {
-                    // File might be being written to or deleted
-                    continue;
+            throw error;
+        }
+        for (const entry of entries) {
+            const file = path.join(dir, entry);
+            try {
+                if (fs.statSync(file).isDirectory()) {
+                    walk(file);
+                } else if (/\.[cm]?[jt]sx?$/.test(entry) && !/\.d\.[cm]?ts$/.test(entry)) {
+                    files.set(file, fs.readFileSync(file, "utf8"));
                 }
-
-                // Skip empty or near-empty files (likely partial writes)
-                if (content.length < 10) {
-                    continue;
-                }
-
-                // Check for _middleware.ts file
-                if (file === "_middleware.ts") {
-                    // Support both 'middleware' and 'defineMiddleware' (backwards compatibility)
-                    const middlewareRegex = /export\s+(const|default)\s+(\w+)\s*=\s*(middleware|defineMiddleware)/;
-                    const match = middlewareRegex.exec(content);
-                    if (match) {
-                        middleware = {
-                            name: match[2],
-                            filePath: fullPath,
-                        };
-                    }
-                    // Also support default export
-                    const defaultRegex = /export\s+default\s+(middleware|defineMiddleware)/;
-                    if (defaultRegex.test(content)) {
-                        middleware = {
-                            name: "default",
-                            filePath: fullPath,
-                        };
-                    }
-                }
-
-                // Find: export const methodName = defineMethod(...)
-                const methodRegex = /export\s+const\s+(\w+)\s*=\s*defineMethod/g;
-                let match;
-                while ((match = methodRegex.exec(content)) !== null) {
-                    methods.push({
-                        name: match[1],
-                        filePath: fullPath,
-                    });
-                }
-
-                // Find: export const handlerName = defineHTTPRequest(...)
-                const httpRegex = /export\s+const\s+(\w+)\s*=\s*defineHTTPRequest/g;
-                while ((match = httpRegex.exec(content)) !== null) {
-                    httpHandlers.push({
-                        name: match[1],
-                        filePath: fullPath,
-                    });
-                }
-
-                // Find: export const seoName = defineSEOMetadata(...)
-                const seoRegex = /export\s+const\s+(\w+)\s*=\s*defineSEOMetadata/g;
-                while ((match = seoRegex.exec(content)) !== null) {
-                    seoMetadata.push({
-                        name: match[1],
-                        filePath: fullPath,
-                    });
-                }
-
-                // Find: export const workerName = defineWorker(...)
-                const workerRegex = /export\s+const\s+(\w+)\s*=\s*defineWorker/g;
-                while ((match = workerRegex.exec(content)) !== null) {
-                    workers.push({
-                        name: match[1],
-                        filePath: fullPath,
-                    });
+            } catch (error) {
+                // Only disappearing files are recoverable; permissions/I/O failures must surface.
+                if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+                    throw error;
                 }
             }
         }
     }
-
     walk(serverDir);
-    return { methods, httpHandlers, seoMetadata, middleware, workers };
+    const result: ServerExports = { methods: [], httpHandlers: [], seoMetadata: [], workers: [] };
+    const registered = new Map<string, { origin: string; location: string }>();
+    for (const item of discoverExports(files)) {
+        const isMiddleware = item.factory === "middleware" || item.factory === "defineMiddleware";
+        if (isMiddleware && !/^_middleware\.[cm]?[jt]sx?$/.test(path.basename(item.filePath))) {
+            continue;
+        }
+        if (!isMiddleware && (item.name === "default" || !/^[$A-Z_a-z][$\w]*$/.test(item.name) || (item.factory === "defineMethod" && reservedRpcBindings.has(item.name)))) {
+            throw new Error(`Helium exports must use a valid JavaScript binding name: ${item.name} at ${item.location}`);
+        }
+        const key = isMiddleware ? "middleware" : `${item.factory}:${item.name}`;
+        const previous = registered.get(key);
+        if (previous) {
+            if (previous.origin === item.origin) {
+                continue;
+            } // A barrel re-export is the same declaration.
+            throw new Error(`Duplicate Helium export "${item.name}": ${previous.location} and ${item.location}`);
+        }
+        registered.set(key, item);
+        const entry = { name: item.name, filePath: item.filePath };
+        if (isMiddleware) {
+            result.middleware = entry;
+        } else if (item.factory === "defineMethod") {
+            result.methods.push(entry);
+        } else if (item.factory === "defineHTTPRequest") {
+            result.httpHandlers.push(entry);
+        } else if (item.factory === "defineSEOMetadata") {
+            result.seoMetadata.push(entry);
+        } else if (item.factory === "defineWorker") {
+            result.workers.push(entry);
+        }
+    }
+    return result;
 }
 
 export function isPageFile(fileName: string): boolean {
@@ -280,7 +253,12 @@ function findSidecarServerFile(pageFilePath: string): string | null {
     return null;
 }
 
-function findLayoutPathsForPage(pagePath: string, root: string): string[] {
+function findLayoutPath(dir: string): string | undefined {
+    return ["_layout.tsx", "_layout.jsx", "_layout.ts", "_layout.js"].map((name) => path.join(dir, name)).find((file) => fs.existsSync(file));
+}
+
+/** Find ancestor layouts for callers rendering a page outside a manifest. */
+export function findLayoutPathsForPage(pagePath: string, root: string): string[] {
     const pagesDir = path.join(root, "src", "pages");
     const relativePath = path.relative(pagesDir, pagePath);
     const pathParts = path
@@ -289,107 +267,25 @@ function findLayoutPathsForPage(pagePath: string, root: string): string[] {
         .filter((p) => p !== ".");
 
     const layoutPaths: string[] = [];
-    const layoutNames = ["_layout.tsx", "_layout.jsx", "_layout.ts", "_layout.js"];
-
-    for (const layoutName of layoutNames) {
-        const rootLayoutPath = path.join(pagesDir, layoutName);
-        if (fs.existsSync(rootLayoutPath)) {
-            layoutPaths.push(rootLayoutPath);
-            break;
-        }
-    }
-
-    for (let i = 1; i <= pathParts.length; i++) {
-        const dirPath = path.join(pagesDir, ...pathParts.slice(0, i));
-        for (const layoutName of layoutNames) {
-            const layoutPath = path.join(dirPath, layoutName);
-            if (fs.existsSync(layoutPath)) {
-                layoutPaths.push(layoutPath);
-                break;
-            }
+    for (let i = 0; i <= pathParts.length; i++) {
+        const layout = findLayoutPath(path.join(pagesDir, ...pathParts.slice(0, i)));
+        if (layout) {
+            layoutPaths.push(layout);
         }
     }
 
     return layoutPaths;
 }
 
-export function scanSSRPages(root: string): SSRPageExport[] {
-    const pagesDir = path.join(root, "src", "pages");
-    if (!fs.existsSync(pagesDir)) {
-        return [];
-    }
-
-    const ssrPages: SSRPageExport[] = [];
-
-    function walkPages(dir: string) {
-        const items = fs.readdirSync(dir);
-
-        for (const item of items) {
-            const fullPath = path.join(dir, item);
-            const stat = fs.statSync(fullPath);
-
-            if (stat.isDirectory()) {
-                walkPages(fullPath);
-                continue;
-            }
-
-            if (!isPageFile(item)) {
-                continue;
-            }
-
-            const content = fs.readFileSync(fullPath, "utf-8");
-            if (!hasPageDirective(content, "use ssr")) {
-                continue;
-            }
-
-            const pathPattern = pathFromFile(fullPath, root);
-            if (pathPattern === "__404__") {
-                continue;
-            }
-
-            ssrPages.push({
-                pathPattern,
-                pageFilePath: fullPath,
-                serverFilePath: findSidecarServerFile(fullPath),
-                layoutFilePaths: findLayoutPathsForPage(fullPath, root),
-            });
-        }
-    }
-
-    walkPages(pagesDir);
-    return ssrPages;
-}
-
-/**
- * Convert a file path to a route pattern (same logic as client-side router)
- */
-function pathFromFile(file: string, root: string): string {
-    // Remove root/src/pages prefix and file extension
-    const pagesDir = path.join(root, "src", "pages");
-    const withoutPrefix =
-        "/" +
-        path
-            .relative(pagesDir, file)
-            .split(path.sep)
-            .join("/")
-            .replace(/\.(tsx|jsx|ts|js)$/, "");
-
-    // Handle special files
-    if (withoutPrefix === "/404") {
-        return "__404__";
-    }
-
-    // Remove route groups (folders in parentheses)
-    let pattern = withoutPrefix.replace(/\/\([^)]+\)/g, "");
-
-    // Convert /index to /
-    pattern = pattern.replace(/\/index$/, "") || "/";
-    // Convert [...param] to *param (catch-all)
-    pattern = pattern.replace(/\[\.\.\.(.+?)\]/g, "*$1");
-    // Convert [param] to :param (single dynamic segment)
-    pattern = pattern.replace(/\[(.+?)\]/g, ":$1");
-
-    return pattern;
+export function scanSSRPages(root: string, manifest: readonly PageManifestEntry[] = scanPageManifest(root)): SSRPageExport[] {
+    return manifest
+        .filter((route) => route.render === "ssr" && route.pattern !== "__404__")
+        .map(({ pattern, file, sidecar, layouts }) => ({
+            pathPattern: pattern,
+            pageFilePath: file,
+            serverFilePath: sidecar,
+            layoutFilePaths: layouts,
+        }));
 }
 
 export interface RouteCollision {
@@ -397,103 +293,35 @@ export interface RouteCollision {
     files: string[];
 }
 
-export function scanPageRoutePatterns(root: string): string[] {
-    const pagesDir = path.join(root, "src", "pages");
-    if (!fs.existsSync(pagesDir)) {
-        return [];
-    }
-
-    const patterns = new Set<string>();
-
-    function walkPages(dir: string) {
-        const items = fs.readdirSync(dir);
-
-        for (const item of items) {
-            const fullPath = path.join(dir, item);
-            const stat = fs.statSync(fullPath);
-
-            if (stat.isDirectory()) {
-                walkPages(fullPath);
-                continue;
-            }
-
-            if (!isPageFile(item)) {
-                continue;
-            }
-
-            const pattern = pathFromFile(fullPath, root);
-            if (pattern === "__404__") {
-                continue;
-            }
-
-            patterns.add(pattern);
-        }
-    }
-
-    walkPages(pagesDir);
-
-    return [...patterns];
+export function scanPageRoutePatterns(root: string, manifest: readonly PageManifestEntry[] = scanPageManifest(root)): string[] {
+    return [...new Set(manifest.map((route) => route.pattern).filter((pattern) => pattern !== "__404__"))];
 }
 
 /**
  * Scan pages directory and detect route collisions
  */
-export function scanPageRoutes(root: string): { collisions: RouteCollision[]; totalRoutes: number } {
-    const pagesDir = path.join(root, "src", "pages");
-
-    if (!fs.existsSync(pagesDir)) {
-        return { collisions: [], totalRoutes: 0 };
-    }
-
-    const routePatternMap = new Map<string, string>();
-    const collisions: RouteCollision[] = [];
-
-    function walkPages(dir: string) {
-        const items = fs.readdirSync(dir);
-
-        for (const item of items) {
-            const fullPath = path.join(dir, item);
-            const stat = fs.statSync(fullPath);
-
-            if (stat.isDirectory()) {
-                walkPages(fullPath);
-            } else if (isPageFile(item)) {
-                const pathPattern = pathFromFile(fullPath, root);
-
-                // Skip special pages
-                if (pathPattern === "__404__") {
-                    continue;
-                }
-
-                // Check for collision
-                const existingFile = routePatternMap.get(pathPattern);
-                if (existingFile) {
-                    // Check if this collision was already recorded
-                    const existingCollision = collisions.find((c) => c.pattern === pathPattern);
-                    if (existingCollision) {
-                        existingCollision.files.push(fullPath);
-                    } else {
-                        collisions.push({
-                            pattern: pathPattern,
-                            files: [existingFile, fullPath],
-                        });
-                    }
-                } else {
-                    routePatternMap.set(pathPattern, fullPath);
-                }
-            }
+export function scanPageRoutes(root: string, manifest: readonly PageManifestEntry[] = scanPageManifest(root)): { collisions: RouteCollision[]; totalRoutes: number } {
+    const routes = new Map<string, RouteCollision>();
+    for (const { pattern, file } of manifest) {
+        if (pattern === "__404__") {
+            continue;
+        }
+        const key = pattern.replace(/:[^/]+/g, ":param").replace(/\*[^/]+/g, "*param");
+        const route = routes.get(key);
+        if (route) {
+            route.files.push(file);
+        } else {
+            routes.set(key, { pattern, files: [file] });
         }
     }
-
-    walkPages(pagesDir);
-    return { collisions, totalRoutes: routePatternMap.size };
+    return { collisions: [...routes.values()].filter(({ files }) => files.length > 1), totalRoutes: routes.size };
 }
 
 /**
  * Check for route collisions and log warnings
  */
-export function checkRouteCollisions(root: string): boolean {
-    const { collisions, totalRoutes } = scanPageRoutes(root);
+export function checkRouteCollisions(root: string, manifest: readonly PageManifestEntry[] = scanPageManifest(root)): boolean {
+    const { collisions, totalRoutes } = scanPageRoutes(root, manifest);
 
     if (collisions.length === 0) {
         return false;
@@ -517,4 +345,38 @@ export function checkRouteCollisions(root: string): boolean {
     log("warn", "");
 
     return true;
+}
+
+/** Describe rendering and source files without loading page modules. */
+export function scanPageManifest(root: string): PageManifestEntry[] {
+    const routes: PageManifestEntry[] = [];
+    const pagesDir = path.resolve(root, "src", "pages");
+    function walk(dir: string, parentLayouts: string[]) {
+        const layout = findLayoutPath(dir);
+        const layouts = layout ? [...parentLayouts, layout] : parentLayouts;
+        for (const name of fs.readdirSync(dir).sort()) {
+            const file = path.join(dir, name);
+            if (fs.statSync(file).isDirectory()) {
+                walk(file, layouts);
+            } else if (isPageFile(name)) {
+                const source = fs.readFileSync(file, "utf8");
+                const ssr = hasPageDirective(source, "use ssr");
+                const ssg = hasPageDirective(source, "use ssg");
+                if (ssr && ssg) {
+                    throw new Error(`Page cannot use both SSR and SSG: ${file}`);
+                }
+                routes.push({
+                    pattern: pathFromPageFile(path.relative(pagesDir, file).split(path.sep).join("/")),
+                    file,
+                    render: ssr ? "ssr" : ssg ? "ssg" : "spa",
+                    sidecar: findSidecarServerFile(file),
+                    layouts,
+                });
+            }
+        }
+    }
+    if (fs.existsSync(pagesDir)) {
+        walk(pagesDir, []);
+    }
+    return routes;
 }

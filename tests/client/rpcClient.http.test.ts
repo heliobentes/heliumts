@@ -2,7 +2,7 @@
 import { decode, encode } from "@msgpack/msgpack";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
-import type { MethodStub } from "../../src/client/types";
+import { methodReference } from "./methodReference";
 
 const stats = { remainingRequests: 100, resetInSeconds: 60 };
 const token = () => `${Date.now()}.test-signature`;
@@ -30,7 +30,7 @@ describe("HTTP RPC client", () => {
         });
         vi.stubGlobal("fetch", fetch);
         const { callMethod } = await import("../../src/client/callMethod");
-        const method: MethodStub<{ name: string }, string> = { __kind: "method", __id: "greet", handler: ({ name }) => name };
+        const method = methodReference<{ name: string }, string>("greet");
         const result = await callMethod(method, { name: "Ada" });
         expectTypeOf(result.data).toEqualTypeOf<string>();
         expect(result).toEqual({ data: "greet", stats });

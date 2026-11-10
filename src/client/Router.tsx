@@ -602,6 +602,7 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
     const hydrationDoneRef = React.useRef(false);
 
     const match = useMemo(() => matchRoute(state.path, routes), [state.path, routes]);
+    const needsServerProps = match?.route.render === "ssr";
     // Use matched params, or fall back to re-extracting from path using global routes during HMR
     const currentParams = match?.params ?? (isDevEnvironment() ? extractParamsFromPath(state.path) : {});
 
@@ -640,6 +641,10 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
             }
         }
 
+        if (!needsServerProps) {
+            return;
+        }
+
         let cancelled = false;
 
         const load = async () => {
@@ -676,7 +681,7 @@ export function AppRouter({ AppShell }: { AppShell?: ComponentType<AppShellProps
         return () => {
             cancelled = true;
         };
-    }, [targetPath]);
+    }, [targetPath, needsServerProps]);
 
     React.useEffect(() => {
         const controller = new AbortController();

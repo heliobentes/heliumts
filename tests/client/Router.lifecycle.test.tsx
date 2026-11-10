@@ -52,6 +52,7 @@ describe("router page lifecycle", () => {
         vi.mocked(buildRoutes).mockReturnValue({
             routes: ["/", "/other"].map((pathPattern) => ({
                 pathPattern,
+                render: "ssr",
                 matcher: (path: string) => (path === pathPattern ? { params: {} } : null),
                 Component: CounterPage,
                 LazyComponent: React.lazy(async () => ({ default: CounterPage })),
@@ -93,6 +94,72 @@ describe("router page lifecycle", () => {
         await act(async () => nextResponse.resolve(propsResponse("second route")));
         expect(screen.getByText("second route")).toBeDefined();
     });
+
+    it("uses the SPA page for /products/new on a direct load and after client navigation", async () => {
+        function NewProduct() {
+            return (
+                <>
+                    <h1>New product</h1>
+                    <Link href="/products/42">View product</Link>
+                </>
+            );
+        }
+
+        function ProductDetail(input: unknown) {
+            const { label } = input as { label?: string };
+            return (
+                <>
+                    <h1>{label ?? "Product detail"}</h1>
+                    <Link href="/products/new">Add product</Link>
+                </>
+            );
+        }
+
+        vi.mocked(buildRoutes).mockReturnValue({
+            routes: [
+                {
+                    pathPattern: "/products/new",
+                    render: "spa",
+                    matcher: (path) => (path === "/products/new" ? { params: {} } : null),
+                    Component: NewProduct,
+                    LazyComponent: React.lazy(async () => ({ default: NewProduct })),
+                    layouts: [],
+                    preload: async () => ({ default: NewProduct }),
+                },
+                {
+                    pathPattern: "/products/:id",
+                    render: "ssr",
+                    matcher: (path) => {
+                        const id = /^\/products\/([^/]+)$/.exec(path)?.[1];
+                        return id ? { params: { id } } : null;
+                    },
+                    Component: ProductDetail,
+                    LazyComponent: React.lazy(async () => ({ default: ProductDetail })),
+                    layouts: [],
+                    preload: async () => ({ default: ProductDetail }),
+                },
+            ],
+        });
+        window.history.replaceState({}, "", "/products/new");
+        window.dispatchEvent(new PopStateEvent("popstate"));
+        const fetchMock = vi.fn(async () => propsResponse("SSR product:42"));
+        vi.stubGlobal("fetch", fetchMock);
+
+        render(<AppRouter />);
+        expect(await screen.findByRole("heading", { name: "New product" })).toBeDefined();
+        expect(fetchMock).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByRole("link", { name: "View product" }));
+        expect(await screen.findByRole("heading", { name: "SSR product:42" })).toBeDefined();
+        expect(fetchMock).toHaveBeenCalledExactlyOnceWith("/__helium__/page-props?path=%2Fproducts%2F42", expect.objectContaining({ method: "GET" }));
+        fetchMock.mockClear();
+
+        fireEvent.click(screen.getByRole("link", { name: "Add product" }));
+        expect(await screen.findByRole("heading", { name: "New product" })).toBeDefined();
+        expect(window.location.pathname).toBe("/products/new");
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it("preserves a shared layout's state when navigating between pages", async () => {
         vi.stubGlobal(
             "fetch",

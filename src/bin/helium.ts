@@ -1,17 +1,13 @@
 #!/usr/bin/env node
 import { cac } from "cac";
 import { type ChildProcess, spawn } from "child_process";
-import { build as esbuild } from "esbuild";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { build as viteBuild } from "vite";
 
 import { replaceHtmlRootContents } from "../utils/html.js";
 import { log } from "../utils/logger.js";
-import { scanAppShell, scanPageRoutePatterns, scanServerExports, scanSSRPages } from "../vite/scanner.js";
-import { generateStaticPages } from "../vite/ssg.js";
-import { generateClientModule, generateServerManifest, generateTypeDefinitions } from "../vite/virtualServerModule.js";
+import { generateServerClientModule, generateServerPrefetchModule, generateServerTransitionsModule } from "../vite/serverClientAdapter.js";
 
 const cli = cac("helium");
 const root = process.cwd();
@@ -32,26 +28,145 @@ function monitorChild(child: ChildProcess) {
     });
 }
 
+cli.command("memory <action> [value]", "Experimental optional project cards and offline search")
+    .option("--input <file>", "Repository-relative card JSON (create/update)")
+    .option("--if-match <revision>", "Exact revision from show/status for update/review")
+    .option("--acknowledge", "Explicitly acknowledge reviewed evidence; does not certify prose")
+    .option("--detail", "Full search/status bodies and evidence metadata")
+    .option("--title <text>", "Card title (add only)")
+    .option("--summary <text>", "Behavior/decision summary (add only)")
+    .option("--symbol <file#name>", "Source symbol evidence (add only)")
+    .option("--test <file>", "Test evidence (add only)")
+    .option("--limit <count>", "Search result limit, 1..10")
+    .option("--model <directory>", "Reviewed local offline embedding pack (index/search only)")
+    .option("--fts", "Use lexical search without loading an embedding model")
+    .action(async (action: string, value: unknown, options: Record<string, unknown>) => {
+        try {
+            if (cli.args.length > 2) {
+                throw new Error("memory accepts one action and at most one argument");
+            }
+            const { memoryCommand } = await import("./memory/command.js");
+            console.log(JSON.stringify(await memoryCommand(root, action, value, options), null, 2));
+        } catch (error) {
+            log("error", String(error));
+            process.exitCode = 1;
+        }
+    });
+
+cli.command("typegen", "Generate RPC imports and validate the application manifest").action(async () => {
+    try {
+        const { typegenProject } = await import("./projectCommands.js");
+        log("info", `Generated imports for ${typegenProject(root)} RPC method(s).`);
+    } catch (error) {
+        log("error", String(error));
+        process.exitCode = 1;
+    }
+});
+
+cli.command("check", "Generate RPC references, validate the manifest, and check TypeScript").action(async () => {
+    try {
+        const { checkProject } = await import("./projectCommands.js");
+        checkProject(root);
+        log("info", "Manifest and TypeScript checks passed.");
+    } catch (error) {
+        log("error", String(error));
+        process.exitCode = 1;
+    }
+});
+
+cli.command("api [symbol]", "Read or discover installed public API declarations without loading application modules")
+    .option("--from <entry>", "Public entrypoint, such as client (default) or server")
+    .option("--list", "List public symbol names instead of reading a declaration")
+    .option("--match <fragment>", "Filter --list by a case-insensitive literal name fragment")
+    .option("--json", "Pretty-print the declaration record")
+    .action(async (symbol: string | undefined, options: { from?: unknown; json?: boolean; list?: unknown; match?: unknown }) => {
+        try {
+            if (options.list !== undefined && options.list !== true) {
+                throw new Error("Specify --list only once, without a value.");
+            }
+            if (options.list && cli.args.length) {
+                throw new Error("Choose either a symbol lookup or --list, not both.");
+            }
+            if (!options.list && options.match !== undefined) {
+                throw new Error("--match requires --list.");
+            }
+            if (!options.list && cli.args.length !== 1) {
+                throw new Error("api accepts exactly one public symbol name.");
+            }
+            const { inspectPublicApi, listPublicApi } = await import("./publicApi.js");
+            const packageRoot = fileURLToPath(new URL("../../", import.meta.url));
+            const result = options.list ? listPublicApi(packageRoot, options.from, options.match) : inspectPublicApi(packageRoot, symbol, options.from);
+            console.log(JSON.stringify(result, null, options.json ? 2 : 0));
+        } catch (error) {
+            log("error", String(error));
+            process.exitCode = 1;
+        }
+    });
+
+cli.command("inspect", "Inspect routes, rendering, RPC, and middleware without executing modules")
+    .option("--json", "Print the machine-readable application manifest")
+    .option("--route <pattern>", "Look up an exact route pattern")
+    .option("--rpc <name>", "Look up an exact RPC method name")
+    .action(async (options: { json?: boolean; route?: unknown; rpc?: unknown }) => {
+        try {
+            const { inspectEntry, inspectProject, inspectSelection } = await import("./projectCommands.js");
+            const selection = inspectSelection(options);
+            if (selection) {
+                const entry = inspectEntry(root, selection.kind, selection.name);
+                console.log(JSON.stringify(entry, null, options.json ? 2 : 0));
+                return;
+            }
+            const manifest = inspectProject(root);
+            if (options.json) {
+                console.log(JSON.stringify(manifest, null, 2));
+            } else {
+                for (const route of manifest.routes) {
+                    console.log(`${route.render.toUpperCase()} ${route.pattern} (${route.file})`);
+                }
+                for (const method of manifest.rpc) {
+                    console.log(`RPC ${method.name} (${method.file})`);
+                }
+                console.log(`Middleware: ${manifest.middleware?.file ?? "none"}`);
+                for (const collision of manifest.collisions) {
+                    console.log(`Collision: ${collision.pattern}: ${collision.files.join(", ")}`);
+                }
+            }
+            if (manifest.collisions.length) {
+                process.exitCode = 1;
+            }
+        } catch (error) {
+            log("error", String(error));
+            process.exitCode = 1;
+        }
+    });
+
 cli.command("dev", "Start development server").action(async () => {
     const vitePackage = fileURLToPath(import.meta.resolve("vite/package.json"));
     monitorChild(spawn(process.execPath, [path.join(path.dirname(vitePackage), "bin", "vite.js")], { stdio: "inherit" }));
 });
 
 cli.command("build", "Build for production").action(async () => {
-    // Generate type definitions before building so TypeScript can resolve
-    // server method types even if the dev server was never started.
+    // Production start and CLI help do not need the compiler/build toolchain.
+    const [vite, bundler, scanner, ssg, virtualModules, rpcModule] = await Promise.all([
+        import("vite"),
+        import("esbuild"),
+        import("../vite/scanner.js"),
+        import("../vite/ssg.js"),
+        import("../vite/virtualServerModule.js"),
+        import("../vite/rpcModule.js"),
+    ]);
+    const { build: viteBuild } = vite;
+    const { build: esbuild } = bundler;
+    const { scanAppShell, scanPageManifest, scanPageRoutePatterns, scanServerExports, scanSSRPages } = scanner;
+    const { generateStaticPages } = ssg;
+    const { generateServerManifest } = virtualModules;
+    const { writeRpcModule } = rpcModule;
+    const pages = scanPageManifest(root);
+
+    // Generate RPC references before Vite reads application modules.
     const { methods } = scanServerExports(root);
-    const dts = generateTypeDefinitions(methods, root);
-    const typesDir = path.join(root, "src", "types");
-    const dtsPath = path.join(typesDir, "heliumts-server.d.ts");
-
-    if (!fs.existsSync(typesDir)) {
-        fs.mkdirSync(typesDir, { recursive: true });
-    }
-
-    if (!fs.existsSync(dtsPath) || fs.readFileSync(dtsPath, "utf-8") !== dts) {
-        fs.writeFileSync(dtsPath, dts);
-        log("info", `Generated type definitions for ${methods.length} method(s)`);
+    if (writeRpcModule(root, methods)) {
+        log("info", `Generated imports for ${methods.length} RPC method(s)`);
     }
 
     log("info", "--------------------------------");
@@ -106,7 +221,7 @@ cli.command("build", "Build for production").action(async () => {
                 // 2. Clear any existing content in root div from SPA build
                 htmlTemplate = replaceHtmlRootContents(htmlTemplate, "", { "data-ssg-page": null, "data-ssg-failed": null });
 
-                await generateStaticPages(null, root, htmlTemplate, distDir);
+                await generateStaticPages(null, root, htmlTemplate, distDir, pages);
             } else {
                 log("warn", "index.html not found in dist, skipping SSG");
             }
@@ -123,8 +238,8 @@ cli.command("build", "Build for production").action(async () => {
     log("info", "Building server...");
     // Generate server entry
     const serverExports = scanServerExports(root);
-    const pageRoutePatterns = scanPageRoutePatterns(root);
-    const ssrPages = scanSSRPages(root);
+    const pageRoutePatterns = scanPageRoutePatterns(root, pages);
+    const ssrPages = scanSSRPages(root, pages);
     const appShell = scanAppShell(root);
     const manifestCode = generateServerManifest(
         serverExports.methods,
@@ -134,7 +249,8 @@ cli.command("build", "Build for production").action(async () => {
         ssrPages,
         appShell,
         serverExports.middleware,
-        serverExports.workers
+        serverExports.workers,
+        pages
     );
 
     // Create the main server module that will be imported after env is loaded
@@ -157,6 +273,7 @@ export async function start() {
                 httpRouter.setMiddleware(middlewareHandler);
             }
         },
+        pageRoutes,
         ssrPages,
         appShell,
         workers
@@ -174,7 +291,7 @@ await start();
 `;
 
     const envLoaderCode = `
-import { loadEnvFiles, injectEnvToProcess, log } from 'heliumts/server';
+import { loadEnvFiles, injectEnvToProcess, log } from 'heliumts/internal';
 import { fileURLToPath } from 'node:url';
 process.env.HELIUM_CONFIG_DIR ??= fileURLToPath(new URL('.', import.meta.url));
 process.env.NODE_ENV ??= 'production';
@@ -200,151 +317,13 @@ if (Object.keys(envVars).length > 0) {
     const ssrTransitionsStubPath = path.join(heliumDir, "ssr-transitions-stub.ts");
     const ssrPrefetchStubPath = path.join(heliumDir, "ssr-prefetch-stub.ts");
 
-    const ssrClientStubCode = `
-import React from 'react';
-
-export const RouterContext = React.createContext(null);
-
-function getSSRRouterSnapshot() {
-    const snapshot = globalThis.__HELIUM_SSR_ROUTER__ as
-        | { path?: string; params?: Record<string, string | string[]>; search?: string }
-        | undefined;
-
-    if (!snapshot || typeof snapshot !== 'object') {
-        return {
-            path: '/',
-            params: {},
-            search: '',
-        };
-    }
-
-    return {
-        path: typeof snapshot.path === 'string' ? snapshot.path : '/',
-        params: snapshot.params && typeof snapshot.params === 'object' ? snapshot.params : {},
-        search: typeof snapshot.search === 'string' ? snapshot.search : '',
-    };
-}
-
-export function useRouter() {
-    const snapshot = getSSRRouterSnapshot();
-    return {
-        path: snapshot.path,
-        params: snapshot.params,
-        searchParams: new URLSearchParams(snapshot.search),
-        push: () => {},
-        replace: () => {},
-        on: () => () => {},
-        status: 200,
-        isNavigating: false,
-        isPending: false,
-    };
-}
-
-export function Link(props: { href?: string; children?: React.ReactNode } & Record<string, unknown>) {
-    const { href = '#', children, prefetch: _prefetch, ...rest } = props || {};
-    return React.createElement('a', { href, ...rest }, children);
-}
-
-export function Redirect() {
-    return null;
-}
-
-export function AppRouter() {
-    return null;
-}
-
-export async function callMethod() {
-    throw new Error('callMethod is only available in the browser. Load server data with getServerSideProps instead.');
-}
-
-export function useStreaming() {
-    return {
-        chunks: [],
-        text: '',
-        isStreaming: false,
-        error: null,
-        stats: null,
-        start: async () => {
-            throw new Error('useStreaming.start is only available in the browser. Load server data with getServerSideProps instead.');
-        },
-        cancel: () => {},
-        reset: () => {},
-    };
-}
-
-export function useCall() {
-    return {
-        call: async () => null,
-        isCalling: false,
-        error: null,
-    };
-}
-
-export function useFetch() {
-    return {
-        data: null,
-        isLoading: false,
-        error: null,
-        refetch: async () => undefined,
-    };
-}
-
-export class RpcError extends Error {}
-
-export function getPublicEnv() {
-    return Object.fromEntries(Object.entries(process.env).filter(([key, value]) => key.startsWith('HELIUM_PUBLIC_') && value !== undefined));
-}
-
-export function getPublicEnvValue(key: string) {
-    return getPublicEnv()[key];
-}
-
-export function isDevEnvironment() {
-    return false;
-}
-
-export function isSSR() {
-    return true;
-}
-`;
-
-    const ssrTransitionsStubCode = `
-import React from 'react';
-import { useRouter } from 'heliumts/client';
-
-export function useDeferredNavigation() {
-    const { path } = useRouter();
-    return {
-        path,
-        deferredPath: path,
-        isStale: false,
-        isPending: false,
-        isTransitioning: false,
-    };
-}
-
-export function PageTransition({ children, fallback = null }: { children?: React.ReactNode; fallback?: React.ReactNode }) {
-    return React.createElement('div', { style: { opacity: 1, transition: 'opacity 150ms ease' } },
-        React.createElement(React.Suspense, { fallback }, children));
-}
-`;
-
-    const ssrPrefetchStubCode = `
-export function prefetchRoute() {}
-export function clearPrefetchCache() {}
-`;
+    const ssrClientStubCode = generateServerClientModule("ssr");
+    const ssrTransitionsStubCode = generateServerTransitionsModule("ssr");
+    const ssrPrefetchStubCode = generateServerPrefetchModule();
 
     fs.writeFileSync(entryPath, entryCode);
     fs.writeFileSync(envLoaderPath, envLoaderCode);
     fs.writeFileSync(serverModuleSrcPath, serverModuleCode);
-    // Generate a client-side stub for heliumts/server that provides method stubs
-    // (e.g. { __id: 'subscribeWaitlist' }) so client components that import
-    // user-defined methods from 'heliumts/server' resolve correctly during
-    // the esbuild server bundle (mirroring the Vite plugin's virtual module).
-    const rpcClientStubPath = path.join(heliumDir, "rpc-client-stub.ts");
-    const rpcClientStubCode = `export * from 'heliumts/server';\n${generateClientModule(serverExports.methods)}`;
-    fs.writeFileSync(rpcClientStubPath, rpcClientStubCode);
-
     fs.writeFileSync(ssrClientStubPath, ssrClientStubCode);
     fs.writeFileSync(ssrTransitionsStubPath, ssrTransitionsStubCode);
     fs.writeFileSync(ssrPrefetchStubPath, ssrPrefetchStubCode);
@@ -366,19 +345,6 @@ export function clearPrefetchCache() {}
                         build.onResolve({ filter: /^heliumts\/client$/ }, () => ({ path: ssrClientStubPath }));
                         build.onResolve({ filter: /^heliumts\/client\/transitions$/ }, () => ({ path: ssrTransitionsStubPath }));
                         build.onResolve({ filter: /^heliumts\/client\/prefetch$/ }, () => ({ path: ssrPrefetchStubPath }));
-                        // Intercept heliumts/server imports from client code
-                        // and redirect to the RPC stub module (method stubs).
-                        // Server-side files and generated server-module resolve normally.
-                        const serverDirAbs = path.join(root, "src", "server");
-                        build.onResolve({ filter: /^heliumts\/server$/ }, (args) => {
-                            const importer = args.importer;
-                            // Allow the generated server-module and env-loader to
-                            // import the real heliumts/server framework exports.
-                            if (importer.startsWith(heliumDir) || importer.startsWith(serverDirAbs)) {
-                                return undefined; // let esbuild resolve normally
-                            }
-                            return { path: rpcClientStubPath };
-                        });
                     },
                 },
             ],

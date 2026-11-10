@@ -7,15 +7,11 @@ import { streamRpc } from "../../src/client/rpcStreaming";
 import { useStreaming } from "../../src/client/useStreaming";
 import type { RpcStats } from "../../src/runtime/protocol";
 
+import { methodReference } from "./methodReference";
+
 vi.mock("../../src/client/rpcStreaming", () => ({ streamRpc: vi.fn() }));
 const stats: RpcStats = { remainingRequests: 5, resetInSeconds: 10 };
-const method = {
-    __kind: "method" as const,
-    __id: "generate",
-    async *handler(_args: { prompt: string }) {
-        yield "example";
-    },
-};
+const method = methodReference<{ prompt: string }, AsyncIterable<string>>("generate");
 type Request = {
     method: string;
     args: unknown;
@@ -127,13 +123,7 @@ describe("useStreaming", () => {
     });
 
     it("supports structured chunks without coercing them into text", async () => {
-        const structured = {
-            __kind: "method" as const,
-            __id: "events",
-            async *handler(_args: { prompt: string }) {
-                yield { token: "a", index: 1 };
-            },
-        };
+        const structured = methodReference<{ prompt: string }, AsyncIterable<{ token: string; index: number }>>("events");
         const { result } = renderHook(() => useStreaming(structured));
         act(() => {
             void result.current.start({ prompt: "test" });

@@ -6,6 +6,8 @@ import { rpcCall } from "../../src/client/rpcClient";
 import { RpcError } from "../../src/client/RpcError";
 import { useCall } from "../../src/client/useCall";
 
+import { methodReference } from "./methodReference";
+
 // Mock rpcClient
 vi.mock("../../src/client/rpcClient", () => ({
     rpcCall: vi.fn(),
@@ -17,7 +19,7 @@ vi.mock("../../src/client/cache", () => ({
 }));
 
 describe("useCall", () => {
-    const mockMethod = { __kind: "method" as const, __id: "testMethod", handler: (_args: unknown) => undefined };
+    const mockMethod = methodReference("testMethod");
     const mockRpcCall = rpcCall as ReturnType<typeof vi.fn>;
     const mockInvalidate = invalidateByMethod as ReturnType<typeof vi.fn>;
 

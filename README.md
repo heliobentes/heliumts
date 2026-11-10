@@ -7,13 +7,14 @@
 
 HeliumTS is a lightweight, opinionated full-stack React + Vite framework designed for simplicity and type safety. It provides typed RPC communication and file-based routing.
 
+For coding agents, start with the [one-read application context](docs/agent-start.md), keep server logic in `src/server`, and use generated RPC references in pages. Exact API/route lookups are available when a specific gap remains.
+
 ## Table of Contents
 
 1. [Getting Started](#1-getting-started)
-   - [Installation](#11-installation)
-   - [Running the Development Server](#12-running-the-development-server)
-   - [Building for Production](#13-building-for-production)
-   - [Starting the Production Server](#14-starting-the-production-server)
+   - [Quickstart](#11-quickstart)
+   - [Building for Production](#12-building-for-production)
+   - [Starting the Production Server](#13-starting-the-production-server)
 2. [Project Structure](#2-project-structure)
 3. [Core Concepts](#3-core-concepts)
    - [RPC (Remote Procedure Calls)](#31-rpc-remote-procedure-calls)
@@ -31,39 +32,28 @@ HeliumTS is a lightweight, opinionated full-stack React + Vite framework designe
 
 ## 1. Getting Started
 
-The current release is **0.10.2**. See the [changelog](./CHANGELOG.md) for fixes and upgrade notes.
+This repository targets **0.11.0**. See the [changelog](https://github.com/heliobentes/heliumts/blob/main/CHANGELOG.md) for fixes and upgrade notes.
 
-### 1.1. Installation
+### 1.1. Quickstart
 
 Requires Node.js 20.19+ within Node 20, or Node.js 22.12+, and React 18 or 19.
 
-The easiest way to get started with HeliumTS is by using the scaffolding tool:
-
 ```bash
 npm create heliumts-app@latest my-helium-app
+cd my-helium-app
+npm run dev
 ```
 
-Or (to create in the current directory):
+The default starter has one page and one typed RPC method. To scaffold the tasks and streaming demo, use `npm create heliumts-app@latest my-helium-app -- --template examples`.
 
-```
-npm create heliumts-app@latest . 
-```
+For manual setup, see the [Manual Installation Guide](https://github.com/heliobentes/heliumts/blob/main/docs/manual-installation.md).
 
-This command will guide you through setting up a new project with everything configured for you.
-
-If you prefer to set up the project manually, please refer to the [Manual Installation Guide](./docs/manual-installation.md).
-
-### 1.2. Running the Development Server
-
-```bash
-npx helium dev
-```
-### 1.3. Building for Production
+### 1.2. Building for Production
 
 ```bash
 npx helium build
 ```
-### 1.4. Starting the Production Server
+### 1.3. Starting the Production Server
 
 ```bash
 npx helium start
@@ -108,6 +98,10 @@ No more `Axios` or `fetch` calls! Just define your server methods and call them 
 
 Define server-side functions using `defineMethod` and call them from the client using `useCall` or `useFetch`.
 
+The examples below use the app-local RPC module from HeliumTS 0.11.0. The dev server and production build generate `src/rpc.generated.ts` from methods in `src/server/`. Run `npx helium typegen` to generate it without starting a server, or `npx helium check` to generate it and check types together. Each export is an opaque method reference that preserves the method's argument and result types.
+
+When upgrading from 0.10.2, switch browser RPC imports from `heliumts/server` to your generated module. Delete the old generated `src/types/heliumts-server.d.ts` if it exists, then run `npx helium check`.
+
 **Server (`src/server/tasks.ts`):**
 
 ```typescript
@@ -130,7 +124,7 @@ export const createTask = defineMethod(async (args: { name: string }) => {
 
 ```tsx
 import { useFetch, useCall } from "heliumts/client";
-import { getTasks, createTask } from "heliumts/server";
+import { getTasks, createTask } from "../rpc.generated";
 
 export default function TasksPage() {
     // Fetch data (auto-runs on mount)
@@ -169,8 +163,9 @@ export const answer = defineMethod(async function* ({ prompt }: { prompt: string
 ```
 
 ```tsx
+// src/pages/answer.tsx
 import { useStreaming } from "heliumts/client";
-import { answer } from "heliumts/server";
+import { answer } from "../rpc.generated";
 
 function Answer() {
     const { text, isStreaming, error, start, cancel } = useStreaming(answer);
@@ -183,7 +178,7 @@ function Answer() {
 }
 ```
 
-Pass `ctx.signal` to upstream LLM requests for cooperative cancellation. See [streaming methods](./docs/streaming.md) for typed events, callbacks, errors, limits, and deployment guidance.
+Pass `ctx.signal` to upstream LLM requests for cooperative cancellation. See [streaming methods](./docs/agent/streaming.md) for typed events, callbacks, errors, limits, and deployment guidance.
 
 ### 3.2. Routing
 
@@ -234,7 +229,7 @@ function MyComponent() {
 }
 ```
 
-See [Routing Documentation](./docs/routing.md) for detailed information including dynamic routes, layouts, and navigation.
+See [Routing Documentation](./docs/agent/routing.md) for detailed information including dynamic routes, layouts, and navigation.
 
 ### 3.3. Custom HTTP Handlers
 
@@ -294,7 +289,7 @@ When the server starts:
 Starting worker 'queueConsumer'
 ```
 
-Workers support auto-restart, configurable restart delays, and max restart attempts. See [Workers Documentation](./docs/workers.md) for queue consumers, scheduled tasks, and more.
+Workers support auto-restart, configurable restart delays, and max restart attempts. See [Workers Documentation](https://github.com/heliobentes/heliumts/blob/main/docs/workers.md) for queue consumers, scheduled tasks, and more.
 
 ### 3.5. Middleware
 
@@ -342,7 +337,7 @@ const config: HeliumConfig = {
 
 export default config;
 ``` 
-See [Configuration Documentation](./docs/helium-config.md) for detailed options.
+See [Configuration Documentation](https://github.com/heliobentes/heliumts/blob/main/docs/helium-config.md) for detailed options.
 
 ### 3.7. Static Site Generation (SSG)
 HeliumTS supports Static Site Generation (SSG) through pre-rendering pages at build time.
@@ -367,7 +362,7 @@ export default function AboutPage() {
 
 During build, Helium validates SSG pages and generates optimized static HTML files.
 
-See [SSG Documentation](./docs/ssg.md) for detailed information including limitations, hybrid rendering, and best practices.
+See [SSG Documentation](https://github.com/heliobentes/heliumts/blob/main/docs/ssg.md) for detailed information including limitations, hybrid rendering, and best practices.
 
 ### 3.8. Server-Side Rendering (SSR)
 
@@ -415,7 +410,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 }
 ```
 
-See [SSR Documentation](./docs/ssr.md) for detailed information including sidecar files, layout guards, browser-only dependencies, and how hydration works.
+See [SSR Documentation](https://github.com/heliobentes/heliumts/blob/main/docs/ssr.md) for detailed information including sidecar files, layout guards, browser-only dependencies, and how hydration works.
 
 ## 4. CLI Reference
 
@@ -430,29 +425,33 @@ See [SSR Documentation](./docs/ssr.md) for detailed information including sideca
 ## 5. More Documentation
 
 ### Getting Started
--   [Manual Installation](./docs/manual-installation.md) - Step-by-step guide to setting up a HeliumTS project manually
+-   [Manual Installation](https://github.com/heliobentes/heliumts/blob/main/docs/manual-installation.md) - Step-by-step guide to setting up a HeliumTS project manually
 
 ### Core Features
--   [Data Fetching](./docs/data-fetching.md) - useFetch and useCall hooks for data fetching and mutations
--   [Routing & useRouter](./docs/routing.md) - File-based routing, dynamic routes, navigation, and the useRouter hook
--   [Streaming](./docs/streaming.md) - Typed incremental results and LLM output
--   [Configuration](./docs/helium-config.md) - Configure HTTP RPC limits, security, and proxy settings
--   [Static Site Generation](./docs/ssg.md) - Pre-render pages at build time for better performance
--   [Server-Side Rendering](./docs/ssr.md) - Render pages on the server per-request for SEO and dynamic data
--   [Route Groups](./docs/route-groups.md) - Organize routes with shared layouts without affecting URLs
--   [Background Workers](./docs/workers.md) - Long-running background processes for queues, scheduled tasks, and more
+-   [Data Fetching](./docs/agent/operations.md) - useFetch and useCall hooks for data fetching and mutations
+-   [Routing & useRouter](./docs/agent/routing.md) - File-based routing, dynamic routes, navigation, and the useRouter hook
+-   [Streaming](./docs/agent/streaming.md) - Typed incremental results and LLM output
+-   [Configuration](https://github.com/heliobentes/heliumts/blob/main/docs/helium-config.md) - Configure HTTP RPC limits, security, and proxy settings
+-   [Static Site Generation](https://github.com/heliobentes/heliumts/blob/main/docs/ssg.md) - Pre-render pages at build time for better performance
+-   [Server-Side Rendering](https://github.com/heliobentes/heliumts/blob/main/docs/ssr.md) - Render pages on the server per-request for SEO and dynamic data
+-   [Route Groups](https://github.com/heliobentes/heliumts/blob/main/docs/route-groups.md) - Organize routes with shared layouts without affecting URLs
+-   [Background Workers](https://github.com/heliobentes/heliumts/blob/main/docs/workers.md) - Long-running background processes for queues, scheduled tasks, and more
 
 ### Deployment & Advanced
--   [Context API](./docs/context-api.md) - Access request metadata including client IPs and headers
--   [Proxy Configuration](./docs/proxy-configuration.md) - Configure IP detection for rate limiting behind proxies
--   [HTTP Handlers & Webhooks](./docs/http-handlers.md) - Create custom HTTP endpoints for webhooks and REST APIs
--   [Production Deployment](./docs/production-deployment.md) - Deploy to production platforms and platform compatibility
+-   [Context API](./docs/agent/request-context.md) - Access request metadata including client IPs and headers
+-   [Proxy Configuration](https://github.com/heliobentes/heliumts/blob/main/docs/proxy-configuration.md) - Configure IP detection for rate limiting behind proxies
+-   [HTTP Handlers & Webhooks](./docs/agent/http-handlers.md) - Create custom HTTP endpoints for webhooks and REST APIs
+-   [Production Deployment](https://github.com/heliobentes/heliumts/blob/main/docs/production-deployment.md) - Deploy to production platforms and platform compatibility
 
-> **Hosting:** Full Helium functionality runs through its persistent Node.js server. Static-only hosting serves assets and SSG output, but does not execute SSR, RPC, HTTP handlers, or workers. See [Production Deployment](./docs/production-deployment.md).
+> **Hosting:** Full Helium functionality runs through its persistent Node.js server. Static-only hosting serves assets and SSG output, but does not execute SSR, RPC, HTTP handlers, or workers. See [Production Deployment](https://github.com/heliobentes/heliumts/blob/main/docs/production-deployment.md).
 
 ## 6. Contributing
 
-Contributions are welcome! Please read the [contributing guide](./CONTRIBUTING.md) for details.
+Contributions are welcome! Please read the [contributing guide](https://github.com/heliobentes/heliumts/blob/main/CONTRIBUTING.md) for details.
 
 ## 7. License
 This project is licensed under the MIT License. See the [LICENSE](./LICENSE) file for details.
+
+## Compact reference for agents
+
+Read [the one-read startup context](docs/agent-start.md) once for the normal application path. Use [the Markdown task index](docs/agent/index.md) only for a specific gap. The 22 short guides include prerequisite and related-guide links. Use `npx helium api useCall --json` (or `--from server` for server symbols) to read one installed public declaration and its related type references. See [the compact application reference](docs/agent-guide.md) for import boundaries, a validated RPC example and the generate/check/inspect workflow. Use matching 0.11.0 framework/scaffolder versions. Keep RPC references generated and validation/authorization on the server; `useCall.submit()` handles form pending/errors while explicit invalidation names the reads to refresh. Experimental project memory is optional and is not initialized by this workflow. Examples are checked with `npm run test:docs` after `npm run build`; `npm run test:api` verifies declaration lookup in a packed package.

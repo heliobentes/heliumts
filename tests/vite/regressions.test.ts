@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as configModule from "../../src/server/config";
 import * as envModule from "../../src/utils/envLoader";
 import helium from "../../src/vite/heliumPlugin";
-import { scanPageRoutePatterns, scanPageRoutes, scanSSRPages } from "../../src/vite/scanner";
+import { scanPageManifest, scanPageRoutePatterns, scanPageRoutes, scanSSRPages } from "../../src/vite/scanner";
 import { findLayoutPathsForPage, renderPageToHTML, scanSSGPages } from "../../src/vite/ssg";
 import { generateEntryModule, generateServerManifest } from "../../src/vite/virtualServerModule";
 
@@ -78,10 +78,8 @@ describe("Vite and static generation regressions", () => {
         getHook(plugin, "configResolved")({ root });
         const resolveId = getHook(plugin, "resolveId");
         expect(resolveId("heliumts/server", `${root}/src/pages/about.server.ts`, { ssr: true })).toBeNull();
-        expect(resolveId("heliumts/server", `${root}/src/pages/about.tsx`, {})).toBe("\0heliumts/server");
-        const ssrModule = resolveId("heliumts/server", `${root}/src/pages/about.tsx`, { ssr: true });
-        expect(getHook(plugin, "load")(ssrModule)).toContain("export * from 'heliumts/server'");
-        expect(resolveId("heliumts/server", ssrModule, { ssr: true })).toBeNull();
+        expect(resolveId("heliumts/server", `${root}/src/pages/about.tsx`, { ssr: true })).toBeNull();
+        expect(() => resolveId("heliumts/server", `${root}/src/pages/about.tsx`, {})).toThrow("src/rpc.generated.ts");
         const result = getHook(plugin, "transform")("export const secret = 'private';", `${root}/src/pages/about.server.ts?import`, {});
         expect(result.code).not.toContain("private");
         expect(() => getHook(plugin, "transform")("const token = 'private';", `${root}/src/server/secret.ts`, {})).toThrow("Server-only module");
@@ -152,13 +150,16 @@ describe("Vite and static generation regressions", () => {
     });
 
     it("excludes server sidecars, app shells, layouts, and declarations across page scanners", () => {
-        for (const name of ["about.tsx", "about.server.ts", "types.d.ts", "_layout.tsx", "_app.tsx"]) {
+        fs.writeFileSync(path.join(root, "src", "pages", "about.tsx"), '"use ssr";\nexport default function Page() {}');
+        fs.writeFileSync(path.join(root, "src", "pages", "docs.tsx"), '"use ssg";\nexport default function Page() {}');
+        for (const name of ["about.server.ts", "types.d.ts", "_layout.tsx", "_app.tsx"]) {
             fs.writeFileSync(path.join(root, "src", "pages", name), '"use ssr";\n"use ssg";\nexport default function Page() {}');
         }
-        expect(scanPageRoutePatterns(root)).toEqual(["/about"]);
-        expect(scanPageRoutes(root).totalRoutes).toBe(1);
-        expect(scanSSRPages(root).map((page) => page.pathPattern)).toEqual(["/about"]);
-        expect(scanSSGPages(root).map((page) => page.urlPath)).toEqual(["/about"]);
+        const manifest = scanPageManifest(root);
+        expect(scanPageRoutePatterns(root, manifest)).toEqual(["/about", "/docs"]);
+        expect(scanPageRoutes(root, manifest).totalRoutes).toBe(2);
+        expect(scanSSRPages(root, manifest).map((page) => page.pathPattern)).toEqual(["/about"]);
+        expect(scanSSGPages(root, manifest).map((page) => page.urlPath)).toEqual(["/docs"]);
     });
 
     it("loads manifests whose imports and route paths contain apostrophes", async () => {

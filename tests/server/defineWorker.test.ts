@@ -414,6 +414,33 @@ describe("defineWorker", () => {
             expect(getWorkerById("newWorker")).toBe(newWorker);
         });
 
+        it("preserves normal completion when stopped during asynchronous cleanup", async () => {
+            let finishCleanup!: () => void;
+            const pendingCleanup = new Promise<void>((resolve) => {
+                finishCleanup = resolve;
+            });
+            const cleanup = vi.fn(() => pendingCleanup);
+            const instance = await startWorker(
+                defineWorker(
+                    (_ctx, lifecycle) => {
+                        lifecycle.onCleanup(cleanup);
+                    },
+                    { name: "stopDuringCompletion" }
+                ),
+                createContext
+            );
+            await vi.advanceTimersByTimeAsync(0);
+            expect(cleanup).toHaveBeenCalledTimes(1);
+            const stopping = instance.stop();
+            finishCleanup();
+            await stopping;
+            await vi.advanceTimersByTimeAsync(0);
+            expect(cleanup).toHaveBeenCalledTimes(1);
+            expect(instance.status).toBe("stopped");
+            expect(getWorkerById("stopDuringCompletion")).toBeUndefined();
+            expect(console.log).toHaveBeenCalledWith(expect.any(String), "Worker 'stopDuringCompletion' completed successfully");
+        });
+
         it("removes synchronously completed or crashed workers from the registry", async () => {
             const completed = await startWorker(
                 defineWorker(() => {}, { name: "synchronousComplete" }),

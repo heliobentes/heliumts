@@ -22,7 +22,7 @@ function write(relative, content) {
     fs.writeFileSync(destination, content);
 }
 
-async function command(args, env = {}) {
+async function command(args, env = {}, expectedCode = 0) {
     const process = spawn(globalThis.process.execPath, args, {
         cwd: fixture,
         env: { ...globalThis.process.env, ...env },
@@ -36,7 +36,7 @@ async function command(args, env = {}) {
         logs += chunk;
     });
     const [code] = await once(process, "exit");
-    assert.equal(code, 0, logs);
+    assert.equal(code, expectedCode, logs);
     return logs;
 }
 
@@ -90,6 +90,38 @@ async function stop() {
         }
     }
     child = undefined;
+}
+
+async function checkMixedRenderingRoutes(base) {
+    const newProduct = await fetch(`${base}/products/new`, { headers: { Accept: "text/html" } });
+    assert.equal(newProduct.status, 200);
+    assert.doesNotMatch(await newProduct.text(), /SSR product:|__HELIUM_SSR_DATA__/);
+
+    const productDetail = await fetch(`${base}/products/42`, { headers: { Accept: "text/html" } });
+    assert.equal(productDetail.status, 200);
+    assert.match(await productDetail.text(), /SSR product:42/);
+
+    const fetchPageProps = async (pathname) => {
+        const response = await fetch(`${base}/__helium__/page-props?path=${encodeURIComponent(pathname)}`);
+        assert.equal(response.status, 200);
+        return response.json();
+    };
+    assert.deepEqual(await fetchPageProps("/products/new"), { ssr: false, props: null });
+    assert.deepEqual(await fetchPageProps("/products/42"), { ssr: true, props: { id: "42" } });
+}
+
+async function waitForGeneratedMethod(base, method, present) {
+    const exportPattern = new RegExp(`__id:\\s*["']${method}["']`);
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+        const response = await fetch(`${base}/src/rpc.generated.ts`);
+        const source = await response.text();
+        if (response.ok && /__id:\s*["']echo["']/.test(source) && exportPattern.test(source) === present) {
+            return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.fail(`Generated RPC module did not ${present ? "add" : "remove"} ${method}`);
 }
 
 async function nextStreamFrame(reader, state) {
@@ -287,6 +319,7 @@ try {
         'import { headerValue } from "./settings.ts"; export default { rpc: { maxBatchSize: 2 }, security: { headerOverrides: { "X-Smoke": headerValue } } };'
     );
     write("public/health", "extensionless-static");
+    write("public/agent-guide.md", "# Compact application reference\n");
     write(
         "src/main.tsx",
         'import React from "react"; import { createRoot, hydrateRoot } from "react-dom/client"; import { AppRouter } from "heliumts/client"; const root=document.getElementById("root")!; const app=React.createElement(AppRouter); if(root.hasChildNodes()) hydrateRoot(root,app); else createRoot(root).render(app);'
@@ -301,23 +334,35 @@ try {
     );
     write(
         "src/pages/index.tsx",
-        '"use ssg"; import React from "react"; import {callMethod,getPublicEnvValue,useRouter,useStreaming} from "heliumts/client"; import {echo,streamed} from "heliumts/server"; export default function Home(){const stream=useStreaming(streamed);return React.createElement("main",null,"static $& $$ "+getPublicEnvValue("HELIUM_PUBLIC_GREETING")+" "+useRouter().path,React.createElement("button",{onClick:()=>callMethod(echo,{value:"clicked"})},"SSG RPC button"),React.createElement("button",{onClick:()=>stream.start({name:"click"})},"SSG streaming button"));}'
+        '"use ssg"; import React from "react"; import {callMethod,getPublicEnvValue,useRouter,useStreaming} from "heliumts/client"; import {echo,streamed} from "../rpc.generated"; export default function Home(){const stream=useStreaming(streamed);return React.createElement("main",{"data-rpc-ref":Object.keys(echo).join()},"static $& $$ "+getPublicEnvValue("HELIUM_PUBLIC_GREETING")+" "+useRouter().path,React.createElement("button",{onClick:()=>callMethod(echo,{value:"clicked"})},"SSG RPC button"),React.createElement("button",{onClick:()=>stream.start({name:"click"})},"SSG streaming button"));}'
     );
     write(
         "src/pages/search.tsx",
-        '"use ssr"; import React from "react"; import {callMethod,useFetch,useStreaming} from "heliumts/client"; import {echo,streamed} from "heliumts/server"; export default function Search(props){useFetch(echo,{value:"unused"});const stream=useStreaming(streamed);return React.createElement("main",null,"SSR query:"+props.query,React.createElement("button",{onClick:()=>callMethod(echo,{value:"clicked"})},"SSR RPC button"),React.createElement("button",{onClick:()=>stream.start({name:"click"})},"SSR streaming button"));}'
+        '"use ssr"; import React from "react"; import {callMethod,useFetch,useStreaming} from "heliumts/client"; import {echo,streamed} from "../rpc.generated"; export default function Search(props){useFetch(echo,{value:"unused"});const stream=useStreaming(streamed);return React.createElement("main",{"data-rpc-ref":Object.keys(streamed).join()},"SSR query:"+props.query,React.createElement("button",{onClick:()=>callMethod(echo,{value:"clicked"})},"SSR RPC button"),React.createElement("button",{onClick:()=>stream.start({name:"click"})},"SSR streaming button"));}'
     );
     write(
         "src/pages/search.server.ts",
         'import {PublicError} from "heliumts/server"; export const getServerSideProps=(request)=>{if(request.query.fail)throw new PublicError("private database detail"); return {query: request.query.q || "none"};};'
     );
+    write("src/pages/products/new.tsx", 'import React from "react"; export default function NewProduct(){return React.createElement("main",null,"New product");}');
+    write(
+        "src/pages/products/[id].tsx",
+        '"use ssr"; import React from "react"; export default function ProductDetail({id}){return React.createElement("main",null,"SSR product:"+id);}'
+    );
+    write("src/pages/products/[id].server.ts", "export const getServerSideProps=({params})=>({id: params.id});");
     write(
         "src/server/methods.ts",
-        'import {defineMethod,defineHTTPRequest} from "heliumts/server"; export const echo=defineMethod(async(args)=>args); export const failure=defineMethod(async()=>{throw new Error("private database detail")}); export const options=defineHTTPRequest("OPTIONS","/api/custom",()=>new Response("custom-options",{status:200}));'
+        `import {defineMethod,defineHTTPRequest} from "heliumts/server";
+export const echo = defineMethod(async (args: string | {value: string}) => {
+    const value = typeof args === "string" ? args : args.value;
+    return value === "server-only-branch" ? "HELIUM_SMOKE_SERVER_ONLY_BODY" : value;
+});
+export const failure = defineMethod(async () => { throw new Error("private database detail"); });
+export const options = defineHTTPRequest("OPTIONS", "/api/custom", () => new Response("custom-options", {status: 200}));`
     );
 
     write(
-        "src/server/stream.ts",
+        "src/server/stream.mts",
         `import fs from 'node:fs';
 import {defineMethod} from 'heliumts/server';
 export const streamed=defineMethod(async function* (args: {name: string},ctx){
@@ -336,11 +381,52 @@ export const streamed=defineMethod(async function* (args: {name: string},ctx){
 });`
     );
 
+    write(
+        "tsconfig.json",
+        JSON.stringify({
+            compilerOptions: { module: "ESNext", moduleResolution: "Bundler", target: "ES2020", strict: true, skipLibCheck: true },
+            include: ["src/rpc-contract.ts"],
+        })
+    );
+    write(
+        "src/rpc-contract.ts",
+        `import { callMethod, useStreaming } from "heliumts/client";
+import { echo, streamed } from "./rpc.generated";
+// @ts-expect-error Application RPC methods are not exported by the framework server module.
+import { echo as removedImport } from "heliumts/server";
+void removedImport;
+
+export async function checkContract(): Promise<string> {
+    // @ts-expect-error A generated reference cannot execute the server implementation.
+    void echo.handler;
+    // @ts-expect-error The generated reference preserves the method's input type.
+    void callMethod(echo, { value: 42 });
+    return (await callMethod(echo, { value: "generated" })).data;
+}
+
+export function useStreamContract() {
+    const stream = useStreaming(streamed);
+    // @ts-expect-error A streaming reference preserves the method's input type.
+    void stream.start({ name: 42 });
+    return stream;
+}`
+    );
+    await command([cli, "check"]);
+    const generatedRpcFile = path.join(fixture, "src/rpc.generated.ts");
+    fs.rmSync(generatedRpcFile);
+
     const buildLogs = await command([cli, "build"], { HELIUM_PUBLIC_GREETING: "public-greeting", HELIUM_SECRET: "smoke-test-only-secret" });
     assert.ok(!buildLogs.includes("Failed to generate"), buildLogs);
+    const assetsDir = path.join(fixture, "dist/assets");
+    const browserChunks = fs.readdirSync(assetsDir).filter((name) => name.endsWith(".js"));
+    assert.ok(browserChunks.length > 0);
+    for (const name of browserChunks) {
+        assert.doesNotMatch(fs.readFileSync(path.join(assetsDir, name), "utf8"), /HELIUM_SMOKE_SERVER_ONLY_BODY/);
+    }
     const staticHtml = fs.readFileSync(path.join(fixture, "dist/index.ssg.html"), "utf8");
     assert.match(staticHtml, /data-app="yes"/);
     assert.match(staticHtml, /data-layout="yes"/);
+    assert.match(staticHtml, /data-rpc-ref="__id"/);
     assert.match(staticHtml, /SSG RPC button/);
     assert.match(staticHtml, /SSG streaming button/);
     assert.match(staticHtml, /opacity:1;transition:opacity 150ms ease/);
@@ -360,12 +446,17 @@ export const streamed=defineMethod(async function* (args: {name: string},ctx){
     assert.match(html, /SSR query:hello/);
     assert.match(html, /SSR RPC button/);
     assert.match(html, /SSR streaming button/);
+    assert.match(html, /data-rpc-ref="__id"/);
     assert.match(html, /data-app="yes"/);
     assert.ok(!html.includes("Old sibling"), html);
     assert.equal((await fetch(`${base}/search?fail=1`)).status, 500);
     assert.equal(await (await fetch(`${base}/health`)).text(), "extensionless-static");
+    const guide = await fetch(`${base}/agent-guide.md`);
+    assert.equal(guide.headers.get("content-type"), "text/markdown; charset=utf-8");
+    assert.equal(await guide.text(), "# Compact application reference\n");
     const props = await (await fetch(`${base}/__helium__/page-props?path=${encodeURIComponent("/search?q=next")}`)).json();
     assert.deepEqual(props, { ssr: true, props: { query: "next" } });
+    await checkMixedRenderingRoutes(base);
     assert.equal(await (await fetch(`${base}/api/custom`, { method: "OPTIONS" })).text(), "custom-options");
     const { token } = await (await fetch(`${base}/__helium__/refresh-token`, { method: "POST", headers: { "X-Requested-With": "helium" } })).json();
     for (const method of ["echo", "failure"]) {
@@ -384,16 +475,29 @@ export const streamed=defineMethod(async function* (args: {name: string},ctx){
 
     fs.renameSync(path.join(fixture, "helium.config.ts.disabled"), path.join(fixture, "helium.config.ts"));
     fs.renameSync(path.join(fixture, "settings.ts.disabled"), path.join(fixture, "settings.ts"));
+    fs.rmSync(generatedRpcFile);
     await start([cli, "dev"], port);
     const devHtml = await (await fetch(`${base}/search?q=development`)).text();
     assert.match(devHtml, /SSR query:development/);
     assert.match(devHtml, /SSR streaming button/);
+    await waitForGeneratedMethod(base, "echo", true);
+    await checkMixedRenderingRoutes(base);
     const { token: devToken } = await (await fetch(`${base}/__helium__/refresh-token`, { method: "POST", headers: { "X-Requested-With": "helium" } })).json();
     await checkStreaming(base, devToken, "development");
     await checkViteHmr(base);
+    write("src/server/live.ts", 'import { defineMethod } from "heliumts/server"; export const liveSmoke = defineMethod(() => true);');
+    await waitForGeneratedMethod(base, "liveSmoke", true);
+    fs.rmSync(path.join(fixture, "src/server/live.ts"));
+    await waitForGeneratedMethod(base, "liveSmoke", false);
+    write("src/pages/forbidden.tsx", 'import { echo } from "heliumts/server"; export default function Forbidden(){ return String(echo); }');
+    const forbidden = await fetch(`${base}/src/pages/forbidden.tsx`);
+    assert.equal(forbidden.status, 500);
+    assert.match(await forbidden.text(), /heliumts\/server is server-only/);
     await stop();
+    const rejectedBuild = await command([cli, "build"], {}, 1);
+    assert.match(rejectedBuild, /heliumts\/server is server-only/);
     console.log(
-        "Smoke checks passed: CLI build, SSG, SSR, callMethod/useStreaming handler imports, layouts, transitions, config helpers, public env, HTTP-only RPC, early streaming chunks, cancellation/finally, active-stream shutdown, error privacy, custom OPTIONS, static assets, direct server, CLI start/dev and Vite HMR in a path with spaces."
+        "Smoke checks passed: CLI check/build, SSG, SSR, mixed SPA/SSR route precedence, generated RPC imports, removed browser server-import rejection, layouts, transitions, config helpers, public env, HTTP-only RPC, early streaming chunks, cancellation/finally, active-stream shutdown, error privacy, custom OPTIONS, static assets, direct server, CLI start/dev and Vite HMR in a path with spaces."
     );
 } catch (error) {
     console.error(output);

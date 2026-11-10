@@ -3,6 +3,7 @@ import type { ComponentType } from "react";
 import React from "react";
 import ReactDOMServer from "react-dom/server";
 
+import { createMatcher, type PageRoute } from "../runtime/pageRoutes.js";
 import { compareRoutePatterns } from "../runtime/routeOrder.js";
 import { replaceHtmlRootContents } from "../utils/html.js";
 import type { HeliumContext } from "./context.js";
@@ -42,85 +43,42 @@ type SSRGlobalState = typeof globalThis & {
     __HELIUM_SSR_ROUTER__?: SSRRouterSnapshot;
 };
 
-function createMatcher(pattern: string): (path: string) => { params: Record<string, string | string[]> } | null {
-    const segments = pattern.split("/").filter(Boolean);
+/** Compile the full route order once so a more specific SPA or SSG route can win over SSR. */
+export function createSSRPageMatcher(pages: readonly SSRPageDef[], pageRoutes?: readonly PageRoute[]) {
+    if (pages.length === 0) {
+        return () => null;
+    }
 
-    return (path: string) => {
-        const cleanPath = path.split("?")[0].split("#")[0];
-        const pathSegments = cleanPath.split("/").filter(Boolean);
-
-        if (pattern === "/" && cleanPath === "/") {
-            return { params: {} };
+    const pagesByPattern = new Map<string, SSRPageDef>();
+    for (const page of pages) {
+        if (!pagesByPattern.has(page.pathPattern)) {
+            pagesByPattern.set(page.pathPattern, page);
         }
+    }
 
-        const params: Record<string, string | string[]> = {};
+    const routes = pageRoutes ?? pages.map(({ pathPattern }) => ({ pattern: pathPattern, render: "ssr" as const }));
+    const candidates = routes
+        .filter(({ pattern }) => pattern !== "__404__")
+        .sort((a, b) => compareRoutePatterns(a.pattern, b.pattern))
+        .map(({ pattern, render }) => ({
+            match: createMatcher(pattern),
+            page: render === "ssr" ? pagesByPattern.get(pattern) : undefined,
+        }));
 
-        const hasCatchAll = segments.some((seg) => seg.startsWith("*"));
-        if (hasCatchAll) {
-            const catchAllIndex = segments.findIndex((seg) => seg.startsWith("*"));
-            if (catchAllIndex !== segments.length - 1) {
-                return null;
-            }
-
-            const catchAllParam = segments[catchAllIndex].slice(1);
-
-            for (let i = 0; i < catchAllIndex; i++) {
-                const seg = segments[i];
-                const value = pathSegments[i];
-
-                if (!value) {
-                    return null;
-                }
-
-                if (seg.startsWith(":")) {
-                    params[seg.slice(1)] = safeDecodeURIComponent(value);
-                } else if (seg !== value) {
-                    return null;
-                }
-            }
-
-            const remainingSegments = pathSegments.slice(catchAllIndex);
-            params[catchAllParam] = remainingSegments.map((s) => safeDecodeURIComponent(s));
-            return { params };
-        }
-
-        if (segments.length !== pathSegments.length) {
-            return null;
-        }
-
-        for (let i = 0; i < segments.length; i++) {
-            const seg = segments[i];
-            const value = pathSegments[i];
-
-            if (seg.startsWith(":")) {
-                params[seg.slice(1)] = safeDecodeURIComponent(value);
-            } else if (seg !== value) {
-                return null;
+    return (pathname: string): SSRMatch | null => {
+        for (const { match, page } of candidates) {
+            const result = match(pathname);
+            if (result) {
+                return page ? { page, params: result.params } : null;
             }
         }
 
-        return { params };
+        return null;
     };
 }
 
-function safeDecodeURIComponent(value: string): string {
-    try {
-        return decodeURIComponent(value);
-    } catch {
-        return value;
-    }
-}
-
-export function matchSSRPage(pathname: string, pages: SSRPageDef[]): SSRMatch | null {
-    const orderedPages = [...pages].sort((a, b) => compareRoutePatterns(a.pathPattern, b.pathPattern));
-    for (const page of orderedPages) {
-        const match = createMatcher(page.pathPattern)(pathname);
-        if (match) {
-            return { page, params: match.params };
-        }
-    }
-
-    return null;
+export function matchSSRPage(pathname: string, pages: readonly SSRPageDef[], pageRoutes?: readonly PageRoute[]): SSRMatch | null {
+    return createSSRPageMatcher(pages, pageRoutes)(pathname);
 }
 
 function headersToRecord(headers: IncomingHttpHeaders): Record<string, string | string[] | undefined> {

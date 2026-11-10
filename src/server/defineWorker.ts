@@ -283,14 +283,13 @@ export async function startWorker(worker: HeliumWorkerDef, createContext: () => 
                     await waitForAbort(abortController.signal);
                 }
 
-                // If handler completes normally, exit the loop
-                if (!abortController.signal.aborted) {
-                    await runWorkerCleanup(name, workerState);
+                // Preserve the completion decision if stop() runs during cleanup.
+                const completed = !abortController.signal.aborted;
+                await runWorkerCleanup(name, workerState);
+                if (completed) {
                     log("info", `Worker '${name}' completed successfully`);
                     instance.status = "stopped";
                     removeWorker(name, workerState);
-                } else {
-                    await runWorkerCleanup(name, workerState);
                 }
                 break;
             } catch (error) {

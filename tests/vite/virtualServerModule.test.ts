@@ -1,29 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import type { HTTPHandlerExport, MethodExport, MiddlewareExport, WorkerExport } from "../../src/vite/scanner";
-import { generateClientModule, generateEntryModule, generateServerManifest, generateTypeDefinitions } from "../../src/vite/virtualServerModule";
+import { generateEntryModule, generateServerManifest } from "../../src/vite/virtualServerModule";
 
 describe("virtualServerModule", () => {
-    describe("generateClientModule", () => {
-        it("should generate exports for methods", () => {
-            const methods: MethodExport[] = [
-                { name: "getUser", filePath: "/src/server/users.ts" },
-                { name: "createUser", filePath: "/src/server/users.ts" },
-            ];
-
-            const result = generateClientModule(methods);
-
-            expect(result).toContain("export const getUser = { __id: 'getUser' };");
-            expect(result).toContain("export const createUser = { __id: 'createUser' };");
-        });
-
-        it("should return empty string for no methods", () => {
-            const result = generateClientModule([]);
-
-            expect(result).toBe("");
-        });
-    });
-
     describe("generateServerManifest", () => {
         it("should generate imports and registrations for methods", () => {
             const methods: MethodExport[] = [{ name: "getUser", filePath: "/src/server/users.ts" }];
@@ -94,44 +74,6 @@ describe("virtualServerModule", () => {
             const result = generateServerManifest([], [], [], ["/", "/:username/:albumId"], [], null, undefined, []);
 
             expect(result).toContain('export const pageRoutePatterns = ["/","/:username/:albumId"];');
-        });
-    });
-
-    describe("generateTypeDefinitions", () => {
-        it("should generate type imports and typeof handler references", () => {
-            const methods: MethodExport[] = [{ name: "getUser", filePath: "/test/project/src/server/users.ts" }];
-
-            const result = generateTypeDefinitions(methods, "/test/project");
-
-            expect(result).toContain("declare module 'heliumts/server'");
-            expect(result).toContain("export const getUser: import('heliumts/client').MethodStub<");
-            expect(result).toContain("import type { getUser as __helium_method_0 } from '../server/users';");
-            expect(result).toContain("Parameters<typeof __helium_method_0['handler']>[0]");
-        });
-
-        it("should include auto-generated header comment", () => {
-            const result = generateTypeDefinitions([], "/test/project");
-
-            expect(result).toContain("/* eslint-disable */");
-            expect(result).toContain("Auto generated file - DO NOT EDIT!");
-        });
-
-        it("should include method signature comment with method names", () => {
-            const methods: MethodExport[] = [
-                { name: "getUser", filePath: "/test/project/src/server/users.ts" },
-                { name: "createPost", filePath: "/test/project/src/server/posts.ts" },
-            ];
-
-            const result = generateTypeDefinitions(methods, "/test/project");
-
-            // Methods are sorted alphabetically
-            expect(result).toContain("@helium-methods createPost, getUser");
-        });
-
-        it("should include (none) signature when no methods exist", () => {
-            const result = generateTypeDefinitions([], "/test/project");
-
-            expect(result).toContain("@helium-methods (none)");
         });
     });
 

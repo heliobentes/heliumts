@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.11.0 — 2026-11-10
+
+- Add `useCall.submit()` with handled success/error/busy outcomes and same-hook synchronous pending protection; keep `call()` concurrent/rejecting and read invalidation explicit.
+- Keep project memory optional and experimental; normal packages exclude all model assets. No general AI-efficiency claim is made from the exploratory pilots.
+- Default to the minimal starter. Use `--template examples` for the tasks and streaming demo.
+- Add a starter `npm run verify` pipeline (check, lint, build) and direct API/file lookup guidance to avoid overlapping verification and broad reference reads.
+- Generate `src/rpc.generated.ts` with opaque, typed app RPC references. This replaces browser RPC imports from `heliumts/server` and their generated declarations.
+- Remove the legacy `MethodStub` client types and direct server-definition acceptance; hooks and imperative calls require generated `MethodReference` values.
+- Add `helium typegen`, `helium check` and source-only `helium inspect --json`.
+- Add exact route/RPC inspection and bounded public declaration lookup with `helium api <symbol> --from client|server`; discover exported names with `helium api --list --match <fragment>`.
+- Parse server exports rather than regex-matching comments and declarations; report duplicate names and equivalent dynamic routes.
+- Require method arguments in unary hooks, infer mutation callbacks and reject unary/streaming misuse in TypeScript.
+- Add optional schema-neutral `defineMethod(handler, { input })` parsing with safe public validation errors.
+- Share typed SSR/SSG adapters, preserve their rendering differences and lazy-load CLI tooling.
+- Keep existing server exports while moving generated-code helpers to `heliumts/internal`.
+- Add a compact application reference with checked examples and accurate agent guidance.
+
+Coordinated with create-heliumts-app 0.11.0; generated-only RPC imports are a breaking change from 0.10.2.
+
+### Upgrade notes
+
+- Switch browser RPC imports to `src/rpc.generated.ts`. Delete the old generated `src/types/heliumts-server.d.ts` if present and run `npx helium check`. Use `heliumts/server` for framework server primitives such as `defineMethod`.
+
 ## 0.10.2
 
 - Hydrate SSR and SSG pages using their initial route instead of briefly selecting the home route, preserving server-rendered markup on direct visits.

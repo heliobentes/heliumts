@@ -3,7 +3,7 @@ import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Import actual functions from source
-import { isServerModule, normalizeToPosix, touchTsConfig } from "../../src/vite/heliumPlugin";
+import { isServerModule, normalizeToPosix } from "../../src/vite/heliumPlugin";
 
 describe("heliumPlugin", () => {
     describe("normalizeToPosix", () => {
@@ -56,22 +56,18 @@ describe("heliumPlugin", () => {
     });
 
     describe("virtual module IDs", () => {
-        const VIRTUAL_CLIENT_MODULE_ID = "heliumts/server";
         const VIRTUAL_SERVER_MANIFEST_ID = "virtual:helium-server-manifest";
         const VIRTUAL_ENTRY_MODULE_ID = "virtual:helium-entry";
 
-        const RESOLVED_VIRTUAL_CLIENT_MODULE_ID = "\0heliumts/server";
         const RESOLVED_VIRTUAL_SERVER_MANIFEST_ID = "\0virtual:helium-server-manifest";
         const RESOLVED_VIRTUAL_ENTRY_MODULE_ID = "\0virtual:helium-entry";
 
         it("should have correct virtual ID format", () => {
-            expect(VIRTUAL_CLIENT_MODULE_ID).toBe("heliumts/server");
             expect(VIRTUAL_SERVER_MANIFEST_ID).toBe("virtual:helium-server-manifest");
             expect(VIRTUAL_ENTRY_MODULE_ID).toBe("virtual:helium-entry");
         });
 
         it("should have resolved IDs prefixed with null character", () => {
-            expect(RESOLVED_VIRTUAL_CLIENT_MODULE_ID.startsWith("\0")).toBe(true);
             expect(RESOLVED_VIRTUAL_SERVER_MANIFEST_ID.startsWith("\0")).toBe(true);
             expect(RESOLVED_VIRTUAL_ENTRY_MODULE_ID.startsWith("\0")).toBe(true);
         });
@@ -259,37 +255,6 @@ describe("heliumPlugin", () => {
             expect(shouldSkipMiddleware("/")).toBe(false);
             expect(shouldSkipMiddleware("/about")).toBe(false);
             expect(shouldSkipMiddleware("/docs/guides/auth")).toBe(false);
-        });
-    });
-
-    describe("touchTsConfig", () => {
-        afterEach(() => {
-            vi.restoreAllMocks();
-        });
-
-        it("should update mtime of tsconfig.json when it exists", () => {
-            const existsSyncSpy = vi.spyOn(fs, "existsSync").mockReturnValue(true);
-            const utimesSyncSpy = vi.spyOn(fs, "utimesSync").mockImplementation(() => {});
-
-            touchTsConfig("/project");
-
-            expect(existsSyncSpy).toHaveBeenCalledWith(path.join("/project", "tsconfig.json"));
-            expect(utimesSyncSpy).toHaveBeenCalledWith(path.join("/project", "tsconfig.json"), expect.any(Date), expect.any(Date));
-        });
-
-        it("should not throw when tsconfig.json does not exist", () => {
-            vi.spyOn(fs, "existsSync").mockReturnValue(false);
-
-            expect(() => touchTsConfig("/project")).not.toThrow();
-        });
-
-        it("should not throw when utimesSync fails", () => {
-            vi.spyOn(fs, "existsSync").mockReturnValue(true);
-            vi.spyOn(fs, "utimesSync").mockImplementation(() => {
-                throw new Error("Permission denied");
-            });
-
-            expect(() => touchTsConfig("/project")).not.toThrow();
         });
     });
 });

@@ -1,6 +1,6 @@
 {
     "name": "heliumts",
-    "version": "0.10.2",
+    "version": "0.11.0",
     "description": "A lightweight full-stack React framework with file-based routing, RPC, and SSG support",
     "keywords": [
         "react",
@@ -62,6 +62,11 @@
             "types": "./dist/vite/index.d.ts",
             "import": "./dist/vite/index.js",
             "require": "./dist/vite/index.js"
+        },
+        "./internal": {
+            "types": "./dist/internal/index.d.ts",
+            "import": "./dist/internal/index.js",
+            "require": "./dist/internal/index.js"
         }
     },
     "scripts": {
@@ -77,7 +82,14 @@
         "test:watch": "vitest",
         "test:coverage": "vitest run --coverage",
         "typecheck": "tsc -p tsconfig.test.json --noEmit",
-        "test:smoke": "node scripts/smoke.mjs"
+        "test:smoke": "node scripts/smoke.mjs",
+        "test:api": "node scripts/test-public-api.mjs",
+        "test:docs": "npm run docs:check && node --test scripts/agent-topics.test.mjs && node scripts/test-agent-guide.mjs && node scripts/test-agent-start.mjs",
+        "check": "npm run build && npm run typecheck && npm test && npm run lint && npm run test:docs && npm run test:api",
+        "docs:sync": "node scripts/sync-agent-topics.mjs",
+        "docs:check": "node scripts/sync-agent-topics.mjs --check",
+        "prepack": "node scripts/sync-agent-topics.mjs --check --quiet",
+        "memory:bundle": "node scripts/bundle-memory.mjs"
     },
     "peerDependencies": {
         "cac": "^6.7.14",
@@ -88,10 +100,16 @@
     },
     "dependencies": {
         "@msgpack/msgpack": "^3.1.2",
-        "dotenv": "^17.2.3"
+        "dotenv": "^17.2.3",
+        "typescript": "^5.9.3"
     },
     "files": [
-        "dist"
+        "dist",
+        "docs/agent-guide.md",
+        "docs/agent-start.md",
+        "docs/agent",
+        "docs/memory.md",
+        "docs/migration-0.11.md"
     ],
     "devDependencies": {
         "@testing-library/dom": "^10.4.1",
@@ -110,7 +128,6 @@
         "eslint-plugin-unused-imports": "^4.3.0",
         "jsdom": "^27.2.0",
         "prettier": "^3.6.2",
-        "typescript": "^5.9.3",
         "vite": "^7.3.7",
         "vitest": "^4.1.12"
     },

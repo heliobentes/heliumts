@@ -31,9 +31,11 @@ export function isSSR(): boolean {
     return typeof window === "undefined";
 }
 
+export type { RpcStats } from "../runtime/protocol.js";
 export type { RpcResult } from "./rpcClient.js";
+export { streamRpc } from "./rpcStreaming.js";
 
 // Type definitions
-export * from "./types.js";
+export type { MethodArgs, MethodReference } from "./types.js";
 
 // Internal - rpcClient and cache are used by hooks, not exposed to users

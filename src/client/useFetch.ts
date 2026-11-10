@@ -4,7 +4,7 @@ import type { RpcStats } from "../runtime/protocol.js";
 import { cacheKey, clearPendingFetch, get, getPendingFetch, has, isPending, set, setPendingFetch, subscribeInvalidations } from "./cache.js";
 import { rpcCall } from "./rpcClient.js";
 import { RpcError } from "./RpcError.js";
-import type { MethodStub } from "./types.js";
+import { getMethodId, type UnaryMethod } from "./types.js";
 
 /**
  * Options controlling `useFetch` behaviour.
@@ -100,19 +100,24 @@ function setupFocusListeners() {
  *
  * @template TArgs - method argument type
  * @template TResult - expected return type
- * @param method - a MethodStub representing the server method to call
+ * @param method - reference identifying the server method to call
  * @param args - optional argument object passed to the server method
  * @param options - controls caching and refetch behavior (see UseFetchOptions)
  * @returns { data, isLoading, error, stats, refetch } — `data` is the cached or latest value; `refetch` triggers an immediate request
  */
-export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, args?: TArgs, options?: UseFetchOptions) {
+export function useFetch<TArgs, TResult>(
+    method: UnaryMethod<TArgs, TResult>,
+    ...params: undefined extends TArgs ? [args?: NoInfer<TArgs>, options?: UseFetchOptions] : [args: NoInfer<TArgs>, options?: UseFetchOptions]
+) {
+    const [args, options] = params;
     // Compute cache key
-    const key = cacheKey(method.__id, args);
+    const methodId = getMethodId(method);
+    const key = cacheKey(methodId, args);
 
     const { ttl, refetchOnWindowFocus = true, showLoaderOnRefocus = false, showLoaderOnInvalidate = false, enabled = true } = options ?? {};
 
     // Use refs to store latest values without causing effect re-runs
-    const methodIdRef = useRef(method.__id);
+    const methodIdRef = useRef(methodId);
     const argsRef = useRef(args);
     const keyRef = useRef(key);
     const ttlRef = useRef(ttl);
@@ -123,7 +128,7 @@ export function useFetch<TArgs, TResult>(method: MethodStub<TArgs, TResult>, arg
     const queuedRefetchShowLoaderRef = useRef(false);
 
     // Update refs on each render
-    methodIdRef.current = method.__id;
+    methodIdRef.current = methodId;
     argsRef.current = args;
     keyRef.current = key;
     ttlRef.current = ttl;

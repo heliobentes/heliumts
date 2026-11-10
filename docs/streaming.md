@@ -2,6 +2,10 @@
 
 `useStreaming` consumes typed chunks from a method that returns an async iterable. It manages the HTTP request, incremental decoding, cancellation, and component state. It starts only when you call `start(args)`.
 
+These examples use `src/rpc.generated.ts` from HeliumTS 0.11.0. [Upgrade notes](../CHANGELOG.md#upgrade-notes)
+
+The framework stream uses HTTP with length-prefixed MessagePack frames (`application/x-helium-stream`). Provider SSE/NDJSON is a separate upstream protocol; use `useStreaming` rather than decoding framework wire frames in app code.
+
 ## Define a streamed method
 
 Keep the implementation in `src/server` and use the existing `defineMethod` API with an async generator:
@@ -28,8 +32,9 @@ This deterministic example runs without an LLM service or credentials. Yield str
 ## Render incremental output
 
 ```tsx
+// src/pages/answer.tsx
 import { useStreaming } from "heliumts/client";
-import { generateAnswer } from "heliumts/server";
+import { generateAnswer } from "../rpc.generated";
 
 export default function Answer() {
     const { text, isStreaming, error, start, cancel, reset } = useStreaming(generateAnswer);
@@ -159,7 +164,7 @@ The async generator yields only text deltas, including refusal text. It converts
 // src/pages/assistant.tsx
 import { useState } from "react";
 import { useStreaming } from "heliumts/client";
-import { streamAssistant } from "heliumts/server";
+import { streamAssistant } from "../rpc.generated";
 
 export default function Assistant() {
     const [prompt, setPrompt] = useState("");
@@ -188,7 +193,7 @@ export default function Assistant() {
 }
 ```
 
-The component imports the generated method stub from `heliumts/server`; the OpenAI SDK and API key stay on the server. `text` accumulates string chunks, and `error` appears separately without discarding received text. Apply application authentication and quotas in method middleware before exposing a provider-backed method.
+The component imports its method reference from `src/rpc.generated.ts`. The OpenAI SDK and API key stay on the server. `text` accumulates string chunks, and `error` appears separately without discarding received text. Apply application authentication and quotas in method middleware before exposing a provider-backed method.
 
 This example uses the OpenAI [Responses streaming API](https://developers.openai.com/api/docs/guides/streaming-responses). It requires your own OpenAI project credentials; the [deterministic demo](https://heliumts.com/streaming) runs without provider calls.
 
