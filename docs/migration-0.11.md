@@ -12,4 +12,4 @@
 
 The HTTP RPC and streaming codec is unchanged: unary JSON/MessagePack and length-prefixed MessagePack stream frames. App code should use public hooks/references rather than construct private transport requests. Keep validation, authorization, rate limits, cancellation and error privacy. An optional `defineMethod(..., { input })` parser validates untrusted input before the handler; it does not replace authorization.
 
-`helium inspect --rpc NAME --json`, `--route PATTERN --json` and `helium api NAME --from client|server` provide bounded source/API context. They are optional lookups, not a mandatory sequence. Read the installed `docs/agent-start.md` once for the normal application path. Experimental project memory remains opt-in and is not initialized by that workflow; normal npm packages contain no model weights or inference WASM.
+`helium inspect --rpc NAME --json`, `--route PATTERN --json` and `helium api NAME --from client|server` provide bounded source/API context. They are optional lookups, not a mandatory sequence. Read the installed `docs/agent-start.md` once for the normal application path.

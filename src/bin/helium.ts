@@ -28,31 +28,6 @@ function monitorChild(child: ChildProcess) {
     });
 }
 
-cli.command("memory <action> [value]", "Experimental optional project cards and offline search")
-    .option("--input <file>", "Repository-relative card JSON (create/update)")
-    .option("--if-match <revision>", "Exact revision from show/status for update/review")
-    .option("--acknowledge", "Explicitly acknowledge reviewed evidence; does not certify prose")
-    .option("--detail", "Full search/status bodies and evidence metadata")
-    .option("--title <text>", "Card title (add only)")
-    .option("--summary <text>", "Behavior/decision summary (add only)")
-    .option("--symbol <file#name>", "Source symbol evidence (add only)")
-    .option("--test <file>", "Test evidence (add only)")
-    .option("--limit <count>", "Search result limit, 1..10")
-    .option("--model <directory>", "Reviewed local offline embedding pack (index/search only)")
-    .option("--fts", "Use lexical search without loading an embedding model")
-    .action(async (action: string, value: unknown, options: Record<string, unknown>) => {
-        try {
-            if (cli.args.length > 2) {
-                throw new Error("memory accepts one action and at most one argument");
-            }
-            const { memoryCommand } = await import("./memory/command.js");
-            console.log(JSON.stringify(await memoryCommand(root, action, value, options), null, 2));
-        } catch (error) {
-            log("error", String(error));
-            process.exitCode = 1;
-        }
-    });
-
 cli.command("typegen", "Generate RPC imports and validate the application manifest").action(async () => {
     try {
         const { typegenProject } = await import("./projectCommands.js");

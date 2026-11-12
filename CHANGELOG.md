@@ -3,7 +3,6 @@
 ## 0.11.0 — 2026-11-10
 
 - Add `useCall.submit()` with handled success/error/busy outcomes and same-hook synchronous pending protection; keep `call()` concurrent/rejecting and read invalidation explicit.
-- Keep project memory optional and experimental; normal packages exclude all model assets. No general AI-efficiency claim is made from the exploratory pilots.
 - Default to the minimal starter. Use `--template examples` for the tasks and streaming demo.
 - Add a starter `npm run verify` pipeline (check, lint, build) and direct API/file lookup guidance to avoid overlapping verification and broad reference reads.
 - Generate `src/rpc.generated.ts` with opaque, typed app RPC references. This replaces browser RPC imports from `heliumts/server` and their generated declarations.

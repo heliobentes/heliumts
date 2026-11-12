@@ -15,8 +15,7 @@ const checked = (command, args, options = {}) => {
 try {
     // Exercise exactly the artifact consumers install, not source or dist from cwd.
     const packed = JSON.parse(checked("npm", ["pack", "--json", "--cache", path.join(temporary, "npm-cache"), "--pack-destination", temporary], { cwd: root }));
-    assert.ok(!JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).files.includes("memory-model"), "Normal allowlist must not opt into model assets");
-    assert.ok(packed[0].files.every(({path: file}) => !file.startsWith("memory-model/") && !/\.(?:onnx|wasm|node)$/i.test(file)), "Normal package must not ship weights, WASM or native inference runtime");
+    assert.ok(packed[0].files.every(({path: file}) => !/\.(?:onnx|wasm|node)$/i.test(file)), "Package must not ship binary model or native runtime assets");
     checked("tar", ["-xzf", path.join(temporary, packed[0].filename), "-C", temporary]);
     const installed = path.join(temporary, "package");
     const cli = path.join(installed, "dist/bin/helium.js");

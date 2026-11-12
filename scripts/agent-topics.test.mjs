@@ -51,7 +51,7 @@ test("README local documentation links resolve to actual packaged assets", async
         // Release assets are checked against npm's real allowlist, not a hand-maintained topic whitelist.
         await check("docs/agent-start.md");
         await check("docs/migration-0.11.md");
-        await assert.rejects(() => check("docs/experiments/project-memory-20261109.md"), /must ship/);
+        await assert.rejects(() => check("docs/routing.md"), /must ship/);
         await assert.rejects(() => check("docs/not-a-packaged-guide.md"), /must ship/);
     } finally { await rm(temporary, { recursive: true, force: true }); }
 });
