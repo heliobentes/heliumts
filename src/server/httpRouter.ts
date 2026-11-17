@@ -71,7 +71,13 @@ export class HTTPRouter {
             // Extract path parameters
             const params: Record<string, string> = {};
             for (let i = 0; i < route.keys.length; i++) {
-                params[route.keys[i]] = match[i + 1];
+                const value = match[i + 1];
+                try {
+                    params[route.keys[i]] = decodeURIComponent(value);
+                } catch {
+                    // Malformed escapes remain literal, as on page routes.
+                    params[route.keys[i]] = value;
+                }
             }
 
             try {
@@ -199,7 +205,7 @@ function pathToRegex(path: string): { pattern: RegExp; keys: string[] } {
             }
             return segment
                 .split("*")
-                .map((literal) => literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+                .map((literal) => routeLiteralToRegex(literal))
                 .join("[^/]*");
         })
         // * matches a single path segment, /** matches across segments.
@@ -209,6 +215,15 @@ function pathToRegex(path: string): { pattern: RegExp; keys: string[] } {
         pattern: new RegExp(`^${pattern}$`),
         keys,
     };
+}
+
+function routeLiteralToRegex(literal: string): string {
+    const escaped = literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Match URL-encoded Unicode and spaces without decoding the path before
+    // route selection. Escapes may use either hex case; literals stay case-sensitive.
+    const encoded = escaped.replace(/[^!-~]+/gu, (value) => encodeURIComponent(value));
+    const encodedPattern = encoded.replace(/%[0-9a-f]{2}/gi, (value) => value.replace(/[a-f]/gi, (hex) => `[${hex.toUpperCase()}${hex.toLowerCase()}]`));
+    return escaped === encoded ? encodedPattern : `(?:${encodedPattern}|${escaped})`;
 }
 
 async function createHTTPRequest(

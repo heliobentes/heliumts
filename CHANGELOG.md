@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.1 — 2026-11-17
+
+- Decode HTTP handler route parameters consistently with page routes and match static paths containing accented characters or spaces.
+
 ## 0.11.0 — 2026-11-10
 
 - Add `useCall.submit()` with handled success/error/busy outcomes and same-hook synchronous pending protection; keep `call()` concurrent/rejecting and read invalidation explicit.

@@ -58,6 +58,36 @@ describe("HTTPRouter regressions", () => {
         expect(await router.handleRequest(createRequest("GET", "/api/version/itemXjson/42"), createResponse() as unknown as ServerResponse)).toBe(false);
     });
 
+    it.each([
+        ["my%20report.pdf", "my report.pdf"],
+        ["%E2%82%AC", "€"],
+        ["weekly%2520report", "weekly%20report"],
+        ["100%", "100%"],
+    ])("decodes the route parameter %s once", async (segment, expected) => {
+        const router = createRouter((req) => req.params, "/api/download/:filename");
+        const response = createResponse();
+        expect(await router.handleRequest(createRequest("GET", `/api/download/${segment}`), response as unknown as ServerResponse)).toBe(true);
+        expect(response.end).toHaveBeenCalledWith(JSON.stringify({ filename: expected }));
+    });
+
+    it.each([
+        ["/api/café", "/api/caf%c3%a9", true],
+        ["/api/café", "/api/café", true],
+        ["/api/café", "/api/Caf%C3%A9", false],
+        ["/api/read me", "/api/read%20me", true],
+        ["/api/café*.json", "/api/caf%C3%A9-menu.json", true],
+        ["/api/read%20me", "/api/read%20me", true],
+    ])("matches route %s against %s: %s", async (path, requestUrl, expected) => {
+        const response = createResponse();
+        const router = createRouter(() => ({ ok: true }), path);
+        expect(await router.handleRequest(createRequest("GET", requestUrl), response as unknown as ServerResponse)).toBe(expected);
+        if (expected) {
+            expect(response.end).toHaveBeenCalledWith(JSON.stringify({ ok: true }));
+        } else {
+            expect(response.end).not.toHaveBeenCalled();
+        }
+    });
+
     it("preserves the full value and empty value of cookies", async () => {
         const handler = vi.fn((_req: HTTPRequest) => ({}));
         const request = createRequest();

@@ -267,16 +267,20 @@ export const apiWithHeaders = defineHTTPRequest("GET", "/api/metrics", async (re
 
 #### Content Disposition (Downloads)
 
-```typescript
-export const downloadFile = defineHTTPRequest("GET", "/api/download/:filename", async (req, ctx) => {
-    const filename = req.params.filename;
-    const fileContent = await getFileContent(filename);
+Route parameters are URL-decoded and still untrusted. In this example, the application looks up an authorized file by ID and builds the download header from trusted file metadata, rather than using a route parameter as a filesystem path or header value.
 
-    return new Response(fileContent, {
+```typescript
+export const downloadFile = defineHTTPRequest("GET", "/api/download/:fileId", async (req, ctx) => {
+    const download = await findAuthorizedDownload(req.params.fileId, ctx);
+    if (!download) {
+        return new Response("Not found", { status: 404 });
+    }
+
+    return new Response(download.content, {
         status: 200,
         headers: {
             "Content-Type": "application/octet-stream",
-            "Content-Disposition": `attachment; filename="${filename}"`,
+            "Content-Disposition": download.contentDisposition,
         },
     });
 });
